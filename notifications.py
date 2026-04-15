@@ -1,0 +1,349 @@
+"""
+notifications.py — Email reminder system for OCA Agenda Intelligence v6
+
+Checks for overdue and due-soon appearances hourly.
+Configured via oca_config.json in the project directory.
+
+Config keys:
+  email_enabled       bool   — master on/off switch
+  smtp_host           str    — e.g. "smtp.gmail.com"
+  smtp_port           int    — e.g. 587
+  smtp_user           str    — sender address
+  smtp_password       str    — sender password (use app password for Gmail)
+  smtp_use_tls        bool   — true for most providers
+  notify_recipients   list   — email addresses to notify
+  reminder_days       int    — how many days ahead to warn (default 7)
+  team_members        list   — [{name, email}] for assignment UI
+"""
+import json, smtplib, logging, threading, time
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from pathlib import Path
+from datetime import datetime
+
+log = logging.getLogger("oca-agent")
+
+from paths import CONFIG_PATH  # honors DATA_DIR in cloud, project dir locally
+
+DEFAULT_CONFIG = {
+    "email_enabled": False,
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "smtp_user": "",
+    "smtp_password": "",
+    "smtp_use_tls": True,
+    "notify_recipients": [],
+    "reminder_days": 7,
+    "team_members": [],
+}
+
+
+def load_config() -> dict:
+    if CONFIG_PATH.exists():
+        try:
+            saved = json.loads(CONFIG_PATH.read_text())
+            return {**DEFAULT_CONFIG, **saved}
+        except Exception:
+            pass
+    return DEFAULT_CONFIG.copy()
+
+
+def save_config(cfg: dict):
+    CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+
+
+def _send_email(cfg: dict, subject: str, body_html: str):
+    if not cfg.get("email_enabled"):
+        return
+    recipients = cfg.get("notify_recipients", [])
+    if not recipients or not cfg.get("smtp_user"):
+        return
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"]    = cfg["smtp_user"]
+        msg["To"]      = ", ".join(recipients)
+        msg.attach(MIMEText(body_html, "html"))
+
+        with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as s:
+            if cfg.get("smtp_use_tls"):
+                s.starttls()
+            s.login(cfg["smtp_user"], cfg["smtp_password"])
+            s.sendmail(cfg["smtp_user"], recipients, msg.as_string())
+        log.info(f"  Email sent: {subject}")
+    except Exception as e:
+        log.error(f"  Email failed: {e}")
+
+
+def get_member_email(name: str) -> str | None:
+    """Look up a team member's email by their display name in config."""
+    cfg = load_config()
+    for m in cfg.get("team_members", []):
+        if m.get("name") == name:
+            return m.get("email") or None
+    return None
+
+
+def send_assignment_notification(appearance: dict):
+    """Email the assigned team member when an item is assigned to them."""
+    cfg = load_config()
+    if not cfg.get("email_enabled"):
+        return
+    assignee = appearance.get("assigned_to") or ""
+    if not assignee:
+        return
+    email = get_member_email(assignee)
+    if not email:
+        log.info(f"  No email for '{assignee}' — assignment notification skipped")
+        return
+
+    file_num  = appearance.get("file_number", "")
+    title     = (appearance.get("short_title") or appearance.get("appearance_title") or "")[:80]
+    due       = appearance.get("due_date") or "Not set"
+    meeting   = appearance.get("meeting_date") or ""
+    body_name = appearance.get("body_name") or ""
+
+    html = f"""
+    <div style='font-family:Arial,sans-serif;max-width:700px;'>
+      <div style='background:#003087;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:18px;'>&#x1F4CB; AgendaIQ &#x2014; Item Assigned to You</h2>
+        <p style='margin:4px 0 0;opacity:.8;font-size:13px;'>A new agenda item requires your attention</p>
+      </div>
+      <div style='border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:20px;'>
+        <p style='margin:0 0 16px;'>Hi <strong>{assignee}</strong>, the following item has been assigned to you:</p>
+        <table style='width:100%;border-collapse:collapse;margin-bottom:16px;background:#f8fafc;'>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;width:130px;border-bottom:1px solid #e2e8f0;'>File #</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#003087;'>{file_num}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;'>Title</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;'>{title}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;'>Meeting</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;'>{meeting}{' &#x2014; ' + body_name if body_name else ''}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;'>Due Date</td>
+              <td style='padding:9px 14px;'>{due}</td></tr>
+        </table>
+        <p style='color:#64748b;font-size:12px;margin:0;'>&#x2014; AgendaIQ &middot; Office of the Commission Auditor &middot; Miami-Dade County</p>
+      </div>
+    </div>"""
+
+    cfg_to = dict(cfg)
+    cfg_to["notify_recipients"] = [email]
+    _send_email(cfg_to, f"[AgendaIQ] Assigned to You: {file_num} — {title[:45]}", html)
+
+
+def send_draft_complete_notification(appearance: dict):
+    """Email the reviewer when an item reaches Draft Complete status."""
+    cfg = load_config()
+    if not cfg.get("email_enabled"):
+        return
+    reviewer = appearance.get("reviewer") or ""
+    if not reviewer:
+        log.info("  Draft Complete notification skipped — no reviewer set on this item")
+        return
+    email = get_member_email(reviewer)
+    if not email:
+        log.info(f"  No email for reviewer '{reviewer}' — notification skipped")
+        return
+
+    file_num    = appearance.get("file_number", "")
+    title       = (appearance.get("short_title") or appearance.get("appearance_title") or "")[:80]
+    assigned_to = appearance.get("assigned_to") or "Unknown"
+    due         = appearance.get("due_date") or "Not set"
+
+    html = f"""
+    <div style='font-family:Arial,sans-serif;max-width:700px;'>
+      <div style='background:#00843d;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:18px;'>&#x2705; AgendaIQ &#x2014; Draft Brief Ready for Review</h2>
+        <p style='margin:4px 0 0;opacity:.8;font-size:13px;'>A brief is ready for your review and approval</p>
+      </div>
+      <div style='border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:20px;'>
+        <p style='margin:0 0 16px;'>Hi <strong>{reviewer}</strong>, a draft brief is ready for your review:</p>
+        <table style='width:100%;border-collapse:collapse;margin-bottom:16px;background:#f8fafc;'>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;width:130px;border-bottom:1px solid #e2e8f0;'>File #</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#003087;'>{file_num}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;'>Title</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;'>{title}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;'>Analyst</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;'>{assigned_to}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;'>Due Date</td>
+              <td style='padding:9px 14px;'>{due}</td></tr>
+        </table>
+        <p style='color:#64748b;font-size:12px;margin:0;'>&#x2014; AgendaIQ &middot; Office of the Commission Auditor &middot; Miami-Dade County</p>
+      </div>
+    </div>"""
+
+    cfg_to = dict(cfg)
+    cfg_to["notify_recipients"] = [email]
+    _send_email(cfg_to, f"[AgendaIQ] Review Needed: {file_num} — {title[:45]}", html)
+
+
+def send_overdue_alert(overdue_items: list):
+    cfg = load_config()
+    if not overdue_items:
+        return
+    rows = "".join(
+        f"<tr><td style='padding:6px 12px;border-bottom:1px solid #eee;'>"
+        f"<a href='#' style='color:#003087;'>{r.get('file_number','')}</a></td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('short_title','')[:60]}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;color:#dc2626;font-weight:600;'>{r.get('due_date','')}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('assigned_to','Unassigned')}</td>"
+        f"</tr>"
+        for r in overdue_items
+    )
+    html = f"""
+    <div style='font-family:Arial,sans-serif;max-width:700px;'>
+      <div style='background:#003087;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:18px;'>🔴 AgendaIQ — Overdue Items</h2>
+        <p style='margin:4px 0 0;opacity:.8;font-size:13px;'>
+          {len(overdue_items)} item(s) have passed their due date</p>
+      </div>
+      <div style='border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:16px;'>
+        <table style='width:100%;border-collapse:collapse;'>
+          <thead><tr style='background:#f8fafc;'>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>File #</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Title</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Due Date</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Assigned To</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+        <p style='color:#64748b;font-size:12px;margin-top:16px;'>
+          — AgendaIQ · Office of the Commission Auditor · Miami-Dade County</p>
+      </div>
+    </div>"""
+    _send_email(cfg, f"[AgendaIQ] {len(overdue_items)} Overdue Item(s) — Action Required", html)
+
+
+def send_due_soon_reminder(due_soon_items: list, days: int = 7):
+    cfg = load_config()
+    if not due_soon_items:
+        return
+    rows = "".join(
+        f"<tr><td style='padding:6px 12px;border-bottom:1px solid #eee;'>"
+        f"{r.get('file_number','')}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('short_title','')[:60]}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;color:#d97706;font-weight:600;'>{r.get('due_date','')}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('assigned_to','Unassigned')}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('workflow_status','')}</td>"
+        f"</tr>"
+        for r in due_soon_items
+    )
+    html = f"""
+    <div style='font-family:Arial,sans-serif;max-width:700px;'>
+      <div style='background:#92400e;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:18px;'>🟡 AgendaIQ — Due Soon Reminder</h2>
+        <p style='margin:4px 0 0;opacity:.8;font-size:13px;'>
+          {len(due_soon_items)} item(s) due within {days} days</p>
+      </div>
+      <div style='border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:16px;'>
+        <table style='width:100%;border-collapse:collapse;'>
+          <thead><tr style='background:#f8fafc;'>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>File #</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Title</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Due Date</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Assigned To</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Status</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+        <p style='color:#64748b;font-size:12px;margin-top:16px;'>
+          — AgendaIQ · Office of the Commission Auditor · Miami-Dade County</p>
+      </div>
+    </div>"""
+    _send_email(cfg, f"[AgendaIQ] Reminder: {len(due_soon_items)} Item(s) Due Within {days} Days", html)
+
+
+# ── Background checker ────────────────────────────────────────
+
+_last_check = {"overdue": None, "due_soon": None}
+
+
+def run_checks():
+    """Check for overdue and due-soon items.
+
+    Overdue:  one summary email → notify_recipients (team-lead visibility).
+    Due soon: individual reminder → each assignee's own email only.
+    """
+    try:
+        from workflow import get_overdue_appearances, get_due_soon_appearances
+        cfg = load_config()
+        days = cfg.get("reminder_days", 7)
+
+        # ── Overdue: summary blast to team leads ──────────────────
+        overdue = get_overdue_appearances()
+        if overdue:
+            send_overdue_alert(overdue)
+            log.info(f"  Notification: {len(overdue)} overdue items (team summary sent)")
+
+        # ── Due soon: individual reminder per assignee ────────────
+        due_soon = get_due_soon_appearances(days)
+        if due_soon:
+            # Group by assignee
+            by_person: dict = {}
+            for item in due_soon:
+                person = item.get("assigned_to") or "__unassigned__"
+                by_person.setdefault(person, []).append(item)
+
+            sent = 0
+            for person, items in by_person.items():
+                if person == "__unassigned__":
+                    continue  # skip unassigned — no one to notify
+                email = get_member_email(person)
+                if email:
+                    cfg_personal = dict(cfg)
+                    cfg_personal["notify_recipients"] = [email]
+                    send_due_soon_reminder(items, days)   # reuse HTML builder
+                    # Override recipients for this call
+                    _send_due_soon_to(cfg_personal, items, days, person)
+                    sent += 1
+            log.info(f"  Notification: {len(due_soon)} items due within {days} days "
+                     f"({sent} individual reminder(s) sent)")
+
+    except Exception as e:
+        log.error(f"  Notification check failed: {e}")
+
+
+def _send_due_soon_to(cfg: dict, items: list, days: int, person: str):
+    """Send a personalised due-soon reminder to a single assignee."""
+    rows = "".join(
+        f"<tr>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('file_number','')}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('short_title','')[:60]}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;color:#d97706;font-weight:600;'>{r.get('due_date','')}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #eee;'>{r.get('workflow_status','')}</td>"
+        f"</tr>"
+        for r in items
+    )
+    html = f"""
+    <div style='font-family:Arial,sans-serif;max-width:700px;'>
+      <div style='background:#92400e;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:18px;'>&#x23F0; AgendaIQ &#x2014; Your Items Due Soon</h2>
+        <p style='margin:4px 0 0;opacity:.8;font-size:13px;'>
+          {len(items)} item(s) assigned to you are due within {days} days</p>
+      </div>
+      <div style='border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:16px;'>
+        <p style='margin:0 0 12px;'>Hi <strong>{person}</strong>, please review the following items:</p>
+        <table style='width:100%;border-collapse:collapse;'>
+          <thead><tr style='background:#f8fafc;'>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>File #</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Title</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Due Date</th>
+            <th style='padding:8px 12px;text-align:left;font-size:12px;color:#64748b;'>Status</th>
+          </tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+        <p style='color:#64748b;font-size:12px;margin-top:16px;'>
+          &#x2014; AgendaIQ &middot; Office of the Commission Auditor &middot; Miami-Dade County</p>
+      </div>
+    </div>"""
+    _send_email(cfg, f"[AgendaIQ] Reminder: {len(items)} Item(s) Due Within {days} Days", html)
+
+
+def start_background_checker(interval_hours: int = 1):
+    """Start a daemon thread that runs checks every N hours."""
+    def _loop():
+        while True:
+            run_checks()
+            time.sleep(interval_hours * 3600)
+    t = threading.Thread(target=_loop, daemon=True)
+    t.start()
+    log.info(f"  Notification checker started (every {interval_hours}h)")

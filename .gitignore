@@ -1,0 +1,31 @@
+# Secrets & config
+.env
+oca_config.json
+
+# Local state (lives on the persistent disk in production)
+oca_agenda.db
+oca_agenda.db-wal
+oca_agenda.db-shm
+pdf_cache/
+output/
+exports/
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Old code you don't want deployed
+oca_agenda_agent_v5.py
+app.py
+test_v5.py

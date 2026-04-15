@@ -1,0 +1,3731 @@
+"""
+app_v6.py — AgendaIQ v6 Web Application (full rebuild)
+Matter Detail Drawer · Workflow Audit Trail · Due-Date Alerts · Cross-linking
+"""
+import os, sys, uuid, json, queue, threading
+from pathlib import Path
+from flask import Flask, Response, jsonify, request, send_file
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+import db as database
+from db import init_db
+from utils import load_api_key, parse_date_arg, now_iso
+from schema import WORKFLOW_STATUSES
+import notifications
+
+app = Flask(__name__)
+JOBS: dict = {}
+
+# ─────────────────────────────────────────────────────────────
+# Optional shared-password gate (for cloud demo before SSO lands).
+# Activated only when APP_PASSWORD env var is set. Local dev → no gate.
+# ─────────────────────────────────────────────────────────────
+_APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
+if _APP_PASSWORD:
+    import base64
+    from functools import wraps
+    _AUTH_REALM = 'AgendaIQ (Demo)'
+
+    def _check_auth(header_val: str) -> bool:
+        if not header_val or not header_val.lower().startswith("basic "):
+            return False
+        try:
+            raw = base64.b64decode(header_val.split(" ", 1)[1]).decode("utf-8", "ignore")
+            _, _, pw = raw.partition(":")
+            return pw == _APP_PASSWORD
+        except Exception:
+            return False
+
+    @app.before_request
+    def _require_basic_auth():
+        # Allow health check through so Render/Railway can probe us
+        if request.path in ("/healthz", "/favicon.ico"):
+            return None
+        if _check_auth(request.headers.get("Authorization", "")):
+            return None
+        return Response(
+            "Authentication required.", 401,
+            {"WWW-Authenticate": f'Basic realm="{_AUTH_REALM}"'}
+        )
+
+@app.route("/healthz")
+def _healthz():
+    return "ok", 200
+
+# ─────────────────────────────────────────────────────────────
+HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AgendaIQ — Miami-Dade OCA</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --blue:#003087;--blue2:#0058a7;--blue-lt:#e8f0fb;--blue-mid:#c5d8f5;
+  --green:#00843d;--green-lt:#e6f4ed;
+  --red:#dc2626;--red-lt:#fee2e2;
+  --orange:#d97706;--orange-lt:#fef3c7;
+  --gray-50:#f8fafc;--gray-100:#f1f5f9;--gray-200:#e2e8f0;
+  --gray-400:#94a3b8;--gray-600:#475569;--gray-800:#1e293b;
+  --white:#fff;
+  --shadow:0 4px 6px -1px rgba(0,0,0,.1),0 2px 4px -1px rgba(0,0,0,.06);
+  --shadow-lg:0 10px 25px -5px rgba(0,0,0,.12);
+  --r:10px;
+}
+body{font-family:'Inter',sans-serif;background:var(--gray-100);color:var(--gray-800);min-height:100vh}
+
+/* ── Header ── */
+header{background:linear-gradient(135deg,var(--blue) 0%,var(--blue2) 100%);
+  color:#fff;height:62px;display:flex;align-items:center;padding:0 1.5rem;gap:.75rem;
+  box-shadow:0 2px 12px rgba(0,48,135,.35);position:sticky;top:0;z-index:300}
+.logo{display:flex;align-items:center;gap:.6rem;cursor:pointer}
+.logo-icon{width:34px;height:34px;background:#fff;border-radius:7px;display:flex;align-items:center;justify-content:center}
+.logo-icon svg{width:20px;height:20px}
+.logo h1{font-size:1.2rem;font-weight:700}
+.logo small{font-size:.65rem;opacity:.7;text-transform:uppercase;letter-spacing:.4px;display:block}
+nav{display:flex;gap:.2rem;margin-left:1.25rem}
+.nb{padding:.42rem .9rem;border-radius:7px;border:none;background:transparent;
+  color:rgba(255,255,255,.75);font-family:inherit;font-size:.82rem;font-weight:500;
+  cursor:pointer;transition:all .15s}
+.nb:hover,.nb.on{background:rgba(255,255,255,.18);color:#fff}
+.alert-badge{display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;background:#dc2626;color:#fff;border-radius:50%;
+  font-size:.65rem;font-weight:700;margin-left:.3rem;vertical-align:middle}
+.hbadge{margin-left:auto;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);
+  padding:.22rem .65rem;border-radius:20px;font-size:.7rem;font-weight:500}
+#current-user-badge{background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.3);
+  padding:.22rem .65rem;border-radius:20px;font-size:.72rem;cursor:pointer}
+
+/* ── Pages ── */
+.pg{display:none;max-width:1380px;margin:1.5rem auto;padding:0 1.25rem}
+.pg.on{display:block}
+
+/* ── Alert banners ── */
+.alert-bar{display:flex;align-items:center;gap:.75rem;padding:.75rem 1.1rem;border-radius:8px;
+  margin-bottom:.75rem;font-size:.82rem;font-weight:500;cursor:pointer}
+.alert-bar .icon{font-size:1rem;flex-shrink:0}
+.alert-bar .txt{flex:1}
+.alert-bar .count{font-weight:700;font-size:.9rem}
+.ab-red{background:var(--red-lt);color:var(--red);border:1px solid #fca5a5}
+.ab-orange{background:var(--orange-lt);color:var(--orange);border:1px solid #fcd34d}
+.ab-gray{background:var(--gray-100);color:var(--gray-600);border:1px solid var(--gray-200)}
+
+/* ── Cards ── */
+.card{background:#fff;border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;margin-bottom:1.1rem}
+.ch{padding:.8rem 1.1rem;border-bottom:1px solid var(--gray-200);display:flex;align-items:center;
+  gap:.5rem;font-weight:600;font-size:.875rem;justify-content:space-between}
+.ch-left{display:flex;align-items:center;gap:.5rem}
+.cicon{width:26px;height:26px;background:var(--blue-lt);border-radius:6px;display:flex;
+  align-items:center;justify-content:center;font-size:.8rem}
+.cb{padding:1.1rem}
+
+/* ── Buttons ── */
+.btn{padding:.48rem .95rem;border:none;border-radius:7px;font-family:inherit;font-size:.8rem;
+  font-weight:600;cursor:pointer;transition:all .15s;display:inline-flex;align-items:center;gap:.35rem}
+.btn-p{background:linear-gradient(135deg,var(--blue),var(--blue2));color:#fff;box-shadow:0 3px 8px rgba(0,48,135,.25)}
+.btn-p:hover:not(:disabled){opacity:.88;transform:translateY(-1px)}
+.btn-p:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.btn-s{background:var(--green);color:#fff}
+.btn-s:hover{background:#006b30}
+.btn-o{background:transparent;border:1.5px solid var(--gray-200);color:var(--gray-600)}
+.btn-o:hover{border-color:var(--blue2);color:var(--blue2)}
+.btn-d{background:var(--red-lt);color:var(--red);border:1px solid #fca5a5}
+.btn-sm{padding:.3rem .65rem;font-size:.74rem}
+.btn-xs{padding:.2rem .5rem;font-size:.7rem}
+.full{width:100%;justify-content:center;margin-top:.85rem}
+
+/* ── Grids ── */
+.g2{display:grid;grid-template-columns:350px 1fr;gap:1.1rem;align-items:start}
+.g3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:.7rem}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:.7rem}
+@media(max-width:1024px){.g2{grid-template-columns:1fr}.g4{grid-template-columns:1fr 1fr}}
+@media(max-width:640px){.g3{grid-template-columns:1fr 1fr}.g4{grid-template-columns:1fr 1fr}}
+
+/* ── Stats ── */
+.stat{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;
+  padding:.75rem;text-align:center}
+.stat .n{font-size:1.75rem;font-weight:700;color:var(--blue)}
+.stat .l{font-size:.7rem;color:var(--gray-400);font-weight:500;margin-top:.1rem}
+
+/* ── Forms ── */
+label{display:block;font-size:.76rem;font-weight:600;color:var(--gray-600);margin-bottom:.28rem}
+input[type=text],input[type=email],input[type=password],select,textarea{
+  width:100%;padding:.52rem .75rem;border:1.5px solid var(--gray-200);border-radius:7px;
+  font-family:inherit;font-size:.85rem;background:#fff;transition:border-color .2s;margin-bottom:.75rem}
+input:focus,select:focus,textarea:focus{
+  outline:none;border-color:var(--blue2);box-shadow:0 0 0 3px rgba(0,88,167,.1)}
+textarea{resize:vertical;min-height:70px;line-height:1.55}
+
+.toggle{display:flex;background:var(--gray-100);border-radius:8px;padding:3px;margin-bottom:.75rem}
+.toggle button{flex:1;padding:.42rem;border:none;background:transparent;border-radius:6px;
+  font-size:.78rem;font-weight:500;cursor:pointer;color:var(--gray-600);transition:all .2s}
+.toggle button.on{background:#fff;color:var(--blue);box-shadow:0 1px 3px rgba(0,0,0,.1);font-weight:600}
+
+/* ── Tables ── */
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.8rem}
+th{background:var(--gray-50);color:var(--gray-600);font-weight:600;font-size:.73rem;
+  text-align:left;padding:.58rem .85rem;border-bottom:2px solid var(--gray-200);white-space:nowrap}
+td{padding:.6rem .85rem;border-bottom:1px solid var(--gray-100);vertical-align:top}
+tr.clickable{cursor:pointer}
+tr.clickable:hover td{background:var(--blue-lt)}
+.file-link{color:var(--blue);font-weight:600;cursor:pointer;text-decoration:none;font-size:.78rem;
+  font-family:monospace;white-space:nowrap}
+.file-link:hover{text-decoration:underline}
+
+/* ── Status badges ── */
+.badge{display:inline-block;padding:.18rem .55rem;border-radius:99px;font-size:.69rem;font-weight:600;white-space:nowrap}
+.b-New{background:#e0f2fe;color:#0369a1}
+.b-Assigned{background:#fef3c7;color:#92400e}
+.b-InProgress{background:#ede9fe;color:#5b21b6}
+.b-DraftComplete{background:#dcfce7;color:#166534}
+.b-InReview{background:#fce7f3;color:#9d174d}
+.b-Finalized{background:var(--green-lt);color:var(--green)}
+.b-Archived{background:var(--gray-100);color:var(--gray-400)}
+.b-cf{background:var(--orange-lt);color:var(--orange)}
+.b-overdue{background:var(--red-lt);color:var(--red)}
+.b-soon{background:var(--orange-lt);color:var(--orange)}
+.b-ok{background:var(--green-lt);color:var(--green)}
+
+/* ── Progress / log ── */
+.pw{background:var(--gray-100);border-radius:99px;height:7px;overflow:hidden;margin-bottom:.75rem}
+.pb{height:100%;background:linear-gradient(90deg,var(--blue),var(--blue2));border-radius:99px;transition:width .4s;width:0%}
+.pb.spin{width:35%;animation:spin 1.4s ease-in-out infinite}
+@keyframes spin{0%{transform:translateX(-100%)}100%{transform:translateX(400%)}}
+.logbox{background:#0f172a;color:#94a3b8;font-family:Menlo,Consolas,monospace;font-size:.74rem;
+  padding:.85rem;border-radius:8px;height:210px;overflow-y:auto;line-height:1.65}
+.logbox::-webkit-scrollbar{width:3px}
+.logbox::-webkit-scrollbar-thumb{background:#334155;border-radius:3px}
+.ll .ts{color:#475569;margin-right:.45rem}
+.ll.ok .msg{color:#4ade80}
+.ll.err .msg{color:#f87171}
+.ll.sk .msg{color:#fbbf24}
+.srow{display:flex;align-items:center;gap:.55rem;margin-bottom:.65rem}
+.sdot{width:9px;height:9px;border-radius:50%;background:var(--gray-400);flex-shrink:0}
+.sdot.run{background:var(--blue2);animation:pulse 1.2s ease-in-out infinite}
+.sdot.ok{background:var(--green)}
+.sdot.err{background:var(--red)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+/* ── Committee checkboxes ── */
+.cmteg{display:flex;flex-direction:column;gap:.28rem;max-height:240px;overflow-y:auto;padding:.05rem}
+.cmteg::-webkit-scrollbar{width:3px}
+.cmteg::-webkit-scrollbar-thumb{background:var(--gray-200)}
+.ci{display:flex;align-items:center;gap:.5rem;padding:.38rem .55rem;border-radius:6px;cursor:pointer;transition:background .1s}
+.ci:hover{background:var(--blue-lt)}
+.ci input{accent-color:var(--blue);margin:0;width:14px;height:14px}
+.ci span{font-size:.78rem}
+
+/* ── File download items ── */
+.fi{display:flex;align-items:center;justify-content:space-between;padding:.6rem .85rem;
+  background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;margin-bottom:.38rem}
+.fi:hover{border-color:var(--blue2);background:var(--blue-lt)}
+.fi-info{display:flex;align-items:center;gap:.55rem}
+.ficon{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;
+  font-size:.67rem;font-weight:700;color:#fff}
+.ficon.xlsx{background:#1d6f42}
+.ficon.docx{background:#2b5eb6}
+a.dlbtn{padding:.28rem .7rem;background:var(--blue2);color:#fff;border-radius:6px;
+  font-size:.73rem;font-weight:600;text-decoration:none}
+a.dlbtn:hover{background:var(--blue)}
+
+/* ════════════════════════════════════════════════════════════
+   MATTER DETAIL DRAWER
+════════════════════════════════════════════════════════════ */
+#drawer-bg{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:500;display:none;opacity:0;
+  transition:opacity .25s}
+#drawer-bg.open{display:block;opacity:1}
+#drawer{position:fixed;top:0;right:-760px;width:min(760px,98vw);height:100vh;
+  background:#fff;z-index:501;box-shadow:-8px 0 32px rgba(0,0,0,.18);
+  display:flex;flex-direction:column;transition:right .3s cubic-bezier(.4,0,.2,1);overflow:hidden}
+#drawer.open{right:0}
+.dr-header{background:linear-gradient(135deg,var(--blue),var(--blue2));color:#fff;
+  padding:1rem 1.25rem .85rem;flex-shrink:0}
+.dr-title{font-size:1rem;font-weight:700;margin-bottom:.25rem}
+.dr-meta{font-size:.75rem;opacity:.8;display:flex;flex-wrap:wrap;gap:.5rem 1.2rem}
+.dr-tabs{display:flex;border-bottom:2px solid var(--gray-200);flex-shrink:0;background:#fff}
+.dtab{padding:.65rem 1.1rem;border:none;background:transparent;font-family:inherit;
+  font-size:.8rem;font-weight:500;color:var(--gray-600);cursor:pointer;border-bottom:2px solid transparent;
+  margin-bottom:-2px;transition:all .15s}
+.dtab.on{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
+.dr-body{flex:1;overflow-y:auto;padding:1.1rem}
+.dr-body::-webkit-scrollbar{width:4px}
+.dr-body::-webkit-scrollbar-thumb{background:var(--gray-200);border-radius:4px}
+.dr-close{position:absolute;top:.85rem;right:1rem;width:32px;height:32px;border:none;
+  background:rgba(255,255,255,.2);border-radius:6px;color:#fff;font-size:1rem;
+  cursor:pointer;display:flex;align-items:center;justify-content:center}
+.dr-close:hover{background:rgba(255,255,255,.35)}
+
+/* Drawer sections */
+.ds{margin-bottom:1.1rem}
+.ds-title{font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.6px;
+  color:var(--gray-400);margin-bottom:.45rem;display:flex;align-items:center;
+  justify-content:space-between}
+.editable-field{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;
+  padding:.75rem;font-size:.82rem;line-height:1.6;white-space:pre-wrap;min-height:60px;
+  transition:border-color .2s}
+.editable-field[contenteditable=true]{cursor:text;border-color:var(--blue2)}
+.editable-field[contenteditable=true]:focus{outline:none;box-shadow:0 0 0 3px rgba(0,88,167,.1)}
+.cf-banner{background:var(--orange-lt);border:1px solid #fcd34d;border-radius:8px;
+  padding:.6rem .85rem;font-size:.78rem;color:var(--orange);display:flex;align-items:center;
+  gap:.5rem;margin-bottom:.85rem}
+
+/* Timeline */
+.timeline{position:relative;padding-left:1.5rem}
+.timeline::before{content:'';position:absolute;left:.45rem;top:0;bottom:0;
+  width:2px;background:var(--gray-200)}
+.tl-item{position:relative;margin-bottom:.85rem}
+.tl-dot{position:absolute;left:-1.2rem;top:.3rem;width:12px;height:12px;
+  border-radius:50%;background:var(--blue2);border:2px solid #fff;
+  box-shadow:0 0 0 2px var(--blue-mid)}
+.tl-dot.status{background:var(--blue)}
+.tl-dot.assign{background:var(--green)}
+.tl-dot.note{background:var(--orange)}
+.tl-dot.export{background:#7c3aed}
+.tl-time{font-size:.7rem;color:var(--gray-400);margin-bottom:.15rem}
+.tl-action{font-size:.8rem;font-weight:500;color:var(--gray-800)}
+.tl-detail{font-size:.75rem;color:var(--gray-600);margin-top:.1rem}
+
+/* Appearances list in drawer */
+.app-row{display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;
+  border:1px solid var(--gray-200);border-radius:8px;margin-bottom:.4rem;
+  background:var(--gray-50);transition:all .15s;cursor:pointer}
+.app-row:hover{border-color:var(--blue2);background:var(--blue-lt)}
+.app-row .date{font-size:.78rem;font-weight:600;color:var(--gray-800);min-width:80px}
+.app-row .body{font-size:.75rem;color:var(--gray-600);flex:1}
+.app-row .right{display:flex;align-items:center;gap:.4rem}
+
+/* ── Workflow page ── */
+.wf-filters{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:flex-end}
+.wf-filters select,.wf-filters input{margin:0;width:auto;font-size:.8rem}
+.due-cell{font-size:.76rem;font-weight:600;white-space:nowrap}
+.due-over{color:var(--red)}
+.due-soon{color:var(--orange)}
+.due-ok{color:var(--green)}
+.due-none{color:var(--gray-400)}
+.inline-status{border:1px solid var(--gray-200);border-radius:6px;padding:.25rem .4rem;
+  font-size:.75rem;cursor:pointer;background:#fff;font-family:inherit}
+
+/* ── Settings page ── */
+.settings-section{margin-bottom:1.5rem}
+.settings-section h3{font-size:.85rem;font-weight:600;margin-bottom:.75rem;
+  color:var(--blue);border-bottom:1px solid var(--gray-200);padding-bottom:.4rem}
+.team-row{display:flex;gap:.5rem;align-items:center;margin-bottom:.4rem;
+  background:var(--gray-50);padding:.5rem .75rem;border-radius:7px;border:1px solid var(--gray-200)}
+.team-row span{flex:1;font-size:.82rem}
+
+/* ════════════════════════════════════════════════════════════
+   v6 POLISH — typography, badges, tables, empty states, motion
+════════════════════════════════════════════════════════════ */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Source+Serif+4:wght@600;700&family=JetBrains+Mono:wght@500&display=swap');
+
+:root{
+  --ink:#0b1220;
+  --ink-soft:#1e293b;
+  --muted:#64748b;
+  --border:#e5e7eb;
+  --border-strong:#cbd5e1;
+  --bg:#f6f8fb;
+  --blue-deep:#0a2a6b;
+  --accent:#0058a7;
+  --ring:0 0 0 3px rgba(0,88,167,.14);
+  --lift:0 10px 30px -12px rgba(15,23,42,.18), 0 2px 6px -2px rgba(15,23,42,.08);
+  --r-sm:8px; --r-md:12px; --r-lg:16px;
+}
+body{background:var(--bg);color:var(--ink)}
+.pg{animation:pgFade .28s cubic-bezier(.2,.7,.2,1)}
+@keyframes pgFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* Serif display for titles and drawer headlines */
+.dr-title,.md-title,.pg-title,h1.logo-title,
+.pg h2,.pg h3{font-family:'Source Serif 4',Georgia,serif;letter-spacing:-.01em}
+
+/* Cards: sharper borders, softer shadow, lift on hover for interactive lists */
+.card{border:1px solid var(--border);box-shadow:0 1px 2px rgba(15,23,42,.04),0 1px 0 rgba(255,255,255,.6) inset;border-radius:var(--r-md)}
+.card .ch{background:linear-gradient(180deg,#fff,#fafbfd);border-bottom:1px solid var(--border)}
+.card .ch .cicon{background:#eef2ff;color:var(--blue-deep)}
+
+/* Tables: sticky headers, zebra-light rows, tighter density option */
+.tbl-wrap{border-radius:var(--r-md);overflow:auto;max-height:calc(100vh - 240px)}
+thead th{position:sticky;top:0;z-index:2;background:#f8fafc;
+  font-variant-numeric:tabular-nums;letter-spacing:.02em;
+  box-shadow:inset 0 -1px 0 var(--border-strong)}
+tbody tr{transition:background-color .12s}
+tbody tr:nth-child(even) td{background:rgba(248,250,252,.5)}
+tbody tr.clickable:hover td{background:#eef4ff !important}
+tr.wf-group-hdr td{background:linear-gradient(90deg,#eef2ff 0%,#f8fafc 60%)!important;
+  box-shadow:inset 3px 0 0 var(--accent)}
+
+/* Badges — slightly stronger borders, pill spacing */
+.badge{border:1px solid transparent;letter-spacing:.02em;font-variant-numeric:tabular-nums;
+  padding:.22rem .6rem;box-shadow:0 1px 0 rgba(15,23,42,.03)}
+.b-New{background:#e0f2fe;color:#0c4a6e;border-color:#bae6fd}
+.b-Assigned{background:#fef3c7;color:#854d0e;border-color:#fde68a}
+.b-InProgress{background:#ede9fe;color:#4c1d95;border-color:#ddd6fe}
+.b-DraftComplete{background:#dcfce7;color:#14532d;border-color:#bbf7d0}
+.b-InReview{background:#fce7f3;color:#831843;border-color:#fbcfe8}
+.b-Finalized{background:#dcfce7;color:#064e3b;border-color:#86efac}
+.b-Archived{background:#f1f5f9;color:#475569;border-color:#e2e8f0}
+.b-cf{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
+.b-overdue{background:#fee2e2;color:#7f1d1d;border-color:#fecaca}
+.b-soon{background:#fffbeb;color:#92400e;border-color:#fde68a}
+.b-ok{background:#ecfdf5;color:#065f46;border-color:#a7f3d0}
+
+/* Buttons — refined primary, outline hover, small icon buttons */
+.btn{letter-spacing:.01em;border-radius:8px}
+.btn-p{background:linear-gradient(180deg,#0068c7,#003e8f);
+  box-shadow:0 1px 0 rgba(255,255,255,.25) inset,0 4px 14px -6px rgba(0,88,167,.55)}
+.btn-p:hover:not(:disabled){filter:brightness(1.05);transform:translateY(-1px)}
+.btn-o{background:#fff}
+.btn-o:hover{background:#f8fafc;border-color:var(--accent);color:var(--accent);box-shadow:0 1px 0 rgba(15,23,42,.04)}
+.btn:focus-visible{outline:none;box-shadow:var(--ring)}
+
+/* Inputs — tighter focus ring, subtle inset */
+input[type=text],input[type=email],input[type=password],select,textarea{
+  background:#fff;border-color:var(--border);box-shadow:inset 0 1px 0 rgba(15,23,42,.03)}
+input:focus,select:focus,textarea:focus{box-shadow:var(--ring);border-color:var(--accent)}
+
+/* Empty states */
+.empty{padding:2.4rem 1.25rem;text-align:center;color:var(--muted)}
+.empty .icon{font-size:2rem;margin-bottom:.5rem;opacity:.6}
+.empty .title{font-family:'Source Serif 4',Georgia,serif;font-size:1.05rem;color:var(--ink-soft);margin-bottom:.25rem}
+.empty .hint{font-size:.82rem;line-height:1.55;max-width:44ch;margin:0 auto}
+.empty .cta{margin-top:.9rem}
+
+/* Skeleton shimmer for loading rows */
+.sk{display:inline-block;height:.9em;border-radius:4px;
+  background:linear-gradient(90deg,#e5e7eb 0%,#f1f5f9 50%,#e5e7eb 100%);
+  background-size:200% 100%;animation:sh 1.25s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+
+/* Drawer refinements */
+#drawer{border-top-left-radius:18px;border-bottom-left-radius:18px}
+.dr-header{background:
+  radial-gradient(1200px 300px at 100% -50%,rgba(255,255,255,.18),transparent 60%),
+  linear-gradient(135deg,#0a2a6b 0%,#0058a7 100%);
+  padding:1.15rem 1.35rem 1rem}
+.dr-title{font-size:1.1rem;letter-spacing:-.015em}
+.dr-meta a{transition:opacity .15s}
+.dr-meta a:hover{opacity:.8}
+.dtab{position:relative;transition:color .15s}
+.dtab:hover{color:var(--ink-soft)}
+.dtab.on::after{content:'';position:absolute;left:.6rem;right:.6rem;bottom:-2px;
+  height:2px;background:var(--accent);border-radius:2px}
+
+/* Meeting Detail: hero banner */
+.md-hero{background:linear-gradient(135deg,#f8fafc,#eef2ff);border:1px solid var(--border);
+  border-radius:var(--r-md);padding:1.1rem 1.3rem;margin-bottom:1rem;
+  display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
+.md-hero .md-title{font-size:1.3rem;font-weight:700;color:var(--blue-deep);margin:0}
+.md-hero .sub{font-size:.8rem;color:var(--muted)}
+.md-hero .spacer{flex:1}
+
+/* File-number chip */
+.file-link{background:#eef2ff;color:var(--blue-deep);padding:.12rem .5rem;border-radius:5px;
+  border:1px solid #dbeafe;font-family:'JetBrains Mono',Menlo,monospace;font-size:.74rem}
+.file-link:hover{background:#dbeafe;text-decoration:none}
+
+/* Chip row inside drawer header */
+.dr-chips{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.5rem}
+.dr-chip{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.22);
+  padding:.18rem .55rem;border-radius:99px;font-size:.7rem;color:#fff;letter-spacing:.02em}
+
+/* Scrollbars */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:#94a3b8}
+
+/* Group header in workflow */
+.wf-group-hdr:hover td{filter:brightness(.98)}
+.wf-group-hdr .grp-caret{display:inline-block;transition:transform .2s;margin-right:.35rem;color:#64748b}
+
+/* Subtle section dividers */
+.ds-title{color:#475569;letter-spacing:.8px}
+.ds-title::after{content:'';flex:1;height:1px;background:var(--border);margin-left:.6rem}
+.ds-title{display:flex;align-items:center}
+
+/* Tooltip-ish hint */
+[data-hint]{position:relative}
+
+/* Success / error toasts */
+.toast{position:fixed;bottom:1.25rem;right:1.25rem;background:#0b1220;color:#fff;
+  padding:.75rem 1rem;border-radius:10px;box-shadow:var(--lift);font-size:.82rem;
+  z-index:9999;opacity:0;transform:translateY(10px);transition:all .2s;pointer-events:none}
+.toast.show{opacity:1;transform:none}
+.toast.ok{background:#065f46}
+.toast.err{background:#7f1d1d}
+
+/* ═══ V6 visual refresh — softer shadows, rounder corners, app-like feel ═══ */
+:root{
+  --r: 14px;
+  --ink: #0f172a;
+  --ink-soft: #1e293b;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --ring: rgba(0,48,135,.18);
+  --lift: 0 10px 30px -12px rgba(2,6,23,.18), 0 2px 6px -1px rgba(2,6,23,.06);
+  --shadow: 0 1px 2px rgba(0,0,0,.04), 0 4px 12px -4px rgba(0,0,0,.07);
+  --shadow-lg: 0 20px 40px -16px rgba(2,6,23,.22), 0 4px 12px -4px rgba(2,6,23,.08);
+}
+body{background:linear-gradient(180deg,#f8fafc 0%,#eef2f7 100%) fixed}
+.card{border-radius:var(--r);box-shadow:var(--shadow);border:1px solid #eef1f5}
+.card:hover{box-shadow:var(--shadow-lg);transition:box-shadow .2s}
+.ch{padding:1rem 1.2rem;font-size:.9rem;background:#fcfcfd;border-bottom-color:#eef1f5}
+.cicon{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#e8f0fb,#dbe6f7);
+       box-shadow:inset 0 0 0 1px rgba(0,48,135,.08);font-size:.95rem}
+.btn{border-radius:10px;font-weight:600;letter-spacing:.01em;transition:all .15s}
+.btn-p{background:linear-gradient(135deg,#003087 0%,#0058a7 100%);
+       box-shadow:0 1px 2px rgba(0,48,135,.3),0 4px 10px -3px rgba(0,48,135,.35)}
+.btn-p:hover:not(:disabled){transform:translateY(-1px);
+       box-shadow:0 2px 4px rgba(0,48,135,.35),0 8px 18px -4px rgba(0,48,135,.45)}
+.btn-o{background:#fff;border:1px solid var(--border);color:var(--ink-soft)}
+.btn-o:hover:not(:disabled){border-color:#cbd5e1;background:#f8fafc;transform:translateY(-1px);box-shadow:0 2px 6px rgba(2,6,23,.06)}
+nav .nb{border-radius:9px;font-size:.85rem;font-weight:500;padding:.5rem 1rem}
+nav .nb.on{background:rgba(255,255,255,.22);box-shadow:inset 0 0 0 1px rgba(255,255,255,.35)}
+header{box-shadow:0 4px 20px -4px rgba(0,48,135,.4),0 1px 0 rgba(255,255,255,.08) inset}
+table{font-size:.8rem}
+table th{background:#f7f8fb;color:#475569;font-weight:600;font-size:.7rem;
+         text-transform:uppercase;letter-spacing:.04em;padding:.7rem .8rem;
+         border-bottom:1px solid var(--border);position:sticky;top:0;z-index:2}
+table td{padding:.65rem .8rem;border-bottom:1px solid #eef1f5;vertical-align:middle}
+table tbody tr:hover{background:#f8fafc}
+table tbody tr.clickable{cursor:pointer}
+table tbody tr.clickable:hover{background:linear-gradient(90deg,#eef4ff 0%,#f8fafc 100%)}
+.file-link{font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:.76rem;
+           font-weight:600;color:var(--blue);background:#eef4ff;padding:.18rem .48rem;
+           border-radius:6px;border:1px solid #dbe6f7}
+.badge{display:inline-flex;align-items:center;gap:.2rem;padding:.22rem .55rem;
+       border-radius:999px;font-size:.68rem;font-weight:600;letter-spacing:.02em;
+       border:1px solid transparent}
+input,select,textarea{border-radius:9px;border:1px solid var(--border);
+       padding:.55rem .7rem;font-size:.85rem;transition:all .15s}
+input:focus,select:focus,textarea:focus{outline:none;border-color:#a7c0e6;
+       box-shadow:0 0 0 3px var(--ring)}
+label{font-size:.72rem;font-weight:600;color:var(--muted);text-transform:uppercase;
+      letter-spacing:.04em}
+.pg{animation:pgFade .18s ease-out}
+@keyframes pgFade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+/* Drawer refinement */
+#drawer{border-top-left-radius:16px;border-bottom-left-radius:16px;
+        box-shadow:-20px 0 60px -20px rgba(2,6,23,.35)}
+.dtab{padding:.55rem 1rem;border:none;background:transparent;cursor:pointer;
+      font-size:.82rem;font-weight:500;color:var(--muted);border-bottom:2px solid transparent}
+.dtab.on{color:var(--blue);border-bottom-color:var(--blue)}
+/* Subtler scrollbars */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#d3dae4;border-radius:10px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:#b9c2cf;background-clip:content-box;border:2px solid transparent}
+
+/* Quick-action tiles on dashboard welcome strip */
+.qa-tile{display:flex;align-items:center;gap:.65rem;padding:.7rem .85rem;
+  background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+  border-radius:10px;color:#fff;cursor:pointer;text-align:left;
+  transition:all .15s ease;font-family:inherit}
+.qa-tile:hover{background:rgba(255,255,255,.22);transform:translateY(-1px);
+  box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.qa-icon{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;
+  justify-content:center;font-size:1.1rem;flex-shrink:0}
+.qa-title{font-weight:600;font-size:.86rem;line-height:1.2}
+.qa-sub{font-size:.72rem;opacity:.8;line-height:1.3;margin-top:.1rem}
+
+/* Help modal tabs */
+.htab{background:transparent;border:none;padding:.6rem 1rem;font-size:.82rem;font-weight:500;
+  color:var(--gray-600);cursor:pointer;border-bottom:2px solid transparent;
+  border-radius:0;margin:0;transition:all .15s ease}
+.htab:hover{color:var(--gray-800);background:var(--gray-50)}
+.htab.on{color:var(--blue);border-bottom-color:var(--blue);font-weight:600}
+.hpane{padding:.25rem 0;font-size:.85rem;line-height:1.55;color:var(--gray-700)}
+.hpane h3{font-size:.92rem;color:#1e293b;margin:1rem 0 .5rem;font-weight:600}
+.hpane h3:first-child{margin-top:.2rem}
+.hpane p{margin:.45rem 0}
+.howto-item{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;
+  padding:.7rem .9rem;margin:.55rem 0}
+.howto-q{font-weight:600;color:#1e293b;font-size:.85rem;margin-bottom:.3rem}
+.howto-a{font-size:.8rem;color:var(--gray-700);line-height:1.55}
+.coldef,.statdef,.tabdef{display:grid;grid-template-columns:160px 1fr;gap:.45rem 1rem;
+  padding:.55rem .25rem;border-bottom:1px solid var(--gray-100)}
+.coldef:last-child,.statdef:last-child,.tabdef:last-child{border-bottom:none}
+.coldef b,.statdef b,.tabdef b{color:#1e293b;font-size:.82rem}
+.coldef span,.statdef span,.tabdef span{font-size:.8rem;color:var(--gray-700);line-height:1.5}
+
+/* Friendlier empty states */
+.empty-state{padding:2rem 1rem;text-align:center;color:var(--gray-500)}
+.empty-state .ei{font-size:2rem;margin-bottom:.5rem;opacity:.6}
+.empty-state .et{font-weight:600;color:var(--gray-700);margin-bottom:.25rem}
+.empty-state .ed{font-size:.82rem;max-width:420px;margin:0 auto;line-height:1.5}
+
+/* Subtle hint tooltip for column headers */
+th[title]{cursor:help;border-bottom:1px dotted transparent}
+th[title]:hover{border-bottom-color:var(--gray-400)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo" onclick="showPg('dashboard')">
+    <div class="logo-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#003087" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="4" width="18" height="18" rx="2"/>
+        <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+        <line x1="3" y1="10" x2="21" y2="10"/>
+        <line x1="8" y1="14" x2="10" y2="14"/><line x1="12" y1="14" x2="16" y2="14"/>
+      </svg>
+    </div>
+    <div><h1>AgendaIQ</h1><small>Office of the Commission Auditor · Miami-Dade</small></div>
+  </div>
+  <nav>
+    <button class="nb on" id="nb-dashboard" onclick="showPg('dashboard')" title="Overview of all work">Home</button>
+    <button class="nb" id="nb-process" onclick="showPg('process')" title="Analyze a new agenda">Analyze</button>
+    <button class="nb" id="nb-meetings" onclick="showPg('meetings')" title="Review past meeting packages">Meetings</button>
+    <button class="nb" id="nb-search" onclick="showPg('search')" title="Find any past item">Search</button>
+    <button class="nb" id="nb-workflow" onclick="showPg('workflow')" title="Track assigned work">
+      Workflow<span class="alert-badge" id="overdue-badge" style="display:none">0</span>
+    </button>
+    <button class="nb" id="nb-myitems" onclick="showPg('myitems')" title="Items assigned to you">My Items</button>
+    <button class="nb" id="nb-settings" onclick="showPg('settings')" title="Team & configuration">Settings</button>
+  </nav>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:.55rem;">
+    <button class="nb" onclick="showHelp()" title="Quick tour of AgendaIQ"
+      style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:999px;
+      width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;
+      font-weight:700;font-size:.85rem">?</button>
+    <select id="current-user-sel" onchange="setCurrentUser(this.value)"
+      style="margin:0;width:auto;font-size:.75rem;padding:.22rem .5rem;background:rgba(255,255,255,.15);
+      border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:6px">
+      <option value="">Acting as…</option>
+    </select>
+    <span class="hbadge">v6</span>
+  </div>
+</header>
+
+<!-- ═══════════════ HELP / REFERENCE MODAL ═══════════════ -->
+<div id="help-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.55);
+  z-index:9999;align-items:flex-start;justify-content:center;padding:3vh 2vw;overflow:auto" onclick="hideHelp(event)">
+  <div style="background:#fff;max-width:860px;width:100%;border-radius:14px;
+    box-shadow:0 25px 60px rgba(0,0,0,.3);overflow:hidden" onclick="event.stopPropagation()">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:1.15rem 1.5rem;
+      background:linear-gradient(135deg,#1e3a8a,#3b82f6);color:#fff">
+      <div>
+        <div style="font-size:1.25rem;font-weight:700">AgendaIQ Help & Reference</div>
+        <div style="font-size:.78rem;opacity:.85">Everything you need — no training required</div>
+      </div>
+      <button class="btn btn-o btn-sm" onclick="hideHelp()" style="background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.4);color:#fff">✕ Close</button>
+    </div>
+    <div style="display:flex;border-bottom:1px solid var(--gray-200);background:var(--gray-50)">
+      <button class="htab on" onclick="switchHelpTab('tour',this)">Quick Tour</button>
+      <button class="htab" onclick="switchHelpTab('howto',this)">How-To</button>
+      <button class="htab" onclick="switchHelpTab('columns',this)">Column Guide</button>
+      <button class="htab" onclick="switchHelpTab('statuses',this)">Status Guide</button>
+      <button class="htab" onclick="switchHelpTab('tabs',this)">Item Tabs</button>
+    </div>
+    <div style="padding:1.25rem 1.5rem;max-height:65vh;overflow:auto">
+
+      <!-- TOUR -->
+      <div class="hpane on" id="hpane-tour">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;margin-bottom:1rem">
+          <div style="background:linear-gradient(135deg,#eef6ff,#dbeafe);padding:.95rem;border-radius:10px">
+            <div style="font-size:1.4rem">①</div>
+            <div style="font-weight:700;color:var(--blue);font-size:.95rem;margin-bottom:.25rem">Analyze</div>
+            <div style="font-size:.78rem;color:var(--gray-600);line-height:1.45">
+              Go to <strong>Analyze</strong>, pick a meeting date, select committees, click <em>Analyze agenda</em>. The system scrapes every item, summarizes it, and flags watchpoints.
+            </div>
+          </div>
+          <div style="background:linear-gradient(135deg,#fef6e4,#fde68a);padding:.95rem;border-radius:10px">
+            <div style="font-size:1.4rem">②</div>
+            <div style="font-weight:700;color:#92400e;font-size:.95rem;margin-bottom:.25rem">Research & Note</div>
+            <div style="font-size:.78rem;color:var(--gray-600);line-height:1.45">
+              Open <strong>Meetings</strong> → click a meeting → click any item row. Add notes in the Notes tab. Prior committee notes carry forward automatically.
+            </div>
+          </div>
+          <div style="background:linear-gradient(135deg,#ecfdf5,#bbf7d0);padding:.95rem;border-radius:10px">
+            <div style="font-size:1.4rem">③</div>
+            <div style="font-weight:700;color:#065f46;font-size:.95rem;margin-bottom:.25rem">Deliver</div>
+            <div style="font-size:.78rem;color:var(--gray-600);line-height:1.45">
+              When done, click <strong>Export Files</strong> in the item drawer or on the meeting page. Part 1 — Agenda Debrief — downloads as Word.
+            </div>
+          </div>
+        </div>
+        <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:10px;padding:.9rem 1.1rem;font-size:.82rem;color:#1e3a8a;line-height:1.55">
+          <strong>Key concept — one item can appear at many meetings.</strong> A bill reviewed at committee on March 10 and adopted at BCC on March 17 is the <em>same</em> item. AgendaIQ follows it across stages: notes made at committee show up when the same item hits the BCC agenda, and whoever was assigned at committee stays assigned at BCC.
+        </div>
+      </div>
+
+      <!-- HOW-TO -->
+      <div class="hpane" id="hpane-howto" style="display:none">
+        <div class="howto-item">
+          <div class="howto-q">How do I add research notes to an item?</div>
+          <div class="howto-a">Open <strong>Meetings</strong> → click a meeting → click the item row. In the drawer, go to the <strong>Notes</strong> tab. Type in either "Analyst Working Notes" or "Reviewer Notes" and click <em>Append Note</em>. Each note is timestamped automatically and appears in the Part 1 deliverable.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">How do I see notes from a prior meeting on the same item?</div>
+          <div class="howto-a">Open the item drawer. The <strong>Part 1 · Debrief</strong> tab has a <em>Research Notes</em> section at the bottom listing every note from every appearance — Committee, BCC, and everything in between — each stamped with stage, date, and author. For more detail, the <strong>Appearances</strong> tab shows the full case history. Items with prior notes have a <strong>✓</strong> in the <em>Prior Notes</em> column of the grid.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">How do I assign items to a researcher?</div>
+          <div class="howto-a">In the meeting grid, use the <strong>Assigned</strong> cell on any row. To assign many at once: select the checkboxes, then click <em>Bulk Assign</em> at the top. On the <strong>Workflow</strong> page, the same bulk controls are available across all meetings.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">Will a researcher's assignment stick when the item moves to the next meeting?</div>
+          <div class="howto-a">Yes. When a matter that was assigned at committee reappears at BCC (or any later stage), the assigned researcher, reviewer, and priority all carry forward automatically. You can override by changing the Assigned/Reviewer selectors on the new appearance.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">How do I export the final deliverable?</div>
+          <div class="howto-a">In the item drawer, click <strong>↓ Export Files</strong>. This produces the Part 1 Agenda Debrief as a Word document, including Agenda Debrief, Watchpoints, Legislative History, and timestamped Research Notes. Deep Research Notes are <em>not</em> included — those stay internal.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">What's the difference between Notes and Deep Research?</div>
+          <div class="howto-a"><strong>Notes</strong> = what goes into the delivered Part 1 brief. <strong>Deep Research</strong> = internal reference material (background, citations, earlier memos). Deep Research is never exported.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">Why is my item flagged "MANUAL REVIEW NEEDED"?</div>
+          <div class="howto-a">The source PDF was a scanned image, not a text PDF. The AI couldn't read it, so the system flagged it for you to review manually. Open the PDF link in the item to draft the debrief by hand.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">The committee date/number columns are empty — what do I do?</div>
+          <div class="howto-a">Click the yellow <em>⚠ Missing data</em> banner on the Meetings page and run the Backfill. It pulls Legistar legislative history for every item and back-fills prior committee appearances.</div>
+        </div>
+      </div>
+
+      <!-- COLUMN GUIDE -->
+      <div class="hpane" id="hpane-columns" style="display:none">
+        <div class="coldef"><b>File #</b> — Miami-Dade Legistar file number. Unique per bill/matter across its whole life.</div>
+        <div class="coldef"><b>Cmte Date / Cmte #</b> — When and as what agenda item this matter was heard at committee. Populated from either a stored appearance or parsed Legistar history.</div>
+        <div class="coldef"><b>BCC Date / BCC #</b> — Same, but for the Board of County Commissioners hearing.</div>
+        <div class="coldef"><b>Title</b> — Short title. Hover for full.</div>
+        <div class="coldef"><b>Type</b> — Resolution, Ordinance, Discussion, Report, etc.</div>
+        <div class="coldef"><b>Leg Status</b> — Current legislative status snapshot (e.g., "In Committee," "Adopted"). Updates when backfill runs after a new meeting.</div>
+        <div class="coldef"><b>Sponsor / Requester</b> — Commissioner or department that originated the item.</div>
+        <div class="coldef"><b>Control</b> — Control body, usually a committee assignment.</div>
+        <div class="coldef"><b>Progress</b> — Visual indicator showing whether the item has passed through Committee and/or BCC. Filled blue dot = currently here; filled gray = already happened; outlined = not yet. <code>+SUPP</code> badge = this item is on a supplement.</div>
+        <div class="coldef"><b>Prior Notes</b> — <strong>✓</strong> means this matter has analyst or reviewer notes on at least one prior appearance. Click the row to see them.</div>
+        <div class="coldef"><b>History</b> — Quick badges showing if notes carried forward (↩ CF), AI ran, etc.</div>
+        <div class="coldef"><b>Workflow</b> — Current status of the research task (see Status Guide).</div>
+        <div class="coldef"><b>Assigned / Reviewer</b> — Researcher owning the item and the reviewer. Sticky across stages.</div>
+        <div class="coldef"><b>Due</b> — Target date for this appearance's brief.</div>
+      </div>
+
+      <!-- STATUS GUIDE -->
+      <div class="hpane" id="hpane-statuses" style="display:none">
+        <div style="font-weight:700;color:var(--gray-800);margin-bottom:.55rem">Workflow Statuses</div>
+        <div class="statdef"><span class="badge b-New">New</span> Just scraped. No researcher has touched it yet.</div>
+        <div class="statdef"><span class="badge b-Assigned">Assigned</span> A researcher has been assigned but work hasn't started.</div>
+        <div class="statdef"><span class="badge b-InProgress">In Progress</span> Actively being worked on.</div>
+        <div class="statdef"><span class="badge b-DraftComplete">Draft Complete</span> Researcher finished a first draft.</div>
+        <div class="statdef"><span class="badge b-InReview">In Review</span> Reviewer is checking the draft.</div>
+        <div class="statdef"><span class="badge b-Finalized">Finalized</span> Ready for delivery / export.</div>
+        <div class="statdef"><span class="badge b-Archived">Archived</span> Historical stub or closed-out item. Stays in database for lookup.</div>
+
+        <div style="font-weight:700;color:var(--gray-800);margin:1rem 0 .55rem">Legislative Statuses (from Legistar)</div>
+        <div class="statdef"><b>Introduced / Received</b> — Just filed. Not yet heard anywhere.</div>
+        <div class="statdef"><b>Assigned to Committee</b> — Routed to a committee for review.</div>
+        <div class="statdef"><b>Forwarded to BCC with favorable recommendation</b> — Committee voted to advance with endorsement.</div>
+        <div class="statdef"><b>Forwarded without recommendation</b> — Committee advanced but didn't endorse.</div>
+        <div class="statdef"><b>Deferred / Carried over</b> — Postponed to a later meeting. Will reappear.</div>
+        <div class="statdef"><b>Adopted / Approved</b> — Final passage at BCC.</div>
+        <div class="statdef"><b>Withdrawn</b> — Sponsor pulled the item.</div>
+        <div class="statdef"><b>No action taken</b> — Died at that meeting without vote.</div>
+
+        <div style="font-weight:700;color:var(--gray-800);margin:1rem 0 .55rem">Prior-Notes Indicators</div>
+        <div class="statdef">✓ in <b>Prior Notes</b> column — this item has saved researcher notes from an earlier appearance.</div>
+        <div class="statdef">↩ <b>CF</b> badge — notes were automatically carried forward from a prior appearance into this one.</div>
+      </div>
+
+      <!-- ITEM TABS -->
+      <div class="hpane" id="hpane-tabs" style="display:none">
+        <div class="tabdef"><b>Part 1 · Debrief</b> — The deliverable. Contains Agenda Debrief, Watch Points, Legislative Status (live), Legislative History, and all Research Notes stamped with author and date. <strong>This is what gets exported.</strong></div>
+        <div class="tabdef"><b>Notes</b> — Where you add new research: Analyst Working Notes and Reviewer Notes. Each Append Note action timestamps automatically. Feeds Part 1.</div>
+        <div class="tabdef"><b>Deep Research</b> — Reference-only background material. Never exported. Use for citations, prior memos, context a researcher may want to come back to.</div>
+        <div class="tabdef"><b>History</b> — Audit trail of who changed what on this appearance (status changes, assignment changes, notes added, AI runs, exports).</div>
+        <div class="tabdef"><b>Appearances</b> — Every time this matter has appeared on any agenda (Committee, BCC, supplements). Click a row to jump to that appearance. You can copy prior notes into the current one from here.</div>
+        <div class="tabdef"><b>Lifecycle</b> — Chronological timeline pulled from Legistar showing every action taken on the matter — introduction through adoption.</div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ DASHBOARD ═══════════════════════════ -->
+<div class="pg on" id="pg-dashboard">
+  <div id="alert-bars"></div>
+
+  <!-- Welcome / quick-action strip — dismissable -->
+  <div id="welcome-strip" style="background:linear-gradient(135deg,#1e3a8a 0%,#3b82f6 60%,#60a5fa 100%);
+    color:#fff;border-radius:14px;padding:1.15rem 1.35rem;margin-bottom:1.1rem;
+    box-shadow:0 8px 24px rgba(30,58,138,.18);position:relative">
+    <button onclick="dismissWelcome()" title="Hide this"
+      style="position:absolute;top:.55rem;right:.7rem;background:rgba(255,255,255,.15);border:none;
+      color:#fff;width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:.7rem">✕</button>
+    <div style="display:flex;align-items:center;gap:.65rem;margin-bottom:.45rem">
+      <div style="font-size:1.5rem">👋</div>
+      <div>
+        <div style="font-size:1.05rem;font-weight:700;letter-spacing:-.01em">Welcome to AgendaIQ</div>
+        <div style="font-size:.8rem;opacity:.85">Your Miami-Dade legislative agenda intelligence tool.
+          <a href="#" onclick="showHelp();return false" style="color:#fff;text-decoration:underline">Take the 60-second tour →</a>
+        </div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.6rem;margin-top:.75rem">
+      <button class="qa-tile" onclick="showPg('process')">
+        <div class="qa-icon" style="background:rgba(255,255,255,.2)">▶</div>
+        <div><div class="qa-title">Analyze an agenda</div>
+          <div class="qa-sub">Pick a date, get item-by-item briefs</div></div>
+      </button>
+      <button class="qa-tile" onclick="showPg('myitems')">
+        <div class="qa-icon" style="background:rgba(255,255,255,.2)">📝</div>
+        <div><div class="qa-title">Work on my items</div>
+          <div class="qa-sub">Open assignments, add notes</div></div>
+      </button>
+      <button class="qa-tile" onclick="showPg('meetings')">
+        <div class="qa-icon" style="background:rgba(255,255,255,.2)">📅</div>
+        <div><div class="qa-title">Browse meetings</div>
+          <div class="qa-sub">Review past agenda packages</div></div>
+      </button>
+      <button class="qa-tile" onclick="showPg('search')">
+        <div class="qa-icon" style="background:rgba(255,255,255,.2)">🔍</div>
+        <div><div class="qa-title">Search any item</div>
+          <div class="qa-sub">By file #, keyword, or sponsor</div></div>
+      </button>
+    </div>
+  </div>
+
+  <div class="g4" style="margin-bottom:1.1rem" id="dash-stats">
+    <div class="stat"><div class="n" id="s-matters">—</div><div class="l">Total Matters</div></div>
+    <div class="stat"><div class="n" id="s-apps">—</div><div class="l">Appearances</div></div>
+    <div class="stat"><div class="n" id="s-mtgs">—</div><div class="l">Meetings</div></div>
+    <div class="stat"><div class="n" id="s-open">—</div><div class="l">Open Items</div></div>
+  </div>
+  <div class="g2">
+    <div>
+      <div class="card">
+        <div class="ch"><div class="ch-left"><div class="cicon">📊</div>By Status</div></div>
+        <div class="cb" id="dash-status"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="ch">
+          <div class="ch-left"><div class="cicon">🕒</div>Recent Activity</div>
+          <button class="btn btn-o btn-sm" onclick="showPg('workflow')">View All →</button>
+        </div>
+        <div class="tbl-wrap">
+          <table><thead><tr><th>File #</th><th>Title</th><th>Date</th><th>Body</th><th>Status</th><th>Assigned</th></tr></thead>
+          <tbody id="dash-recent"></tbody></table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ PROCESS ═══════════════════════════ -->
+<div class="pg" id="pg-process">
+  <div class="g2">
+    <div>
+      <div class="card">
+        <div class="ch"><div class="ch-left"><div class="cicon">⚙️</div>Analyze a new agenda</div></div>
+        <div class="cb">
+          <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
+            padding:.55rem .8rem;margin-bottom:.85rem;font-size:.76rem;color:#1e3a8a;line-height:1.5">
+            Pick a meeting date and which committees to include. The tool will pull each agenda item, summarize it, flag watchpoints, and save everything to the Meetings list.
+          </div>
+          <label>Date Mode</label>
+          <div class="toggle">
+            <button id="tm-single" class="on" onclick="setMode('single')">Single Date</button>
+            <button id="tm-range" onclick="setMode('range')">From Date Onward</button>
+          </div>
+          <div id="inp-single"><label>Meeting Date (M/D/YYYY)</label>
+            <input type="text" id="d-single" placeholder="4/15/2026"></div>
+          <div id="inp-range" style="display:none"><label>From Date Onward</label>
+            <input type="text" id="d-from" placeholder="4/1/2026"></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
+            <label style="margin:0">Committees</label>
+            <button class="btn btn-o btn-xs" onclick="toggleAll()">All / None</button>
+          </div>
+          <div class="cmteg" id="cmteg"></div>
+          <button class="btn btn-p full" id="run-btn" onclick="runAgent()"
+            title="Downloads the agenda, summarizes each item, flags watchpoints, and saves to Meetings">
+            ▶  Analyze agenda
+          </button>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="ch"><div class="ch-left"><div class="cicon">📊</div>Progress</div></div>
+        <div class="cb">
+          <div class="srow"><div class="sdot" id="sdot"></div>
+            <span id="stxt" style="font-size:.85rem;font-weight:500;color:var(--gray-600)">Waiting…</span></div>
+          <div class="pw"><div class="pb" id="pb"></div></div>
+          <div class="logbox" id="logbox"></div>
+        </div>
+      </div>
+      <div class="card" id="result-card" style="display:none">
+        <div class="ch"><div class="ch-left"><div class="cicon">📁</div>Output Files</div>
+          <button class="btn btn-o btn-sm" onclick="showPg('workflow')">View in Workflow →</button>
+        </div>
+        <div class="cb" id="result-body"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ SEARCH ═══════════════════════════ -->
+<div class="pg" id="pg-search">
+  <div class="card" style="margin-bottom:1.1rem">
+    <div class="cb" style="display:flex;gap:.65rem;align-items:flex-end;flex-wrap:wrap;padding:.85rem 1.1rem">
+      <div style="flex:0 0 140px"><label>File Number</label>
+        <input type="text" id="sf" placeholder="251862" style="margin:0" onkeydown="if(event.key==='Enter')doSearch()"></div>
+      <div style="flex:2;min-width:180px"><label>Keyword</label>
+        <input type="text" id="sk" placeholder="Fisher Island, contract, zoning…" style="margin:0" onkeydown="if(event.key==='Enter')doSearch()"></div>
+      <div style="flex:1;min-width:130px"><label>Sponsor</label>
+        <input type="text" id="ss" placeholder="Diaz" style="margin:0" onkeydown="if(event.key==='Enter')doSearch()"></div>
+      <button class="btn btn-p" onclick="doSearch()">Search</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="ch"><div class="ch-left"><div class="cicon">🔍</div>Results</div>
+      <span id="srch-count" style="font-size:.75rem;color:var(--gray-400)"></span></div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>File #</th><th>Date</th><th>Body</th><th>Title</th><th>Type</th><th>Status</th><th>Workflow</th><th>Assigned</th><th></th></tr></thead>
+      <tbody id="srch-tbody">
+        <tr><td colspan="9">
+          <div class="empty-state">
+            <div class="ei">🔎</div>
+            <div class="et">Search legislative items</div>
+            <div class="ed">Find any matter by file number (e.g. <code>251862</code>), keyword (e.g. <code>Fisher Island</code>), or sponsor name. Results show everywhere the item has appeared.</div>
+          </div>
+        </td></tr>
+      </tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ WORKFLOW ═══════════════════════════ -->
+<div class="pg" id="pg-workflow">
+  <div class="wf-filters">
+    <div><label style="margin-bottom:.2rem">Status</label>
+      <select id="wf-f-status" onchange="loadWorkflow()" style="margin:0"><option value="">All</option></select></div>
+    <div><label style="margin-bottom:.2rem">Assigned To</label>
+      <select id="wf-f-assigned" onchange="loadWorkflow()" style="margin:0"><option value="">Anyone</option><option value="me">My Items</option></select></div>
+    <div><label style="margin-bottom:.2rem">Due Date</label>
+      <select id="wf-f-due" onchange="loadWorkflow()" style="margin:0">
+        <option value="">Any</option>
+        <option value="overdue">Overdue</option>
+        <option value="7">Due in 7 days</option>
+        <option value="30">Due in 30 days</option>
+      </select></div>
+    <div style="margin-left:auto;display:flex;gap:.4rem;align-items:flex-end">
+      <button class="btn btn-o btn-sm" onclick="bulkAssign()">Bulk Assign</button>
+      <button class="btn btn-o btn-sm" onclick="bulkStatus()">Bulk Status</button>
+      <button class="btn btn-o btn-sm" onclick="bulkDueDate()">Bulk Due Date</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="ch">
+      <div class="ch-left"><div class="cicon">📋</div>Appearances</div>
+      <span id="wf-count" style="font-size:.75rem;color:var(--gray-400)"></span>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" id="sel-all" onchange="selAll(this)"></th>
+          <th>App#</th><th>File #</th><th>Title</th><th>Item #</th><th>Stage</th>
+          <th>Status</th><th>Assigned To</th><th>Due Date</th><th>Priority</th><th></th>
+        </tr></thead>
+        <tbody id="wf-tbody">
+          <tr><td colspan="11" style="padding:1.25rem;color:var(--gray-400)">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ SETTINGS ═══════════════════════════ -->
+<div class="pg" id="pg-settings">
+  <div class="g2">
+    <div>
+      <div class="card" style="margin-bottom:1rem">
+        <div class="ch"><div class="ch-left"><div class="cicon">🙋</div>Who am I?</div></div>
+        <div class="cb">
+          <p style="font-size:.78rem;color:var(--gray-600);margin-bottom:.75rem;">
+            Pick your name below so the <b>My Items</b> filter and the <b>Me (you)</b> option in assignment dropdowns know who you are. Stored locally on this browser.</p>
+          <select id="settings-user-sel" onchange="setCurrentUser(this.value)" style="margin:0;max-width:320px">
+            <option value="">— not set —</option>
+          </select>
+          <div id="settings-user-current" style="margin-top:.55rem;font-size:.78rem;color:var(--gray-600)"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="ch"><div class="ch-left"><div class="cicon">👥</div>Team Members</div></div>
+        <div class="cb">
+          <p style="font-size:.78rem;color:var(--gray-600);margin-bottom:.85rem;">
+            Add team members so they appear in assignment dropdowns.</p>
+          <div id="team-list"></div>
+          <div style="display:flex;gap:.5rem;margin-top:.5rem">
+            <input type="text" id="new-member-name" placeholder="Name" style="margin:0;flex:1">
+            <input type="email" id="new-member-email" placeholder="Email" style="margin:0;flex:2">
+            <button class="btn btn-s btn-sm" onclick="addTeamMember()">Add</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="ch"><div class="ch-left"><div class="cicon">📧</div>Email Notifications</div></div>
+        <div class="cb">
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.85rem;">
+            <label style="margin:0;font-size:.82rem;font-weight:500">Enable email alerts</label>
+            <input type="checkbox" id="email-enabled" style="width:auto;margin:0;accent-color:var(--blue)">
+          </div>
+          <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:.65rem .9rem;margin-bottom:.75rem;font-size:.78rem;color:#1e40af;line-height:1.5;">
+            <strong>Gmail setup:</strong> Host <code>smtp.gmail.com</code> · Port <code>587</code><br>
+            You must use an <strong>App Password</strong> — not your regular Gmail password.
+            Go to <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:#1d4ed8;">myaccount.google.com/apppasswords</a>,
+            create one named "AgendaIQ", and paste the 16-character code below.
+            (Requires 2-Step Verification to be on in your Google account.)
+          </div>
+          <label>SMTP Host</label><input type="text" id="smtp-host" placeholder="smtp.gmail.com">
+          <label>SMTP Port</label><input type="text" id="smtp-port" placeholder="587">
+          <label>Sender Gmail Address</label><input type="email" id="smtp-user" placeholder="you@gmail.com">
+          <label>Gmail App Password (16 characters)</label><input type="password" id="smtp-pass" placeholder="••••••••••••••••">
+          <label>Team Lead Recipients (comma-separated) — receives overdue summaries</label>
+          <input type="text" id="smtp-recip" placeholder="colleague@gmail.com, manager@gmail.com">
+          <label>Reminder days before due date</label>
+          <input type="text" id="reminder-days" placeholder="7">
+          <div style="display:flex;gap:.5rem">
+            <button class="btn btn-p btn-sm" onclick="saveSettings()">Save Settings</button>
+            <button class="btn btn-o btn-sm" onclick="testEmail()">Send Test Email</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ SAVED MEETINGS ═══════════════════════════ -->
+<div class="pg" id="pg-meetings">
+  <!-- Backfill nudge banner: shown only when the probe says we're missing data. -->
+  <div id="bf-nudge" style="display:none;background:linear-gradient(135deg,#fef3c7 0%,#fde68a 100%);
+       border:1px solid #fbbf24;border-radius:12px;padding:.9rem 1.1rem;margin-bottom:1rem;
+       display:none;align-items:center;gap:.85rem;box-shadow:0 1px 3px rgba(0,0,0,.06)">
+    <div style="font-size:1.4rem">⚠️</div>
+    <div style="flex:1;font-size:.82rem;color:#78350f;line-height:1.5">
+      <strong id="bf-nudge-title">Some items are missing Legistar links.</strong>
+      <div id="bf-nudge-body" style="margin-top:.15rem;opacity:.9"></div>
+    </div>
+    <button class="btn btn-p btn-sm" id="bf-nudge-btn" onclick="runBackfill(true)">
+      ⟳ Fix now
+    </button>
+  </div>
+
+  <!-- Live backfill progress panel: hidden until a backfill starts. -->
+  <div id="bf-progress" style="display:none;background:#fff;border:1px solid var(--border);
+       border-radius:12px;padding:.9rem 1.1rem;margin-bottom:1rem;box-shadow:var(--shadow)">
+    <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
+      <div style="font-size:1rem">⏳</div>
+      <div style="flex:1;font-weight:600;font-size:.9rem;color:var(--ink)">Backfill in progress</div>
+      <div id="bf-progress-text" style="font-size:.78rem;color:var(--gray-600)"></div>
+    </div>
+    <div style="height:8px;background:#eef1f5;border-radius:999px;overflow:hidden;margin-bottom:.55rem">
+      <div id="bf-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#003087,#0058a7);
+           transition:width .4s ease"></div>
+    </div>
+    <div id="bf-log" style="max-height:120px;overflow-y:auto;background:#fafbfc;border-radius:8px;padding:.4rem .6rem"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.1rem">
+    <div class="ch">
+      <div class="ch-left"><div class="cicon">🗂️</div>Saved Meeting Packages</div>
+      <span id="mtg-count" style="font-size:.75rem;color:var(--gray-400)"></span>
+      <div style="margin-left:auto;display:flex;gap:.5rem;align-items:center">
+        <span id="bf-msg" style="font-size:.72rem;color:#64748b"></span>
+        <button class="btn btn-o btn-sm" id="bf-btn" onclick="runBackfill(true)"
+          title="Re-hit Legistar for every matter with a missing Item PDF / Legistar link and rebuild lifecycle timelines from legislative history">
+          ⟳ Fill missing links + lifecycle
+        </button>
+        <button class="btn btn-o btn-sm" onclick="runBackfill(false)"
+          title="Re-process EVERY matter in the DB (slower)">
+          ⟳ Full refresh
+        </button>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Meeting</th><th>Date</th><th>Body</th>
+          <th>Items</th><th>Progress</th><th>Package Status</th>
+          <th>Exports</th><th></th>
+        </tr></thead>
+        <tbody id="mtg-tbody">
+          <tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ MEETING DETAIL ═══════════════════════════ -->
+<div class="pg" id="pg-meeting-detail">
+  <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.85rem">
+    <button class="btn btn-o btn-sm" onclick="showPg('meetings')">← Back to Saved Meetings</button>
+    <div id="md-title" style="font-size:1.1rem;font-weight:700;color:var(--gray-800);flex:1"></div>
+    <span id="md-status-badge"></span>
+  </div>
+
+  <div class="card" style="margin-bottom:1.1rem">
+    <div class="ch">
+      <div class="ch-left"><div class="cicon">📦</div>Meeting Package</div>
+      <div id="md-package-meta" style="font-size:.75rem;color:var(--gray-400)"></div>
+    </div>
+    <div class="cb" id="md-meta-body"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.1rem">
+    <div class="ch">
+      <div class="ch-left"><div class="cicon">⬇</div>Exports</div>
+      <div style="display:flex;gap:.4rem">
+        <button class="btn btn-o btn-sm" id="md-regen-btn" onclick="regenDraft()">↻ Regenerate Draft</button>
+        <button class="btn btn-s btn-sm" id="md-final-btn" onclick="genFinal()" disabled>✓ Generate Final Export</button>
+      </div>
+    </div>
+    <div class="cb" id="md-artifacts"></div>
+  </div>
+
+  <div class="card">
+    <div class="ch">
+      <div class="ch-left"><div class="cicon">📋</div>Items in this Meeting</div>
+      <span id="md-items-count" style="font-size:.75rem;color:var(--gray-400)"></span>
+    </div>
+    <div class="cb" style="padding:.7rem 1.1rem;background:var(--gray-50);border-bottom:1px solid var(--gray-200)">
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end">
+        <div style="flex:1;min-width:160px">
+          <label style="margin-bottom:.2rem">Search title / file #</label>
+          <input type="text" id="md-f-q" placeholder="zoning, 251862…" oninput="renderItemsGrid()" style="margin:0">
+        </div>
+        <div><label style="margin-bottom:.2rem">Leg Status</label>
+          <select id="md-f-legstatus" onchange="renderItemsGrid()" style="margin:0"><option value="">Any</option></select></div>
+        <div><label style="margin-bottom:.2rem">File Type</label>
+          <select id="md-f-filetype" onchange="renderItemsGrid()" style="margin:0"><option value="">Any</option></select></div>
+        <div><label style="margin-bottom:.2rem">Sponsor / Requester</label>
+          <select id="md-f-sponsor" onchange="renderItemsGrid()" style="margin:0"><option value="">Any</option></select></div>
+        <div><label style="margin-bottom:.2rem">Workflow</label>
+          <select id="md-f-wf" onchange="renderItemsGrid()" style="margin:0">
+            <option value="">Any</option>
+            <option>New</option><option>Assigned</option><option>In Progress</option>
+            <option>Draft Complete</option><option>In Review</option>
+            <option>Finalized</option><option>Archived</option>
+          </select></div>
+        <div><label style="margin-bottom:.2rem">Special</label>
+          <select id="md-f-special" onchange="renderItemsGrid()" style="margin:0">
+            <option value="">All items</option>
+            <option value="cf">Carried forward</option>
+            <option value="supp">Supplements only</option>
+            <option value="notes">Has prior notes</option>
+            <option value="unnotes">No researcher notes yet</option>
+          </select></div>
+        <button class="btn btn-o btn-xs" onclick="clearItemFilters()" style="margin-bottom:.75rem">Reset</button>
+      </div>
+    </div>
+    <div class="tbl-wrap">
+      <table style="min-width:1600px">
+        <thead><tr>
+          <th>File #</th>
+          <th title="Links: ↗ opens Legistar matter page, 📄 downloads the item PDF">Links</th>
+          <th>Cmte Date</th><th>Cmte #</th>
+          <th>BCC Date</th><th>BCC #</th>
+          <th>Title</th><th>Type</th><th>Leg Status</th>
+          <th>Sponsor / Requester</th><th>Control</th>
+          <th title="Where this item is in the committee→BCC lifecycle. Filled dot = current stage, outlined = past, dotted = not yet. Click a cell to see the full path.">Progress</th>
+          <th title="✓ if this matter has analyst/reviewer notes from a previous appearance">Prior Notes</th>
+          <th>History</th>
+          <th>Workflow</th><th>Assigned</th><th>Reviewer</th><th>Due</th>
+          <th>Notes</th><th></th>
+        </tr></thead>
+        <tbody id="md-items"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ MY ITEMS ═══════════════════════════ -->
+<div class="pg" id="pg-myitems">
+  <div class="card" style="margin-bottom:1rem">
+    <div class="cb" style="padding:.85rem 1.1rem;display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
+      <div>
+        <label style="margin-bottom:.2rem">Researcher</label>
+        <select id="mi-researcher" onchange="loadMyItems()" style="margin:0"></select>
+      </div>
+      <div>
+        <label style="margin-bottom:.2rem">Status</label>
+        <select id="mi-status" onchange="loadMyItems()" style="margin:0">
+          <option value="">Any</option>
+        </select>
+      </div>
+      <div>
+        <label style="margin-bottom:.2rem">Due</label>
+        <select id="mi-due" onchange="loadMyItems()" style="margin:0">
+          <option value="">Any</option>
+          <option value="overdue">Overdue</option>
+          <option value="7">Due in 7 days</option>
+          <option value="30">Due in 30 days</option>
+        </select>
+      </div>
+      <div style="margin-left:auto;font-size:.8rem;color:var(--gray-600)" id="mi-count"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="ch"><div class="ch-left"><div class="cicon">👤</div>Assigned Items</div></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>File #</th><th>Title</th><th>Meeting</th><th>Body</th>
+          <th>Status</th><th>Notes</th><th>Due Date</th><th></th>
+        </tr></thead>
+        <tbody id="mi-tbody">
+          <tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">Select a researcher to view their items.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════ MATTER DETAIL DRAWER ═══════════════════════════ -->
+<div id="drawer-bg" onclick="closeDrawer()"></div>
+<div id="drawer">
+  <button class="dr-close" onclick="closeDrawer()">✕</button>
+  <div class="dr-header">
+    <div class="dr-title" id="dr-title">Loading…</div>
+    <div class="dr-meta" id="dr-meta"></div>
+  </div>
+  <div class="dr-tabs">
+    <button class="dtab on" onclick="drTab('summary',this)" title="Part 1 Deliverable: Debrief + Watchpoints + Leg History + Research Notes">Part 1 · Debrief</button>
+    <button class="dtab" onclick="drTab('notes',this)">Notes</button>
+    <button class="dtab" onclick="drTab('deep',this)" title="Reference only — not exported">Deep Research</button>
+    <button class="dtab" onclick="drTab('history',this)">History</button>
+    <button class="dtab" onclick="drTab('appearances',this)">Appearances</button>
+    <button class="dtab" onclick="drTab('lifecycle',this)">Lifecycle</button>
+  </div>
+  <div class="dr-body" id="dr-body">
+    <div style="color:var(--gray-400);font-size:.85rem">Loading…</div>
+  </div>
+  <div style="padding:.85rem 1.1rem;border-top:1px solid var(--gray-200);
+    display:flex;gap:.5rem;align-items:center;flex-shrink:0;background:#fff">
+    <button class="btn btn-p btn-sm" onclick="exportAndDownload()" id="dr-export-btn">
+      ↓ Export Files
+    </button>
+    <button class="btn btn-s btn-sm" onclick="saveSummaryEdits()" id="dr-save-btn" style="display:none">
+      Save Edits
+    </button>
+    <span id="dr-save-msg" style="font-size:.75rem;color:var(--green);display:none">✓ Saved</span>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════
+// State
+// ════════════════════════════════════════════════════════════
+let mode='single', allCmtes=[], jobId=null, evtSrc=null;
+let currentUser = localStorage.getItem('oca_user') || '';
+let currentAppId = null;  // appearance currently open in drawer
+let currentFileNum = null;
+
+// ════════════════════════════════════════════════════════════
+// Init
+// ════════════════════════════════════════════════════════════
+(async () => {
+  await loadConfig();
+  await Promise.all([
+    loadCmtes(),
+    populateStatusFilters(),
+    loadDashboard(),
+  ]);
+  loadWorkflow();
+})();
+
+// ════════════════════════════════════════════════════════════
+// Navigation
+// ════════════════════════════════════════════════════════════
+function showHelp() {
+  const m = document.getElementById('help-modal');
+  if (m) m.style.display = 'flex';
+}
+function switchHelpTab(tab, el) {
+  document.querySelectorAll('#help-modal .htab').forEach(b=>b.classList.remove('on'));
+  document.querySelectorAll('#help-modal .hpane').forEach(p=>{
+    p.classList.remove('on');
+    p.style.display='none';
+  });
+  if (el) el.classList.add('on');
+  const pane = document.getElementById('hpane-'+tab);
+  if (pane) { pane.classList.add('on'); pane.style.display='block'; }
+}
+function hideHelp(e) {
+  if (e && e.target && e.target.id && e.target.id !== 'help-modal' && !e.target.matches('.btn')) {
+    // only close on backdrop click or explicit button
+    if (e.target.id !== 'help-modal') return;
+  }
+  const m = document.getElementById('help-modal');
+  if (m) m.style.display = 'none';
+}
+function dismissWelcome() {
+  const el = document.getElementById('welcome-strip');
+  if (el) el.style.display = 'none';
+  try { localStorage.setItem('oca_welcome_hidden','1'); } catch(_){}
+}
+// On first load, respect stored dismissal
+try {
+  if (localStorage.getItem('oca_welcome_hidden')==='1') {
+    document.addEventListener('DOMContentLoaded',()=>{
+      const el=document.getElementById('welcome-strip'); if(el) el.style.display='none';
+    });
+  }
+} catch(_){}
+
+function showPg(name) {
+  document.querySelectorAll('.pg').forEach(p => p.classList.remove('on'));
+  document.querySelectorAll('.nb').forEach(b => b.classList.remove('on'));
+  document.getElementById('pg-'+name).classList.add('on');
+  const nb = document.getElementById('nb-'+name);
+  if (nb) nb.classList.add('on');
+  if (name==='dashboard') loadDashboard();
+  if (name==='workflow')  loadWorkflow();
+  if (name==='settings')  loadSettings();
+  if (name==='meetings')  loadSavedMeetings();
+  if (name==='myitems')   { initMyItemsFilters(); loadMyItems(); }
+}
+
+// ════════════════════════════════════════════════════════════
+// Dashboard
+// ════════════════════════════════════════════════════════════
+async function loadDashboard() {
+  const r = await fetch('/api/stats');
+  const d = await r.json();
+
+  document.getElementById('s-matters').textContent = d.total_matters;
+  document.getElementById('s-apps').textContent    = d.total_appearances;
+  document.getElementById('s-mtgs').textContent    = d.total_meetings;
+  const open = Object.entries(d.by_status)
+    .filter(([s])=>!['Finalized','Archived'].includes(s))
+    .reduce((a,[,v])=>a+v,0);
+  document.getElementById('s-open').textContent = open;
+
+  // Alert banners
+  const bars = document.getElementById('alert-bars');
+  bars.innerHTML = '';
+  if (d.overdue_count > 0) {
+    bars.innerHTML += `<div class="alert-bar ab-red" onclick="filterWorkflow('overdue')">
+      <span class="icon">🔴</span>
+      <span class="txt"><strong>${d.overdue_count} item${d.overdue_count>1?'s':''} OVERDUE</strong> — past due date, not yet finalized</span>
+      <span class="count">View →</span>
+    </div>`;
+    const ob = document.getElementById('overdue-badge');
+    ob.textContent = d.overdue_count; ob.style.display='';
+  }
+  if (d.due_soon_count > 0) {
+    bars.innerHTML += `<div class="alert-bar ab-orange" onclick="filterWorkflow('7')">
+      <span class="icon">🟡</span>
+      <span class="txt"><strong>${d.due_soon_count} item${d.due_soon_count>1?'s':''} due within 7 days</strong></span>
+      <span class="count">View →</span>
+    </div>`;
+  }
+  if (d.unassigned_count > 0) {
+    bars.innerHTML += `<div class="alert-bar ab-gray" onclick="filterWorkflow('unassigned')">
+      <span class="icon">⚪</span>
+      <span class="txt"><strong>${d.unassigned_count} new item${d.unassigned_count>1?'s':''} unassigned</strong></span>
+      <span class="count">Assign →</span>
+    </div>`;
+  }
+
+  // Status breakdown
+  document.getElementById('dash-status').innerHTML = Object.entries(d.by_status)
+    .map(([s,c]) => `<div style="display:flex;justify-content:space-between;align-items:center;
+      padding:.32rem 0;border-bottom:1px solid var(--gray-100)">
+      <span>${badge(s)} ${s}</span><strong>${c}</strong></div>`).join('') ||
+    '<p style="color:var(--gray-400);font-size:.82rem">No data yet.</p>';
+
+  // Recent
+  document.getElementById('dash-recent').innerHTML = d.recent.map(r =>
+    `<tr class="clickable" onclick="openDrawer('${r.file_number}',${r.appearance_id})">
+      <td><span class="file-link">${r.file_number}</span></td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.short_title||'')}</td>
+      <td style="white-space:nowrap">${r.meeting_date||''}</td>
+      <td style="font-size:.73rem">${esc(r.body_name||'')}</td>
+      <td>${badge(r.workflow_status)}</td>
+      <td style="font-size:.75rem">${esc(r.assigned_to||'—')}</td>
+    </tr>`).join('') ||
+    '<tr><td colspan="6" style="padding:1.25rem;color:var(--gray-400)">No data yet. Run a process job to populate.</td></tr>';
+}
+
+function filterWorkflow(filter) {
+  document.getElementById('wf-f-due').value = filter==='unassigned' ? '' : filter;
+  document.getElementById('wf-f-assigned').value = filter==='unassigned' ? 'unassigned' : '';
+  showPg('workflow');
+}
+
+// ════════════════════════════════════════════════════════════
+// Process
+// ════════════════════════════════════════════════════════════
+async function loadCmtes() {
+  try {
+    const r = await fetch('/api/committees');
+    allCmtes = await r.json();
+    const g = document.getElementById('cmteg');
+    g.innerHTML = allCmtes.map(c =>
+      `<label class="ci"><input type="checkbox" value="${esc(c)}" checked>
+       <span>${esc(c)}</span></label>`).join('');
+  } catch(e) {
+    document.getElementById('cmteg').innerHTML = '<span style="color:var(--red);font-size:.78rem">Could not load.</span>';
+  }
+}
+
+function setMode(m) {
+  mode=m;
+  document.getElementById('tm-single').classList.toggle('on',m==='single');
+  document.getElementById('tm-range').classList.toggle('on',m==='range');
+  document.getElementById('inp-single').style.display=m==='single'?'':'none';
+  document.getElementById('inp-range').style.display=m==='range'?'':'none';
+}
+
+function toggleAll() {
+  const cbs=[...document.querySelectorAll('#cmteg input')];
+  const any=cbs.some(c=>c.checked);
+  cbs.forEach(c=>c.checked=!any);
+}
+
+function selCmtes() {
+  return [...document.querySelectorAll('#cmteg input:checked')].map(c=>c.value);
+}
+
+async function runAgent() {
+  const dv=document.getElementById('d-single').value.trim();
+  const fv=document.getElementById('d-from').value.trim();
+  const val=mode==='single'?dv:fv;
+  if(!val){alert('Enter a date.');return;}
+  const btn=document.getElementById('run-btn');
+  btn.disabled=true; btn.textContent='Running…';
+  clearLog(); setSt('run','Starting…'); setPb(true);
+  document.getElementById('result-card').style.display='none';
+  const body={committees:selCmtes(),...(mode==='single'?{date:dv}:{from_date:fv})};
+  const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const {job_id}=await r.json();
+  jobId=job_id; listenJob(job_id);
+}
+
+function listenJob(id) {
+  if(evtSrc)evtSrc.close();
+  evtSrc=new EventSource(`/api/stream/${id}`);
+  let n=0;
+  evtSrc.onmessage=e=>{
+    const msg=JSON.parse(e.data);
+    if(msg.type==='ping')return;
+    if(msg.type==='progress'){
+      addLog(msg.message);n++;
+      document.getElementById('pb').style.width=Math.min(90,n*4)+'%';
+      setSt('run',msg.message);
+    }
+    if(msg.type==='complete'){
+      evtSrc.close(); setPb(false);
+      document.getElementById('pb').style.width='100%';
+      setSt('ok',`Done — ${msg.results.total_new_items} new item(s), ${msg.results.total_files} files`);
+      addLog(`✓ Complete: ${msg.results.total_new_items} new items`,'ok');
+      renderResultFiles(id,msg.files);
+      resetBtn(); loadDashboard(); loadWorkflow();
+    }
+    if(msg.type==='error'){
+      evtSrc.close(); setPb(false);
+      setSt('err','Error: '+msg.message); addLog('ERROR: '+msg.message,'err'); resetBtn();
+    }
+  };
+}
+
+function renderResultFiles(jid,files) {
+  const card=document.getElementById('result-card');
+  const body=document.getElementById('result-body');
+  body.innerHTML=(files&&files.length)?files.map(f=>{
+    const ext=f.split('.').pop().toLowerCase();
+    return `<div class="fi">
+      <div class="fi-info">
+        <div class="ficon ${ext}">${ext.toUpperCase()}</div>
+        <div><div style="font-size:.8rem;font-weight:500">${esc(f)}</div>
+          <div style="font-size:.7rem;color:var(--gray-400)">${ext==='xlsx'?'Excel Tracking':'Part 1 — Agenda Debrief (deliverable)'}</div>
+        </div>
+      </div>
+      <a class="dlbtn" href="/api/download/${jid}/${encodeURIComponent(f)}">↓ Download</a>
+    </div>`;}).join('')
+    :'<p style="color:var(--gray-400);font-size:.82rem">No new files — all items may already be processed.</p>';
+  card.style.display='';
+}
+
+function clearLog(){document.getElementById('logbox').innerHTML='';}
+function addLog(msg,cls=''){
+  const b=document.getElementById('logbox');
+  const ts=new Date().toTimeString().slice(0,8);
+  const d=document.createElement('div'); d.className='ll '+(cls||'');
+  d.innerHTML=`<span class="ts">${ts}</span><span class="msg">${esc(msg)}</span>`;
+  b.appendChild(d); b.scrollTop=b.scrollHeight;
+}
+function setSt(state,text){
+  document.getElementById('sdot').className='sdot '+state;
+  document.getElementById('stxt').textContent=text;
+}
+function setPb(spin){
+  const b=document.getElementById('pb');
+  b.classList.toggle('spin',spin);
+  if(spin)b.style.width='';
+}
+function resetBtn(){
+  const btn=document.getElementById('run-btn');
+  btn.disabled=false; btn.textContent='▶  Run Analysis';
+}
+
+// ════════════════════════════════════════════════════════════
+// Search
+// ════════════════════════════════════════════════════════════
+async function doSearch() {
+  const f=document.getElementById('sf').value.trim();
+  const k=document.getElementById('sk').value.trim();
+  const s=document.getElementById('ss').value.trim();
+  let url='/api/search?';
+  if(f) url+=`file=${encodeURIComponent(f)}`;
+  else if(k) url+=`keyword=${encodeURIComponent(k)}`;
+  else if(s) url+=`sponsor=${encodeURIComponent(s)}`;
+  else return;
+  const r=await fetch(url); const d=await r.json();
+  const tb=document.getElementById('srch-tbody');
+  const cnt=document.getElementById('srch-count');
+
+  const rows = d.type==='matter' ? (d.data ? d.data.appearances||[] : []) : (d.data||[]);
+  cnt.textContent=`${rows.length} result(s)`;
+
+  if(!rows.length){
+    tb.innerHTML='<tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">No results.</td></tr>';
+    return;
+  }
+  tb.innerHTML=rows.map(r=>{
+    const fn=r.file_number||r.matter_file||r.file_number||'';
+    const title=r.short_title||r.appearance_title||'';
+    return `<tr class="clickable" onclick="openDrawer('${esc(fn)}',${r.id||r.appearance_id||0})">
+      <td><span class="file-link">${fn}</span></td>
+      <td style="white-space:nowrap">${r.meeting_date||''}</td>
+      <td style="font-size:.73rem">${esc(r.body_name||'')}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</td>
+      <td style="font-size:.73rem">${esc(r.file_type||r.current_status||'')}</td>
+      <td style="font-size:.73rem">${esc(r.current_status||'')}</td>
+      <td>${badge(r.workflow_status||'')}</td>
+      <td style="font-size:.73rem">${esc(r.assigned_to||'—')}</td>
+      <td><button class="btn btn-o btn-xs" onclick="event.stopPropagation();openDrawer('${esc(fn)}',${r.id||r.appearance_id||0})">Open</button></td>
+    </tr>`;}).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+// Workflow
+// ════════════════════════════════════════════════════════════
+async function populateStatusFilters() {
+  const stats=['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived'];
+  const wfs=document.getElementById('wf-f-status');
+  stats.forEach(s=>wfs.add(new Option(s,s)));
+}
+
+async function loadWorkflow() {
+  const status=document.getElementById('wf-f-status').value;
+  const assigned=document.getElementById('wf-f-assigned').value;
+  const due=document.getElementById('wf-f-due').value;
+  // Guard: user picked "My Items" but never set their name
+  if(assigned==='me' && !currentUser){
+    alert('To use "My Items", first pick your name from the "Acting as…" dropdown in the top-right header (or on the Settings page). Then "My Items" will filter to just your items.');
+    document.getElementById('wf-f-assigned').value='';
+    // Highlight the header picker so they can find it
+    const hdrSel=document.getElementById('current-user-sel');
+    if(hdrSel){ hdrSel.focus(); hdrSel.style.outline='3px solid #fbbf24'; setTimeout(()=>hdrSel.style.outline='',2500); }
+    return;
+  }
+  let url='/api/workflow?';
+  if(status) url+=`status=${encodeURIComponent(status)}&`;
+  if(assigned==='me'&&currentUser) url+=`assigned=${encodeURIComponent(currentUser)}&`;
+  else if(assigned==='unassigned') url+=`assigned=__unassigned__&`;
+  else if(assigned && assigned!=='me') url+=`assigned=${encodeURIComponent(assigned)}&`;
+  if(due) url+=`due=${encodeURIComponent(due)}&`;
+  const r=await fetch(url); const d=await r.json();
+  document.getElementById('wf-count').textContent=`${d.length} item(s)`;
+  const tb=document.getElementById('wf-tbody');
+  if(!d.length){
+    tb.innerHTML='<tr><td colspan="11">'+emptyState(
+      '🔍','No items match these filters',
+      'Try loosening Status / Assignee / Due filters, or switch to <b>Saved Meetings</b> to browse by agenda.'
+    )+'</td></tr>';
+    return;
+  }
+
+  // Group by meeting (body_name + meeting_date), newest meeting first
+  const groups={};
+  d.forEach(a=>{
+    const key=`${a.meeting_date||'0000-00-00'}||${a.body_name||''}`;
+    (groups[key]=groups[key]||[]).push(a);
+  });
+  const keys=Object.keys(groups).sort((x,y)=>y.localeCompare(x));
+
+  const mkRow = a => {
+    const due_cls=a._due_class||'due-none';
+    const due_lbl=a._due_label||a.due_date||'—';
+    return `<tr class="clickable" onclick="openDrawer('${esc(a.file_number)}',${a.id})">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="row-sel" value="${a.id}"></td>
+      <td style="font-size:.75rem;color:var(--gray-400)">${a.id}</td>
+      <td><span class="file-link">${a.file_number}</span></td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.short_title||'')}</td>
+      <td style="font-size:.72rem">${esc(a.committee_item_number||a.bcc_item_number||a.raw_agenda_item_number||'')}</td>
+      <td style="font-size:.72rem">${esc(a.agenda_stage||'')}</td>
+      <td onclick="event.stopPropagation()">
+        <select class="inline-status" onchange="quickStatus(${a.id},this.value)">
+          ${['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived']
+            .map(s=>`<option${s===a.workflow_status?' selected':''}>${s}</option>`).join('')}
+        </select>
+      </td>
+      <td style="font-size:.75rem">${esc(a.assigned_to||'—')}</td>
+      <td class="due-cell ${due_cls}">${due_lbl}</td>
+      <td style="font-size:.73rem">${esc(a.priority||'')}</td>
+      <td onclick="event.stopPropagation()">
+        <button class="btn btn-o btn-xs" onclick="openDrawer('${esc(a.file_number)}',${a.id})">Open</button>
+      </td>
+    </tr>`;
+  };
+
+  tb.innerHTML=keys.map(k=>{
+    const [dt,body]=k.split('||');
+    const rows=groups[k];
+    const mid=rows[0].meeting_id;
+    const finalized=rows.filter(r=>r.workflow_status==='Finalized'||r.workflow_status==='Archived').length;
+    const total=rows.length;
+    const pct=total?Math.round(100*finalized/total):0;
+    const gid=`wf-grp-${mid||(dt+body).replace(/\\W/g,'')}`;
+    const header=`<tr class="wf-group-hdr" style="background:linear-gradient(90deg,#eef2ff,#f8fafc);cursor:pointer" onclick="document.querySelectorAll('.${gid}').forEach(el=>el.style.display=el.style.display==='none'?'':'none')">
+      <td colspan="11" style="padding:.55rem .75rem;font-weight:600;color:#1e3a8a;border-top:2px solid #6366f1">
+        <span style="display:inline-block;min-width:7ch;color:#475569">${esc(dt||'—')}</span>
+        <span style="margin:0 .5rem">·</span>
+        <span>${esc(body||'')}</span>
+        <span style="margin-left:.75rem;font-weight:400;color:#64748b;font-size:.8rem">${total} item(s) · ${finalized}/${total} finalized (${pct}%)</span>
+        ${mid?`<button class="btn btn-o btn-xs" style="float:right" onclick="event.stopPropagation();openMeeting(${mid})">Open meeting →</button>`:''}
+      </td></tr>`;
+    const body_rows=rows.map(a=>{
+      const h=mkRow(a);
+      // inject group class for toggling
+      return h.replace('<tr class="clickable"', `<tr class="clickable ${gid}"`);
+    }).join('');
+    return header+body_rows;
+  }).join('');
+}
+
+async function quickStatus(appId, status) {
+  await fetch(`/api/appearance/${appId}/workflow`,{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({status, changed_by:currentUser})
+  });
+  loadDashboard();
+}
+
+function selAll(cb) {
+  document.querySelectorAll('.row-sel').forEach(c=>c.checked=cb.checked);
+}
+
+function getSelected() {
+  return [...document.querySelectorAll('.row-sel:checked')].map(c=>parseInt(c.value));
+}
+
+function showBulkModal(title, content, onConfirm) {
+  let overlay=document.getElementById('bulk-modal-overlay');
+  if(!overlay){
+    overlay=document.createElement('div');
+    overlay.id='bulk-modal-overlay';
+    overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;display:flex;align-items:center;justify-content:center;';
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML=`
+    <div style="background:#fff;border-radius:12px;padding:1.5rem;min-width:320px;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.25);">
+      <h3 style="margin:0 0 1rem;font-size:1rem;color:#1e293b;">${title}</h3>
+      ${content}
+      <div style="display:flex;gap:.6rem;margin-top:1.2rem;justify-content:flex-end;">
+        <button class="btn btn-o btn-sm" onclick="document.getElementById('bulk-modal-overlay').style.display='none'">Cancel</button>
+        <button class="btn btn-p btn-sm" id="bulk-confirm-btn">Apply</button>
+      </div>
+    </div>`;
+  overlay.style.display='flex';
+  document.getElementById('bulk-confirm-btn').onclick=()=>{
+    overlay.style.display='none';
+    onConfirm();
+  };
+}
+
+async function bulkAssign() {
+  const ids=getSelected();
+  if(!ids.length){alert('Select items first.');return;}
+  const members=(_cfg.team_members||[]).map(m=>m.name);
+  if(!members.length){alert('No team members configured. Add team members in Settings first.');return;}
+  const opts=members.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  showBulkModal(
+    `Assign ${ids.length} item(s) to…`,
+    `<select id="bulk-assign-sel" style="width:100%;margin:0;">${opts}</select>`,
+    async ()=>{
+      const person=document.getElementById('bulk-assign-sel')?.value;
+      if(!person)return;
+      await Promise.all(ids.map(id=>
+        fetch(`/api/appearance/${id}/workflow`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({assigned_to:person,changed_by:currentUser})})
+      ));
+      loadWorkflow(); loadDashboard();
+    }
+  );
+}
+
+async function bulkStatus() {
+  const ids=getSelected();
+  if(!ids.length){alert('Select items first.');return;}
+  const statuses=['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived'];
+  const opts=statuses.map(s=>`<option value="${s}">${s}</option>`).join('');
+  showBulkModal(
+    `Change status for ${ids.length} item(s)`,
+    `<select id="bulk-status-sel" style="width:100%;margin:0;">${opts}</select>`,
+    async ()=>{
+      const status=document.getElementById('bulk-status-sel')?.value;
+      if(!status)return;
+      await Promise.all(ids.map(id=>
+        fetch(`/api/appearance/${id}/workflow`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({status,changed_by:currentUser})})
+      ));
+      loadWorkflow(); loadDashboard();
+    }
+  );
+}
+
+async function bulkDueDate() {
+  const ids=getSelected();
+  if(!ids.length){alert('Select items first.');return;}
+  // Default = 7 days out (same convention as the workflow reminders)
+  const d=new Date(); d.setDate(d.getDate()+7);
+  const iso=d.toISOString().slice(0,10);
+  showBulkModal(
+    `Set due date for ${ids.length} item(s)`,
+    `<label style="font-size:.78rem;color:var(--gray-600);display:block;margin-bottom:.35rem">Due date</label>
+     <input type="date" id="bulk-due-inp" value="${iso}" style="width:100%;margin:0;">
+     <div style="margin-top:.6rem;font-size:.72rem;color:var(--gray-500)">Leave blank and click Apply to <b>clear</b> the due date on selected items.</div>`,
+    async ()=>{
+      const due=document.getElementById('bulk-due-inp')?.value||'';
+      await Promise.all(ids.map(id=>
+        fetch(`/api/appearance/${id}/workflow`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({due_date:due,changed_by:currentUser})})
+      ));
+      loadWorkflow(); loadDashboard();
+    }
+  );
+}
+
+// ════════════════════════════════════════════════════════════
+// Matter Detail Drawer
+// ════════════════════════════════════════════════════════════
+let _drData = null;
+
+async function openDrawer(fileNum, appId) {
+  currentFileNum=fileNum; currentAppId=appId||null;
+  document.getElementById('drawer-bg').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('dr-body').innerHTML='<div style="color:var(--gray-400);padding:1rem;font-size:.85rem">Loading…</div>';
+  document.getElementById('dr-title').textContent='Loading…';
+  document.getElementById('dr-meta').innerHTML='';
+
+  // Load matter + appearance
+  const [mr, ar] = await Promise.all([
+    fetch(`/api/search?file=${encodeURIComponent(fileNum)}`).then(r=>r.json()),
+    appId ? fetch(`/api/appearance/${appId}`).then(r=>r.json()) : Promise.resolve(null),
+  ]);
+
+  const matter = mr.data || {};
+  const appData = ar ? ar.appearance : (matter.appearances && matter.appearances[0]);
+  const meetingInfo = ar ? {meeting_date: ar.appearance?.meeting_date, body_name: ar.appearance?.body_name} : {};
+
+  _drData = {matter, appData, meetingInfo};
+
+  document.getElementById('dr-title').textContent =
+    `File# ${matter.file_number||fileNum} — ${matter.short_title||''}`;
+  const priorCount = (matter.appearances||[]).filter(a => a.id !== currentAppId).length;
+  document.getElementById('dr-meta').innerHTML = [
+    matter.file_type && `<span>Type: ${esc(matter.file_type)}</span>`,
+    matter.current_status && `<span><strong>Leg Status:</strong> ${esc(matter.current_status)}</span>`,
+    matter.sponsor   && `<span>Requester: ${esc(matter.sponsor)}</span>`,
+    matter.control_body && `<span>Control: ${esc(matter.control_body)}</span>`,
+    meetingInfo.meeting_date && `<span>Meeting: ${meetingInfo.meeting_date}</span>`,
+    meetingInfo.body_name && `<span>${esc(meetingInfo.body_name)}</span>`,
+    appData?.agenda_stage && `<span>Stage: ${esc(appData.agenda_stage)}</span>`,
+    priorCount > 0 ? `<span style="color:#fef3c7;background:rgba(146,64,14,.55);padding:.1rem .5rem;border-radius:10px">↔ ${priorCount} prior appearance${priorCount>1?'s':''}</span>` : '',
+    appData?.carried_forward_from_prior ? '<span style="color:#fde68a;font-weight:600">↩ Carried Forward</span>' : '',
+    appData?.matter_url ? `<a target="_blank" href="${esc(appData.matter_url)}" style="color:#fff;text-decoration:underline">↗ Legistar Item</a>` : '',
+    (appData?.item_pdf_url || appData?.item_pdf_local_path)
+      ? `<a target="_blank" href="/api/appearance/${appData.id}/pdf" style="color:#fff;text-decoration:underline">📄 Item PDF</a>` : '',
+  ].filter(Boolean).join('');
+
+  // Default to summary tab
+  drTab('summary', document.querySelector('.dtab'));
+}
+
+function closeDrawer() {
+  document.getElementById('drawer-bg').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('dr-save-btn').style.display='none';
+}
+
+function drTab(tab, el) {
+  document.querySelectorAll('.dtab').forEach(t=>t.classList.remove('on'));
+  if(el)el.classList.add('on');
+  const body=document.getElementById('dr-body');
+  const save=document.getElementById('dr-save-btn');
+  save.style.display='none';
+  if(!_drData){body.innerHTML='<p style="color:var(--gray-400)">No data.</p>';return;}
+  const {matter,appData} = _drData;
+
+  if(tab==='summary') renderDrawerSummary(body,matter,appData,save);
+  if(tab==='notes')   renderDrawerNotes(body,appData);
+  if(tab==='deep')    renderDrawerDeepResearch(body,appData);
+  if(tab==='history') renderDrawerHistory(body,appData);
+  if(tab==='appearances') renderDrawerApps(body,matter);
+  if(tab==='lifecycle')   renderDrawerLifecycle(body,appData);
+}
+
+async function renderDrawerLifecycle(body, appData) {
+  if(!appData?.id){ body.innerHTML='<p style="color:var(--gray-400)">No appearance.</p>'; return; }
+  body.innerHTML='<p style="color:var(--gray-400);font-size:.85rem">Loading lifecycle…</p>';
+  try{
+    const r = await fetch(`/api/appearance/${appData.id}/timeline`);
+    const d = await r.json();
+    const events = (d.events||[]);
+    if(!events.length){
+      body.innerHTML = `
+        <div style="padding:1rem;background:#fef3c7;border-radius:8px;color:#92400e;font-size:.85rem">
+          No lifecycle events yet. Run <b>Backfill URLs + Lifecycle</b> on the
+          Saved Meetings page to parse Legistar's legislative history for every
+          matter we've ever scraped.
+        </div>`;
+      return;
+    }
+    const rows = events.map(e=>{
+      const isOurs = e.source==='agendaiq';
+      const color  = isOurs ? '#2563eb' : '#64748b';
+      const icon   = isOurs ? '📌' : '•';
+      const meta = [];
+      if(e.committee_item_number) meta.push(`Cmte #${esc(e.committee_item_number)}`);
+      if(e.bcc_item_number)       meta.push(`BCC #${esc(e.bcc_item_number)}`);
+      if(e.agenda_stage)          meta.push(esc(e.agenda_stage));
+      if(e.has_notes)             meta.push('★ notes');
+      return `<div style="display:flex;gap:.75rem;padding:.6rem 0;border-bottom:1px dashed #e2e8f0">
+        <div style="min-width:90px;color:${color};font-size:.78rem;font-weight:600">${esc(e.event_date||'')}</div>
+        <div style="flex:1">
+          <div style="font-size:.85rem;color:#1e293b">
+            <span style="color:${color}">${icon}</span>
+            <b>${esc(e.body_name||'')}</b>
+            ${e.body_name && e.action ? ' — ' : ''}${esc(e.action||'')}
+          </div>
+          ${meta.length?`<div style="font-size:.72rem;color:#64748b;margin-top:.15rem">${meta.join(' · ')}</div>`:''}
+          ${e.appearance_id?`<a href="#" onclick="event.preventDefault();openDrawer('${esc(appData.file_number)}',${e.appearance_id})"
+                style="font-size:.72rem;color:#2563eb">open this appearance →</a>`:''}
+        </div>
+      </div>`;
+    }).join('');
+    body.innerHTML = `
+      <div style="font-size:.78rem;color:#64748b;margin-bottom:.5rem">
+        Full lifecycle for this matter — blue pins are our own agenda appearances,
+        gray dots are parsed from Legistar's legislative history (pre-AgendaIQ
+        activity included).
+      </div>
+      <div>${rows}</div>`;
+  }catch(e){
+    body.innerHTML = `<p style="color:#ef4444">Failed to load lifecycle: ${esc(e.message||e)}</p>`;
+  }
+}
+
+function renderDrawerSummary(body, matter, app, saveBtn) {
+  const ai = app?.ai_summary_for_appearance || matter?.latest_ai_summary_part1 || '';
+  const wp = app?.watch_points_for_appearance || matter?.latest_watch_points || '';
+  const cf = app?.carried_forward_from_prior;
+
+  // Gather ALL appearances for this matter (current + prior) so Research
+  // Notes on the Part 1 deliverable show the full researcher trail.
+  const allApps = (matter?.appearances||[]).slice().sort((a,b) =>
+    (a.meeting_date||'').localeCompare(b.meeting_date||'')
+  );
+  const priorWithNotes = allApps.filter(p =>
+    p.id !== (app?.id) && ((p.analyst_working_notes||'').trim() || (p.reviewer_notes||'').trim())
+  );
+
+  // Build Research Notes section: each entry shows stage + meeting date +
+  // who/when it was updated, then the note body. Finalized_brief is NOT
+  // included here — that's Deep Research (reference only).
+  const researchNotesHtml = allApps.map(p => {
+    const isCur = p.id === (app?.id);
+    const stage = (p.agenda_stage||'').toLowerCase();
+    const stageLabel = stage.includes('committee') ? 'Committee'
+                     : stage.includes('bcc') ? 'BCC'
+                     : (p.agenda_stage||'Appearance');
+    const analyst  = (p.analyst_working_notes||'').trim();
+    const reviewer = (p.reviewer_notes||'').trim();
+    if (!analyst && !reviewer) return '';
+    const whenA = p.analyst_notes_updated_at  || '';
+    const whoA  = p.analyst_notes_updated_by  || '';
+    const whenR = p.reviewer_notes_updated_at || '';
+    const whoR  = p.reviewer_notes_updated_by || '';
+    const fmt = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); };
+    return `
+      <div style="border-left:3px solid ${isCur?'var(--blue2)':'var(--gray-300)'};
+        padding:.5rem .75rem;margin-bottom:.55rem;background:${isCur?'#f8fbff':'var(--gray-50)'};
+        border-radius:0 6px 6px 0">
+        <div style="font-size:.72rem;font-weight:600;color:var(--gray-600);text-transform:uppercase;letter-spacing:.4px;margin-bottom:.35rem">
+          ${esc(stageLabel)} · ${esc(p.meeting_date||'?')}
+          ${isCur?'<span style="color:var(--blue);margin-left:.35rem">● current</span>':''}
+        </div>
+        ${analyst ? `
+          <div style="margin-bottom:.4rem">
+            <div style="font-size:.68rem;color:var(--gray-500)">Analyst${whoA?` — ${esc(whoA)}`:''}${whenA?` · ${esc(fmt(whenA))}`:''}</div>
+            <div style="white-space:pre-wrap;font-size:.8rem;color:var(--gray-800);line-height:1.5">${esc(analyst)}</div>
+          </div>`:''}
+        ${reviewer ? `
+          <div>
+            <div style="font-size:.68rem;color:var(--gray-500)">Reviewer${whoR?` — ${esc(whoR)}`:''}${whenR?` · ${esc(fmt(whenR))}`:''}</div>
+            <div style="white-space:pre-wrap;font-size:.8rem;color:var(--gray-800);line-height:1.5">${esc(reviewer)}</div>
+          </div>`:''}
+      </div>`;
+  }).filter(Boolean).join('');
+
+  body.innerHTML = `
+    <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
+      padding:.55rem .85rem;margin-bottom:.75rem;font-size:.74rem;color:#1e3a8a">
+      <strong>Part 1 — Deliverable.</strong> This is what gets exported: Agenda Debrief, Watch Points, Legislative History, and Research Notes from every stage.
+    </div>
+    ${priorWithNotes.length ? `
+      <div class="cf-banner" style="background:#dbeafe;border-color:#93c5fd;color:#1e40af;cursor:pointer"
+        onclick="drTab('appearances',document.querySelectorAll('.dtab')[4])">
+        ⓘ Prior research exists — ${priorWithNotes.length} earlier appearance${priorWithNotes.length>1?'s':''} with notes. Scroll down to Research Notes or open the Appearances tab.
+      </div>` : ''}
+    <div class="ds">
+      <div class="ds-title">
+        <span>AGENDA DEBRIEF</span>
+        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-ai')">Edit</button>
+      </div>
+      <div class="editable-field" id="edit-ai" contenteditable="false">${esc(ai)||'<span style="color:var(--gray-400)">No debrief yet.</span>'}</div>
+    </div>
+    <div class="ds">
+      <div class="ds-title">
+        <span>WATCH POINTS</span>
+        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-wp')">Edit</button>
+      </div>
+      <div class="editable-field" id="edit-wp" contenteditable="false">${esc(wp)||'<span style="color:var(--gray-400)">None.</span>'}</div>
+    </div>
+    ${renderStatusLadder(matter, app)}
+    ${app?.leg_history_summary ? `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI summary)</div>
+      <div class="editable-field" style="cursor:default">${esc(app.leg_history_summary)}</div></div>` : ''}
+    ${matter.legislative_notes ? `<div class="ds"><div class="ds-title">LEGISLATIVE NOTES</div>
+      <div class="editable-field" style="cursor:default">${esc(matter.legislative_notes)}</div></div>` : ''}
+    <div class="ds">
+      <div class="ds-title">
+        <span>RESEARCH NOTES</span>
+        <span style="font-size:.68rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
+          across all appearances · add new in Notes tab
+        </span>
+      </div>
+      ${researchNotesHtml || '<div style="color:var(--gray-400);font-size:.8rem;font-style:italic">No research notes yet. Add them in the Notes tab — they will appear here with timestamps.</div>'}
+    </div>
+  `;
+  saveBtn.style.display='';
+}
+
+// Living "status ladder": derives the legislative-status progression from
+// timeline events so users see how the item moved through the system and
+// when. Current status (latest action) is highlighted at the top.
+function renderStatusLadder(matter, app) {
+  const events = (matter?.timeline || []).slice().sort((a,b) =>
+    (b.event_date||'').localeCompare(a.event_date||'')
+  );
+  if (!events.length) {
+    return `<div class="ds"><div class="ds-title">
+      <span>LEGISLATIVE STATUS</span>
+      <span style="font-size:.66rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
+        live — updates every time backfill runs
+      </span></div>
+      <div style="font-size:.78rem;color:var(--gray-500);font-style:italic">
+        No legislative events parsed yet. Run the backfill to pull this item's full history from Legistar.
+      </div></div>`;
+  }
+  const latest = events[0];
+  const fmt = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); };
+  const rows = events.map((e,i) => {
+    const isCur = i === 0;
+    return `
+      <div style="display:flex;gap:.55rem;align-items:flex-start;padding:.4rem .55rem;
+        background:${isCur?'#eff6ff':'transparent'};border-left:3px solid ${isCur?'var(--blue2)':'var(--gray-200)'};
+        border-radius:0 6px 6px 0;margin-bottom:.25rem">
+        <div style="min-width:82px;font-size:.72rem;color:var(--gray-600);font-weight:600">
+          ${esc(fmt(e.event_date))}
+        </div>
+        <div style="flex:1;font-size:.78rem;color:var(--gray-800);line-height:1.45">
+          <div><strong>${esc(e.action||'—')}</strong>${e.agenda_item?` <span style="font-size:.7rem;color:var(--gray-500)">(#${esc(e.agenda_item)})</span>`:''}</div>
+          <div style="font-size:.7rem;color:var(--gray-500)">${esc(e.body_name||'')}</div>
+        </div>
+        ${isCur?'<span style="font-size:.62rem;background:var(--blue2);color:#fff;padding:.1rem .4rem;border-radius:10px;font-weight:600;height:fit-content">CURRENT</span>':''}
+      </div>`;
+  }).join('');
+  return `
+    <div class="ds">
+      <div class="ds-title">
+        <span>LEGISLATIVE STATUS</span>
+        <span style="font-size:.66rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
+          live · ${events.length} event${events.length>1?'s':''} · updates on each backfill
+        </span>
+      </div>
+      <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;padding:.5rem">
+        <div style="font-size:.7rem;color:var(--gray-500);margin-bottom:.35rem;text-transform:uppercase;letter-spacing:.4px">
+          Current: <strong style="color:var(--gray-800)">${esc(latest.action||'—')}</strong>
+          <span style="color:var(--gray-400)">as of ${esc(fmt(latest.event_date))}</span>
+        </div>
+        ${rows}
+      </div>
+    </div>`;
+}
+
+function toggleEdit(id) {
+  const el=document.getElementById(id);
+  const isEditing=el.contentEditable==='true';
+  el.contentEditable=isEditing?'false':'true';
+  if(!isEditing)el.focus();
+}
+
+function memberOptions(selectedVal, includeClear=true) {
+  const members = (_cfg.team_members||[]).map(m=>m.name);
+  const clearOpt = includeClear ? `<option value="">— Unassigned —</option>` : '';
+  return clearOpt + members.map(n=>`<option${n===selectedVal?' selected':''}>${esc(n)}</option>`).join('');
+}
+
+function renderDrawerNotes(body, app) {
+  const wn = app?.analyst_working_notes || '';
+  const rn = app?.reviewer_notes || '';
+  body.innerHTML = `
+    <div class="ds">
+      <div class="ds-title">WORKFLOW</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.75rem">
+        <div>
+          <label>Status</label>
+          <select id="nw-status" style="margin:0">
+            ${['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived']
+              .map(s=>`<option${s===(app?.workflow_status||'New')?' selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Assigned To</label>
+          <select id="nw-assigned" style="margin:0">
+            ${memberOptions(app?.assigned_to||'')}
+          </select>
+        </div>
+        <div>
+          <label>Reviewer</label>
+          <select id="nw-reviewer" style="margin:0">
+            ${memberOptions(app?.reviewer||'')}
+          </select>
+        </div>
+        <div>
+          <label>Due Date (YYYY-MM-DD)</label>
+          <input type="text" id="nw-due" value="${esc(app?.due_date||'')}" placeholder="e.g. 2026-05-01" style="margin:0">
+        </div>
+        <div>
+          <label>Priority</label>
+          <select id="nw-priority" style="margin:0">
+            <option value="">—</option>
+            ${['Low','Medium','High','Urgent'].map(p=>`<option${p===(app?.priority||'')?'selected':''}>${p}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-p btn-sm" onclick="saveWorkflowFromDrawer()">Save Workflow</button>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
+    <div class="ds">
+      <div class="ds-title">ANALYST WORKING NOTES</div>
+      ${wn ? `<div class="editable-field" style="margin-bottom:.6rem;font-size:.78rem">${esc(wn)}</div>` : ''}
+      <textarea id="new-working-note" placeholder="Add working note… (will be appended with timestamp)"></textarea>
+      <button class="btn btn-s btn-sm" onclick="addNote('working')">Append Note</button>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
+    <div class="ds">
+      <div class="ds-title">REVIEWER NOTES</div>
+      ${rn ? `<div class="editable-field" style="margin-bottom:.6rem;font-size:.78rem">${esc(rn)}</div>` : ''}
+      <textarea id="new-reviewer-note" placeholder="Add reviewer note…"></textarea>
+      <button class="btn btn-s btn-sm" onclick="addNote('reviewer')">Append Note</button>
+    </div>
+    <div style="margin-top:1rem;padding:.55rem .75rem;background:#fef3c7;border:1px solid #fde68a;
+      border-radius:7px;font-size:.72rem;color:#78350f">
+      💡 Notes you add here feed into the <strong>Part 1 Deliverable</strong>. For deeper reference research (not exported), use the <strong>Deep Research</strong> tab.
+    </div>
+  `;
+}
+
+// ─── Deep Research tab (formerly "Finalized Brief") ───────────
+// This is reference-only material — NOT included in exports.
+function renderDrawerDeepResearch(body, app) {
+  const fb = app?.finalized_brief || '';
+  const whenF = app?.finalized_brief_updated_at || '';
+  const whoF  = app?.finalized_brief_updated_by || '';
+  const fmt = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); };
+  body.innerHTML = `
+    <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;
+      padding:.6rem .85rem;margin-bottom:.85rem;font-size:.74rem;color:#5b21b6;line-height:1.55">
+      <strong>Deep Research Notes — reference only.</strong> Use this space for background material,
+      deeper analysis, source citations, or context a researcher may want to consult later.
+      <span style="display:block;margin-top:.2rem;color:#6d28d9;font-weight:600">⚠ This content is NOT exported and does NOT appear in the Part 1 deliverable.</span>
+    </div>
+    <div class="ds">
+      <div class="ds-title">
+        <span>DEEP RESEARCH NOTES</span>
+        ${whenF ? `<span style="font-size:.68rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
+          last updated${whoF?` by ${esc(whoF)}`:''} · ${esc(fmt(whenF))}</span>`:''}
+      </div>
+      <textarea id="deep-research-field" style="min-height:260px;font-size:.82rem;line-height:1.55"
+        placeholder="Paste or write deeper background research, source notes, prior memos, precedents, etc.">${esc(fb)}</textarea>
+      <div style="margin-top:.55rem;display:flex;gap:.5rem;align-items:center">
+        <button class="btn btn-p btn-sm" onclick="saveDeepResearch()">Save Deep Research Notes</button>
+        <span id="deep-save-msg" style="font-size:.72rem;color:var(--green);display:none">✓ Saved</span>
+      </div>
+    </div>
+  `;
+}
+
+async function saveDeepResearch() {
+  if(!currentAppId) return;
+  const val = document.getElementById('deep-research-field').value;
+  const r = await fetch(`/api/appearance/${currentAppId}/notes`,{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ finalized_brief: val, changed_by: currentUser, replace: true })
+  });
+  if (r.ok) {
+    const m = document.getElementById('deep-save-msg');
+    if(m){ m.style.display=''; setTimeout(()=>m.style.display='none',1500); }
+    const ar = await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+    _drData.appData = ar.appearance;
+  }
+}
+
+async function saveWorkflowFromDrawer() {
+  if(!currentAppId)return;
+  await fetch(`/api/appearance/${currentAppId}/workflow`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      status:    document.getElementById('nw-status').value,
+      assigned_to: document.getElementById('nw-assigned').value,
+      reviewer:  document.getElementById('nw-reviewer').value,
+      due_date:  document.getElementById('nw-due').value,
+      priority:  document.getElementById('nw-priority').value,
+      changed_by: currentUser,
+    })
+  });
+  showSaveMsg();
+  loadDashboard(); loadWorkflow();
+  // Reload drawer data
+  const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+  _drData.appData=ar.appearance;
+}
+
+async function addNote(type) {
+  if(!currentAppId)return;
+  const el=document.getElementById(`new-${type==='working'?'working':'reviewer'}-note`);
+  const note=el.value.trim();
+  if(!note)return;
+  await fetch(`/api/appearance/${currentAppId}/notes`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      [type==='working'?'working_notes':'reviewer_notes']:note,
+      changed_by:currentUser
+    })
+  });
+  el.value='';
+  showSaveMsg();
+  const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+  _drData.appData=ar.appearance;
+  renderDrawerNotes(document.getElementById('dr-body'),_drData.appData);
+}
+
+async function renderDrawerHistory(body, app) {
+  if(!app?.id){body.innerHTML='<p style="color:var(--gray-400)">No history.</p>';return;}
+  body.innerHTML='<div style="color:var(--gray-400);font-size:.82rem">Loading…</div>';
+  const r=await fetch(`/api/appearance/${app.id}/history`);
+  const history=await r.json();
+  if(!history.length){
+    body.innerHTML='<p style="color:var(--gray-400);font-size:.82rem">No history yet.</p>';
+    return;
+  }
+  const dotClass={status_change:'status',assigned:'assign',reviewer_set:'assign',
+    working_note_added:'note',reviewer_note_added:'note',brief_finalized:'status',
+    due_date_set:'status',ai_summary_edited:'note',priority_set:'status',export:'export'};
+  const labels={status_change:'Status changed',assigned:'Assigned',reviewer_set:'Reviewer set',
+    working_note_added:'Working note added',reviewer_note_added:'Reviewer note added',
+    brief_finalized:'Brief finalized',due_date_set:'Due date set',
+    ai_summary_edited:'AI summary edited',priority_set:'Priority set',export:'Files exported'};
+
+  body.innerHTML=`<div class="timeline">
+    ${history.map(h=>{
+      const dt=new Date(h.changed_at);
+      const ts=isNaN(dt)?h.changed_at:dt.toLocaleString('en-US',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      const by=h.changed_by&&h.changed_by!=='system'?` by <strong>${esc(h.changed_by)}</strong>`:'';
+      const detail=h.old_value&&h.new_value
+        ?`${esc(h.old_value)} → <strong>${esc(h.new_value)}</strong>`
+        :(h.note?`<em>${esc(h.note.slice(0,120))}</em>`:'');
+      return `<div class="tl-item">
+        <div class="tl-dot ${dotClass[h.action]||''}"></div>
+        <div class="tl-time">${ts}${by}</div>
+        <div class="tl-action">${labels[h.action]||h.action}</div>
+        ${detail?`<div class="tl-detail">${detail}</div>`:''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+
+function renderDrawerApps(body, matter) {
+  const apps = (matter.appearances || []).slice().sort((a,b) =>
+    (b.meeting_date||'').localeCompare(a.meeting_date||''));
+
+  if(!apps.length){body.innerHTML='<p style="color:var(--gray-400);font-size:.82rem">No appearances.</p>';return;}
+
+  // Legislative identity header
+  const head = `
+    <div style="background:var(--blue-lt);border:1px solid var(--blue-mid);border-radius:8px;
+      padding:.75rem .95rem;margin-bottom:.9rem;font-size:.78rem">
+      <div style="font-weight:600;color:var(--blue);margin-bottom:.3rem">
+        File #${esc(matter.file_number||'')} — ${esc(matter.short_title||'')}
+      </div>
+      <div style="color:var(--gray-600);display:flex;flex-wrap:wrap;gap:.4rem 1.1rem">
+        ${matter.file_type ? `<span><strong>Type:</strong> ${esc(matter.file_type)}</span>`:''}
+        ${matter.current_status ? `<span><strong>Leg Status:</strong> ${esc(matter.current_status)}</span>`:''}
+        ${matter.sponsor ? `<span><strong>Requester:</strong> ${esc(matter.sponsor)}</span>`:''}
+        ${matter.department ? `<span><strong>Dept:</strong> ${esc(matter.department)}</span>`:''}
+        ${matter.control_body ? `<span><strong>Control:</strong> ${esc(matter.control_body)}</span>`:''}
+      </div>
+      ${matter.legislative_notes ? `
+        <div style="margin-top:.55rem;font-size:.76rem;color:var(--gray-600);
+          border-top:1px dashed var(--blue-mid);padding-top:.45rem;line-height:1.5">
+          <strong>Legislative Notes:</strong> ${esc(matter.legislative_notes).slice(0,400)}
+        </div>`:''}
+    </div>
+    <div style="font-size:.72rem;color:var(--gray-400);text-transform:uppercase;
+      letter-spacing:.5px;font-weight:600;margin:.4rem 0 .6rem">
+      Case History · ${apps.length} appearance${apps.length>1?'s':''}
+    </div>`;
+
+  body.innerHTML = head + apps.map(a => {
+    const isCurrent = a.id === currentAppId;
+    const isSupp = /supplement/i.test(a.agenda_stage||'');
+    const analyst = (a.analyst_working_notes||'').trim();
+    const reviewer = (a.reviewer_notes||'').trim();
+    const aiSum  = (a.ai_summary_for_appearance||'').trim();
+    const watch  = (a.watch_points_for_appearance||'').trim();
+    const hasAnyNotes = analyst||reviewer;
+
+    const pill = (txt,bg,fg,title='') =>
+      `<span class="badge" title="${esc(title)}" style="background:${bg};color:${fg}">${txt}</span>`;
+
+    const pills = [
+      isCurrent ? pill('● CURRENT','#dbeafe','#1e40af') : '',
+      a.carried_forward_from_prior ? pill('↩ Carried Forward','#fef3c7','#92400e','Notes carried from prior appearance') : '',
+      isSupp ? pill('+ Supplement','#ede9fe','#5b21b6') : '',
+      badge(a.workflow_status||'New'),
+    ].filter(Boolean).join(' ');
+
+    const notesSection = hasAnyNotes ? `
+      <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:7px;
+        padding:.55rem .75rem;margin-top:.55rem;font-size:.78rem;line-height:1.55">
+        ${analyst ? `
+          <div style="margin-bottom:.4rem">
+            <div style="font-weight:600;color:#056f3a;font-size:.7rem;letter-spacing:.4px">📝 ANALYST NOTES</div>
+            <div style="white-space:pre-wrap;color:var(--gray-800)">${esc(analyst).slice(0,800)}${analyst.length>800?'…':''}</div>
+          </div>`:''}
+        ${reviewer ? `
+          <div style="margin-bottom:.4rem">
+            <div style="font-weight:600;color:#7a1e1e;font-size:.7rem;letter-spacing:.4px">👁 REVIEWER NOTES</div>
+            <div style="white-space:pre-wrap;color:var(--gray-800)">${esc(reviewer).slice(0,800)}${reviewer.length>800?'…':''}</div>
+          </div>`:''}
+        ${!isCurrent && hasAnyNotes ? `
+          <div style="margin-top:.55rem;text-align:right">
+            <button class="btn btn-o btn-xs" onclick="event.stopPropagation();copyPriorNotes(${a.id})">
+              ⧉ Copy prior notes into current
+            </button>
+          </div>`:''}
+      </div>` : (aiSum||watch) ? `
+      <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:7px;
+        padding:.45rem .75rem;margin-top:.55rem;font-size:.76rem;color:var(--gray-600);font-style:italic">
+        AI summary only — no researcher notes recorded at this appearance.
+      </div>` : '';
+
+    return `
+      <div class="app-row" style="flex-direction:column;align-items:stretch;padding:.75rem .85rem;
+        ${isCurrent?'border-color:var(--blue2);background:#f8fbff':''}">
+        <div style="display:flex;align-items:center;gap:.6rem;cursor:pointer"
+             onclick="${isCurrent?'':`switchToApp(${a.id})`}">
+          <div style="min-width:90px">
+            <div style="font-weight:700;color:var(--gray-800);font-size:.85rem">${a.meeting_date||'?'}</div>
+            <div style="font-size:.7rem;color:var(--gray-400)">${a.committee_item_number? 'Cmte #'+esc(a.committee_item_number):(a.bcc_item_number?'BCC #'+esc(a.bcc_item_number):'')}</div>
+          </div>
+          <div style="flex:1">
+            <div style="font-size:.82rem;font-weight:500;color:var(--gray-800)">${esc(a.body_name||'')}</div>
+            <div style="font-size:.7rem;color:var(--gray-400)">${esc(a.agenda_stage||'')}</div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:.25rem;justify-content:flex-end">${pills}</div>
+        </div>
+        ${notesSection}
+      </div>`;
+  }).join('');
+}
+
+async function copyPriorNotes(priorAppId) {
+  if (!currentAppId) return;
+  const r = await fetch(`/api/appearance/${priorAppId}`);
+  const d = await r.json();
+  const prior = d.appearance || {};
+  const bits = [];
+  if ((prior.analyst_working_notes||'').trim())
+    bits.push(`[Copied from prior appearance ${prior.meeting_date||''} — ${prior.body_name||''}]\n${prior.analyst_working_notes}`);
+  if (!bits.length) { alert('Prior appearance has no analyst notes to copy.'); return; }
+  if (!confirm('Append prior analyst notes to the current item?')) return;
+  await fetch(`/api/appearance/${currentAppId}/notes`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ working_notes: bits.join('\n\n'), changed_by: currentUser })
+  });
+  const ar = await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+  _drData.appData = ar.appearance;
+  drTab('notes', document.querySelectorAll('.dtab')[1]);
+}
+
+async function switchToApp(appId) {
+  currentAppId=appId;
+  const ar=await fetch(`/api/appearance/${appId}`).then(r=>r.json());
+  _drData.appData=ar.appearance;
+  drTab('summary',document.querySelector('.dtab'));
+}
+
+async function saveSummaryEdits() {
+  if(!currentAppId)return;
+  const ai=document.getElementById('edit-ai').innerText;
+  const wp=document.getElementById('edit-wp').innerText;
+  await fetch(`/api/appearance/${currentAppId}/ai`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({summary:ai,watch_points:wp,changed_by:currentUser})
+  });
+  showSaveMsg();
+  // Disable editable fields
+  ['edit-ai','edit-wp'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el)el.contentEditable='false';
+  });
+  // Trigger re-export
+  await fetch(`/api/appearance/${currentAppId}/export`,{method:'POST'});
+}
+
+async function exportAndDownload() {
+  if(!currentAppId)return;
+  document.getElementById('dr-export-btn').textContent='Exporting…';
+  const r=await fetch(`/api/appearance/${currentAppId}/export`,{method:'POST'});
+  const d=await r.json();
+  document.getElementById('dr-export-btn').textContent='↓ Export Files';
+  if(d.files&&d.files.length){
+    // Create temporary links and click them
+    d.files.forEach(f=>{
+      const a=document.createElement('a');
+      a.href=f.url; a.download=f.name; document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+    });
+  }
+  showSaveMsg();
+  const h=document.getElementById('dr-save-msg');
+  h.textContent='✓ Exported'; h.style.display='';
+  setTimeout(()=>h.style.display='none',3000);
+}
+
+function showSaveMsg() {
+  const m=document.getElementById('dr-save-msg');
+  m.textContent='✓ Saved'; m.style.display='';
+  setTimeout(()=>m.style.display='none',2500);
+}
+
+// ════════════════════════════════════════════════════════════
+// Settings
+// ════════════════════════════════════════════════════════════
+let _cfg={};
+async function loadConfig() {
+  try {
+    _cfg=await (await fetch('/api/config')).json();
+    // Populate header "Acting as…" selector
+    const sel=document.getElementById('current-user-sel');
+    while(sel.options.length>1)sel.remove(1);
+    (_cfg.team_members||[]).forEach(m=>{
+      const opt=new Option(m.name,m.name);
+      if(m.name===currentUser)opt.selected=true;
+      sel.add(opt);
+    });
+    // Populate Settings "Who am I?" selector
+    const ssel=document.getElementById('settings-user-sel');
+    if(ssel){
+      while(ssel.options.length>1)ssel.remove(1);
+      (_cfg.team_members||[]).forEach(m=>{
+        const opt=new Option(m.name,m.name);
+        if(m.name===currentUser)opt.selected=true;
+        ssel.add(opt);
+      });
+      const info=document.getElementById('settings-user-current');
+      if(info) info.textContent = currentUser ? ('Currently acting as: '+currentUser) : 'Not set — "My Items" filter will not work until you pick your name.';
+    }
+    // Populate workflow Assigned-To filter with team members + Unassigned
+    const wfa=document.getElementById('wf-f-assigned');
+    if(wfa){
+      // Wipe everything except first two fixed options (Anyone, My Items)
+      while(wfa.options.length>2)wfa.remove(2);
+      // Refresh the "My Items" label so the user can tell which name it maps to
+      wfa.options[1].text = currentUser ? ('My Items ('+currentUser+')') : 'My Items (set your name ↓)';
+      (_cfg.team_members||[]).forEach(m=>{
+        wfa.add(new Option(m.name, m.name));
+      });
+      wfa.add(new Option('Unassigned','unassigned'));
+    }
+  } catch(e){}
+}
+
+function setCurrentUser(name) {
+  currentUser=name||'';
+  localStorage.setItem('oca_user',currentUser);
+  // Keep header picker and settings picker in sync
+  const hdr=document.getElementById('current-user-sel');
+  if(hdr && hdr.value!==currentUser) hdr.value=currentUser;
+  const ssel=document.getElementById('settings-user-sel');
+  if(ssel && ssel.value!==currentUser) ssel.value=currentUser;
+  const info=document.getElementById('settings-user-current');
+  if(info) info.textContent = currentUser ? ('Currently acting as: '+currentUser) : 'Not set — "My Items" filter will not work until you pick your name.';
+  const wfa=document.getElementById('wf-f-assigned');
+  if(wfa && wfa.options.length>1){
+    wfa.options[1].text = currentUser ? ('My Items ('+currentUser+')') : 'My Items (set your name ↓)';
+  }
+  if(typeof loadWorkflow==='function') loadWorkflow();
+}
+
+async function loadSettings() {
+  await loadConfig();
+  document.getElementById('email-enabled').checked=!!_cfg.email_enabled;
+  document.getElementById('smtp-host').value=_cfg.smtp_host||'smtp.gmail.com';
+  document.getElementById('smtp-port').value=_cfg.smtp_port||587;
+  document.getElementById('smtp-user').value=_cfg.smtp_user||'';
+  document.getElementById('smtp-pass').value=_cfg.smtp_password||'';
+  document.getElementById('smtp-recip').value=(_cfg.notify_recipients||[]).join(', ');
+  document.getElementById('reminder-days').value=_cfg.reminder_days||7;
+  renderTeamList();
+}
+
+function renderTeamList() {
+  const el=document.getElementById('team-list');
+  const members=_cfg.team_members||[];
+  el.innerHTML=members.length?members.map((m,i)=>`
+    <div class="team-row">
+      <span><strong>${esc(m.name)}</strong> ${m.email?`&lt;${esc(m.email)}&gt;`:''}
+      </span>
+      <button class="btn btn-d btn-xs" onclick="removeTeamMember(${i})">Remove</button>
+    </div>`).join(''):'<p style="color:var(--gray-400);font-size:.8rem">No team members yet.</p>';
+}
+
+async function addTeamMember() {
+  const name=document.getElementById('new-member-name').value.trim();
+  const email=document.getElementById('new-member-email').value.trim();
+  if(!name)return;
+  _cfg.team_members=_cfg.team_members||[];
+  _cfg.team_members.push({name,email});
+  document.getElementById('new-member-name').value='';
+  document.getElementById('new-member-email').value='';
+  await saveSettings(true);
+  renderTeamList(); loadConfig();
+}
+
+async function removeTeamMember(idx) {
+  _cfg.team_members.splice(idx,1);
+  await saveSettings(true);
+  renderTeamList();
+}
+
+async function saveSettings(silent=false) {
+  _cfg.email_enabled=document.getElementById('email-enabled')?.checked||false;
+  _cfg.smtp_host=document.getElementById('smtp-host')?.value||'smtp.gmail.com';
+  _cfg.smtp_port=parseInt(document.getElementById('smtp-port')?.value)||587;
+  _cfg.smtp_user=document.getElementById('smtp-user')?.value||'';
+  _cfg.smtp_password=document.getElementById('smtp-pass')?.value||'';
+  _cfg.notify_recipients=(document.getElementById('smtp-recip')?.value||'').split(',').map(s=>s.trim()).filter(Boolean);
+  _cfg.reminder_days=parseInt(document.getElementById('reminder-days')?.value)||7;
+  await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_cfg)});
+  if(!silent)alert('Settings saved.');
+  loadConfig();
+}
+
+async function testEmail() {
+  await saveSettings(true);
+  const r=await fetch('/api/test-email',{method:'POST'});
+  const d=await r.json();
+  alert(d.ok?'Test email sent! Check your inbox.':'Failed: '+d.error);
+}
+
+// ════════════════════════════════════════════════════════════
+// Saved Meetings + Meeting Detail
+// ════════════════════════════════════════════════════════════
+let currentMeetingId = null;
+
+let _bfPollTimer = null;
+
+function _renderBfProgress(p) {
+  const panel = document.getElementById('bf-progress');
+  if (!panel) return;
+  if (!p || (!p.running && !p.summary && !p.error)) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = 'block';
+  const pct = p.percent || 0;
+  const done = p.done || 0;
+  const total = p.total || 0;
+  const bar = document.getElementById('bf-bar');
+  if (bar) bar.style.width = (p.running ? pct : (p.summary ? 100 : pct)) + '%';
+  const txt = document.getElementById('bf-progress-text');
+  if (txt) {
+    if (p.running) {
+      txt.innerHTML = `<b>${done}/${total}</b> matters · ${pct}% — <span style="color:var(--gray-600)">${esc(p.current||'')}</span>`;
+    } else if (p.summary) {
+      const s = p.summary;
+      txt.innerHTML = `<span style="color:var(--green);font-weight:600">✓ Done</span> — ` +
+        `<b>${s.matters||0}</b> matters · <b>${s.urls_filled||0}</b> links filled · ` +
+        `<b>${s.pdfs_downloaded||0}</b> PDFs · <b>${s.timeline_events||0}</b> lifecycle events · ` +
+        `<b>${s.stub_appearances||0}</b> committee stubs created`;
+    } else if (p.error) {
+      txt.innerHTML = `<span style="color:var(--red);font-weight:600">✗ Failed</span> — ${esc(p.error)}`;
+    }
+  }
+  const logEl = document.getElementById('bf-log');
+  if (logEl && p.events) {
+    logEl.innerHTML = p.events.slice(-8).map(e =>
+      `<div style="font-family:'JetBrains Mono',monospace;font-size:.68rem;color:#64748b">` +
+      `${e.ts ? e.ts.slice(11,19) : ''} · ${esc(e.msg||'')}</div>`).join('');
+  }
+}
+
+async function runBackfill(onlyMissing) {
+  // Disable all backfill buttons while running.
+  ['bf-btn','bf-nudge-btn'].forEach(id => {
+    const b = document.getElementById(id); if (b) b.disabled = true;
+  });
+  const msg = document.getElementById('bf-msg');
+  if (msg) msg.textContent = onlyMissing ? 'Starting…' : 'Starting full refresh…';
+
+  try{
+    const r = await fetch('/api/backfill/urls-and-lifecycle',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({only_missing: !!onlyMissing})
+    });
+    const d = await r.json();
+    if (!d.ok && d.error === 'Already running') {
+      toast('Backfill already in progress — watch the progress bar.', 'ok');
+    }
+    // Show the progress panel and start polling.
+    _renderBfProgress(d.progress || {running:true});
+    if (_bfPollTimer) clearInterval(_bfPollTimer);
+    _bfPollTimer = setInterval(async () => {
+      try{
+        const pr = await fetch('/api/backfill/progress');
+        const pd = await pr.json();
+        _renderBfProgress(pd);
+        if (!pd.running) {
+          clearInterval(_bfPollTimer); _bfPollTimer = null;
+          ['bf-btn','bf-nudge-btn'].forEach(id => {
+            const b = document.getElementById(id); if (b) b.disabled = false;
+          });
+          if (pd.summary) {
+            const s = pd.summary;
+            toast(`Backfill done · ${s.matters||0} matters · ${s.stub_appearances||0} stubs`, 'ok');
+          } else if (pd.error) {
+            toast('Backfill failed: '+pd.error, 'err');
+          }
+          loadSavedMeetings();
+        }
+      }catch(_){}
+    }, 1500);
+  }catch(e){
+    if(msg){ msg.textContent = 'Failed: '+(e.message||e); }
+    toast('Backfill failed to start: '+(e.message||e), 'err');
+    ['bf-btn','bf-nudge-btn'].forEach(id => {
+      const b = document.getElementById(id); if (b) b.disabled = false;
+    });
+  }
+}
+
+async function loadSavedMeetings() {
+  // If a backfill is already running (started in a previous page view),
+  // immediately show the progress panel and resume polling.
+  try {
+    const bp = await fetch('/api/backfill/progress'); const bpd = await bp.json();
+    if (bpd && bpd.running) {
+      _renderBfProgress(bpd);
+      if (!_bfPollTimer) {
+        _bfPollTimer = setInterval(async () => {
+          const r2 = await fetch('/api/backfill/progress');
+          const d2 = await r2.json();
+          _renderBfProgress(d2);
+          if (!d2.running) { clearInterval(_bfPollTimer); _bfPollTimer=null; loadSavedMeetings(); }
+        }, 1500);
+      }
+    } else if (bpd && (bpd.summary || bpd.error)) {
+      _renderBfProgress(bpd);  // show last result line
+    }
+  } catch(_){}
+
+  // Probe for missing-data and show the nudge banner if needed.
+  try {
+    const pr = await fetch('/api/backfill/status'); const pd = await pr.json();
+    const nudge = document.getElementById('bf-nudge');
+    const title = document.getElementById('bf-nudge-title');
+    const bodyEl = document.getElementById('bf-nudge-body');
+    if (pd.needs_backfill && pd.total_appearances > 0) {
+      const missing = pd.missing_matter_url || 0;
+      const unvisited = pd.matters_unvisited || 0;
+      title.textContent = `Missing data detected — run the backfill to unlock links & lifecycle.`;
+      bodyEl.innerHTML =
+        `<b>${missing}</b> appearance(s) have no Legistar link · ` +
+        `<b>${unvisited}</b> matter(s) haven't been checked for legislative history yet. ` +
+        `Click <b>Fix now</b> to re-hit Legistar, parse each matter's history, ` +
+        `and auto-create committee stubs so cross-stage Cmte Date/# populate.`;
+      nudge.style.display = 'flex';
+    } else {
+      nudge.style.display = 'none';
+    }
+  } catch(_e){ /* banner is advisory — silent fail is OK */ }
+
+  const r = await fetch('/api/meetings');
+  const rows = await r.json();
+  const tb = document.getElementById('mtg-tbody');
+  document.getElementById('mtg-count').textContent = `${rows.length} meeting(s)`;
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="8">'+emptyState(
+      '🗂️', 'No saved meetings yet',
+      'Run a <b>Process</b> job on the Home tab to pull a committee or BCC agenda. Once items are analyzed, the meeting package will appear here with draft + final export controls.',
+      '<button class="btn btn-p btn-sm" onclick="showPg(\'home\')">Go to Home →</button>'
+    )+'</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.map(m => {
+    const pct = m.total ? Math.round((m.finalized * 100) / m.total) : 0;
+    const statusColor = {
+      'Draft':'b-New','In Progress':'b-InProgress',
+      'Final Ready':'b-DraftComplete','Final Generated':'b-Finalized',
+      'Empty':'b-Archived'}[m.status] || 'b-New';
+    return `<tr class="clickable" onclick="openMeeting(${m.id})">
+      <td style="font-weight:600">${esc(m.body_name||'')}</td>
+      <td style="white-space:nowrap">${m.meeting_date||''}</td>
+      <td style="font-size:.75rem">${esc(m.meeting_type||'—')}</td>
+      <td>${m.total}</td>
+      <td>
+        <div style="display:flex;align-items:center;gap:.4rem">
+          <div style="flex:1;background:var(--gray-100);border-radius:99px;height:6px;min-width:80px;overflow:hidden">
+            <div style="height:100%;width:${pct}%;background:var(--green)"></div>
+          </div>
+          <span style="font-size:.72rem;color:var(--gray-600)">${m.finalized}/${m.total}</span>
+        </div>
+      </td>
+      <td><span class="badge ${statusColor}">${m.status}</span></td>
+      <td style="font-size:.72rem;color:var(--gray-600)">
+        ${m.final_available ? '✓ Final available' : (m.total ? 'Draft only' : '—')}
+      </td>
+      <td onclick="event.stopPropagation()">
+        <div style="display:flex;gap:.3rem;justify-content:flex-end;flex-wrap:wrap">
+          <button class="btn btn-o btn-xs" onclick="openMeeting(${m.id})">Open →</button>
+          <button class="btn btn-o btn-xs" onclick="regenDraft(${m.id},this)"
+            title="Regenerate the draft Excel + Word from the latest DB state">⟳ Draft</button>
+          <button class="btn btn-p btn-xs" onclick="genFinal(${m.id},this)"
+            ${m.finalized === m.total && m.total > 0 ? '' : 'disabled title="All items must be Finalized"'}
+            >★ Export Whole Agenda</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function openMeeting(meetingId) {
+  currentMeetingId = meetingId;
+  showPg('meeting-detail');
+  document.getElementById('md-title').textContent = 'Loading…';
+  document.getElementById('md-meta-body').innerHTML = '';
+  document.getElementById('md-items').innerHTML = '';
+  document.getElementById('md-artifacts').innerHTML = '';
+
+  const r = await fetch(`/api/meeting/${meetingId}`);
+  if (!r.ok) {
+    document.getElementById('md-title').textContent = 'Not found';
+    return;
+  }
+  const pkg = await r.json();
+  renderMeetingDetail(pkg);
+}
+
+function renderMeetingDetail(pkg) {
+  const m = pkg.meeting;
+  const s = pkg.status;
+  const items = pkg.items || [];
+  const arts = pkg.artifacts || [];
+
+  document.getElementById('md-title').textContent =
+    `${m.body_name} — ${m.meeting_date}`;
+
+  const statusColor = {
+    'Draft':'b-New','In Progress':'b-InProgress',
+    'Final Ready':'b-DraftComplete','Final Generated':'b-Finalized',
+    'Empty':'b-Archived'}[s.status] || 'b-New';
+  document.getElementById('md-status-badge').innerHTML =
+    `<span class="badge ${statusColor}" style="font-size:.75rem;padding:.28rem .75rem">${s.status}</span>`;
+
+  document.getElementById('md-package-meta').textContent =
+    `${s.total} items · ${s.finalized} finalized · ${s.in_progress} in progress · ${s.new} new`;
+
+  // Meta with links
+  const links = [];
+  if (m.agenda_page_url) links.push(`<a class="btn btn-o btn-sm" target="_blank" href="${esc(m.agenda_page_url)}">📄 Open Agenda Page</a>`);
+  if (m.final_agenda_url) links.push(`<a class="btn btn-o btn-sm" target="_blank" href="${esc(m.final_agenda_url)}">🔗 Final Agenda</a>`);
+  if (m.agenda_pdf_url) links.push(`<a class="btn btn-o btn-sm" target="_blank" href="${esc(m.agenda_pdf_url)}">⬇ Agenda PDF</a>`);
+  document.getElementById('md-meta-body').innerHTML = `
+    <div style="display:flex;gap:.85rem;flex-wrap:wrap;align-items:center;font-size:.82rem;color:var(--gray-600)">
+      <div><strong>Body:</strong> ${esc(m.body_name||'')}</div>
+      <div><strong>Date:</strong> ${m.meeting_date||''}</div>
+      ${m.meeting_type ? `<div><strong>Type:</strong> ${esc(m.meeting_type)}</div>`:''}
+      ${m.agenda_status ? `<div><strong>Agenda:</strong> ${esc(m.agenda_status)}</div>`:''}
+      ${m.last_exported_at ? `<div><strong>Last export:</strong> ${m.last_exported_at.slice(0,16).replace('T',' ')}</div>`:''}
+    </div>
+    ${links.length ? `<div style="margin-top:.75rem;display:flex;gap:.4rem;flex-wrap:wrap">${links.join('')}</div>`:''}
+  `;
+
+  // Final export gating
+  const finalBtn = document.getElementById('md-final-btn');
+  if (s.total > 0 && s.finalized === s.total) {
+    finalBtn.disabled = false;
+    finalBtn.title = 'All items finalized — ready to generate final export';
+  } else {
+    finalBtn.disabled = true;
+    finalBtn.title = `${s.finalized}/${s.total} items finalized — all must be finalized to generate final export`;
+  }
+
+  // Artifacts
+  const mtgLevel = arts.filter(a => !a.appearance_id);
+  document.getElementById('md-artifacts').innerHTML = mtgLevel.length ? mtgLevel.map(a => {
+    const ext = (a.file_path || '').split('.').pop().toLowerCase();
+    const fin = a.is_final ? 'FINAL' : 'DRAFT';
+    const finColor = a.is_final ? 'var(--green)' : 'var(--gray-600)';
+    return `<div class="fi">
+      <div class="fi-info">
+        <div class="ficon ${ext}">${ext.toUpperCase()}</div>
+        <div>
+          <div style="font-size:.82rem;font-weight:500">${esc(a.label || a.file_path.split('/').pop())}</div>
+          <div style="font-size:.7rem;color:${finColor};font-weight:600">${fin}</div>
+        </div>
+      </div>
+      <a class="dlbtn" href="/api/artifact/${a.id}/download">↓ Download</a>
+    </div>`;
+  }).join('') : '<p style="color:var(--gray-400);font-size:.82rem">No exports yet. Click Regenerate Draft to create them.</p>';
+
+  // Cache items for filtering
+  _mdItems = items;
+  _mdMeeting = m;
+  console.log(`[meeting ${m.id}] API returned ${items.length} items; first keys:`,
+    items[0] ? Object.keys(items[0]).slice(0,12) : '(none)');
+
+  // If the API truly returned zero items, tell the user plainly — otherwise
+  // the table just looks "broken".
+  if (items.length === 0) {
+    document.getElementById('md-items').innerHTML = `<tr><td colspan="20" style="padding:1.5rem;text-align:center">
+      <div style="font-size:1.4rem;margin-bottom:.3rem">📭</div>
+      <div style="font-weight:600;color:var(--ink)">This meeting has no appearances stored yet.</div>
+      <div style="font-size:.78rem;color:var(--gray-600);margin-top:.35rem">
+        Either scraping didn't save any items for <b>${esc(m.body_name||'')}</b> on <b>${esc(m.meeting_date||'')}</b>,
+        or they were created as a stub from a cross-stage reference.
+        Try running a fresh <b>Process</b> job on the Home tab for this body/date.
+      </div>
+    </td></tr>`;
+    document.getElementById('md-items-count').textContent = '0 items';
+    return;
+  }
+
+  // Populate filter dropdowns from the data we have
+  const legStatuses = [...new Set(items.map(i => i.current_status).filter(Boolean))].sort();
+  const fileTypes   = [...new Set(items.map(i => i.file_type).filter(Boolean))].sort();
+  const sponsors    = [...new Set(items.map(i => i.sponsor).filter(Boolean))].sort();
+  function fill(id, vals) {
+    const el = document.getElementById(id);
+    while (el.options.length > 1) el.remove(1);
+    vals.forEach(v => el.add(new Option(v, v)));
+  }
+  fill('md-f-legstatus', legStatuses);
+  fill('md-f-filetype',  fileTypes);
+  fill('md-f-sponsor',   sponsors);
+
+  renderItemsGrid();
+}
+
+let _mdItems = [];
+let _mdMeeting = {};
+
+function clearItemFilters() {
+  ['md-f-q','md-f-legstatus','md-f-filetype','md-f-sponsor','md-f-wf','md-f-special']
+    .forEach(id => { const e=document.getElementById(id); if(e) e.value=''; });
+  renderItemsGrid();
+}
+
+function renderItemsGrid() {
+  try { return _renderItemsGrid(); }
+  catch (e) {
+    console.error('renderItemsGrid failed:', e);
+    const tb = document.getElementById('md-items');
+    if (tb) tb.innerHTML = `<tr><td colspan="20" style="padding:1rem;color:var(--red)">
+      <b>Render error:</b> ${(e&&e.message)||e}<br>
+      <span style="font-size:.72rem;color:#64748b">Open DevTools → Console for the full stack trace. Items are loaded (${_mdItems.length}) but couldn't render.</span>
+    </td></tr>`;
+  }
+}
+function _renderItemsGrid() {
+  const q = (document.getElementById('md-f-q')?.value||'').toLowerCase().trim();
+  const ls = document.getElementById('md-f-legstatus')?.value||'';
+  const ft = document.getElementById('md-f-filetype')?.value||'';
+  const sp = document.getElementById('md-f-sponsor')?.value||'';
+  const wf = document.getElementById('md-f-wf')?.value||'';
+  const sx = document.getElementById('md-f-special')?.value||'';
+
+  const m = _mdMeeting || {};
+  const cmteDate = m.meeting_date || '';
+  const bodyLower = (m.body_name||'').toLowerCase();
+  const isBCC = bodyLower.includes('bcc') || bodyLower.includes('board of county');
+
+  const filtered = _mdItems.filter(it => {
+    if (q && !((it.file_number||'').toLowerCase().includes(q) ||
+               (it.short_title||it.appearance_title||'').toLowerCase().includes(q))) return false;
+    if (ls && it.current_status !== ls) return false;
+    if (ft && it.file_type !== ft) return false;
+    if (sp && it.sponsor !== sp) return false;
+    if (wf && it.workflow_status !== wf) return false;
+    if (sx === 'cf' && !it.carried_forward_from_prior) return false;
+    if (sx === 'supp' && !it.is_supplement) return false;
+    if (sx === 'notes' && !it.has_prior_notes) return false;
+    if (sx === 'unnotes' && (it.has_analyst_notes || it.has_reviewer_notes || it.has_finalized_brief)) return false;
+    return true;
+  });
+
+  document.getElementById('md-items-count').textContent =
+    `${filtered.length} of ${_mdItems.length} item(s)`;
+
+  const tbody = document.getElementById('md-items');
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="18" style="padding:1rem;color:var(--gray-400)">No items match these filters.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered.map(it => {
+    const notesChips = [
+      it.has_analyst_notes  ? '<span style="color:#056f3a">📝A</span>' : '',
+      it.has_reviewer_notes ? '<span style="color:#7a1e1e">👁R</span>' : '',
+      it.has_finalized_brief? '<span style="color:var(--green)">✓B</span>' : '',
+    ].filter(Boolean).join(' ') || '—';
+
+    const historyBits = [];
+    if (it.carried_forward_from_prior)
+      historyBits.push('<span class="badge b-cf" title="Notes carried forward">↩ CF</span>');
+    if (it.prior_appearance_count > 0)
+      historyBits.push(`<span class="badge" style="background:var(--blue-lt);color:var(--blue)" title="Prior appearances">↔ ${it.prior_appearance_count}</span>`);
+    if (it.has_prior_notes)
+      historyBits.push('<span class="badge" style="background:#fef3c7;color:#92400e" title="Prior analyst notes exist">★ Prior notes</span>');
+    if (it.is_supplement)
+      historyBits.push('<span class="badge" style="background:#ede9fe;color:#5b21b6" title="Supplement">+ Supp</span>');
+
+    // Cross-stage date/number: always show Cmte Date/# AND BCC Date/# using
+    // stored appearances first, then parsed Legistar lifecycle, then finally
+    // the current-row fallback only if stage matches.
+    const cd = it.committee_appearance_date || '';
+    const cn = it.committee_item_number_x   || '';
+    const bd = it.bcc_appearance_date       || '';
+    const bn = it.bcc_item_number_x         || it.bcc_item_number || '';
+    // Italic + gray means date came from parsed Legistar history (no stored
+    // appearance in AgendaIQ yet). Solid dark means we have the appearance.
+    const cdSrc = it.committee_date_source === 'legistar'
+      ? `<span style="font-style:italic;color:#94a3b8" title="From Legistar legislative history">${cd}</span>`
+      : (cd || '—');
+    const bdSrc = it.bcc_date_source === 'legistar'
+      ? `<span style="font-style:italic;color:#94a3b8" title="From Legistar legislative history">${bd}</span>`
+      : (bd || '—');
+
+    // Inline Links column: ↗ Legistar item page, 📄 Item PDF (local or remote).
+    const linkBits = [];
+    if (it.matter_url) {
+      linkBits.push(`<a href="${esc(it.matter_url)}" target="_blank" onclick="event.stopPropagation()" title="Open Legistar matter page" style="text-decoration:none;font-size:.95rem">↗</a>`);
+    }
+    if (it.item_pdf_url || it.item_pdf_local_path) {
+      linkBits.push(`<a href="/api/appearance/${it.id}/pdf" target="_blank" onclick="event.stopPropagation()" title="Download/open Item PDF" style="text-decoration:none;font-size:.95rem">📄</a>`);
+    }
+    const linksCell = linkBits.length
+      ? `<span style="display:inline-flex;gap:.4rem;align-items:center">${linkBits.join('')}</span>`
+      : `<span style="color:var(--gray-400);font-size:.75rem" title="No Legistar link yet — run Backfill">—</span>`;
+
+    // Explicit Prior Notes column with a checkmark (easier than hunting
+    // through the History badges column).
+    const priorCell = it.has_prior_notes
+      ? `<span title="Prior analyst/reviewer notes exist for this matter" style="color:var(--green);font-weight:700;font-size:1rem">✓</span>`
+      : `<span style="color:var(--gray-400)">—</span>`;
+
+    return `<tr class="clickable" onclick="openDrawer('${esc(it.file_number)}',${it.id})">
+      <td><span class="file-link">${it.file_number||''}</span></td>
+      <td onclick="event.stopPropagation()">${linksCell}</td>
+      <td style="white-space:nowrap;font-size:.73rem">${cdSrc}</td>
+      <td style="font-size:.73rem">${esc(cn)||'—'}</td>
+      <td style="white-space:nowrap;font-size:.73rem">${bdSrc}</td>
+      <td style="font-size:.73rem">${esc(bn)||'—'}</td>
+      <td style="max-width:320px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(it.short_title||it.appearance_title||'')}</td>
+      <td style="font-size:.72rem">${esc(it.file_type||'—')}</td>
+      <td style="font-size:.72rem;font-weight:500">${esc(it.current_status||'—')}</td>
+      <td style="font-size:.72rem">${esc(it.sponsor||'—')}</td>
+      <td style="font-size:.72rem">${esc(it.control_body||'—')}</td>
+      <td style="font-size:.72rem">${renderProgressCell(it)}</td>
+      <td style="text-align:center">${priorCell}</td>
+      <td>${historyBits.join(' ') || '—'}</td>
+      <td>${badge(it.workflow_status)}</td>
+      <td style="font-size:.73rem">${esc(it.assigned_to||'—')}</td>
+      <td style="font-size:.73rem">${esc(it.reviewer||'—')}</td>
+      <td style="font-size:.73rem">${it.due_date||'—'}</td>
+      <td style="font-size:.8rem;white-space:nowrap">${notesChips}</td>
+      <td onclick="event.stopPropagation()">
+        <button class="btn btn-o btn-xs" onclick="exportItem(${it.id},this)">↓</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+async function exportItem(appId, btn) {
+  btn.disabled = true; btn.textContent = '…';
+  const r = await fetch(`/api/appearance/${appId}/export`, {method:'POST'});
+  const d = await r.json();
+  btn.disabled = false; btn.textContent = '↓ Export Item';
+  if (d.files && d.files.length) {
+    d.files.forEach(f => {
+      const a = document.createElement('a');
+      a.href = f.url; a.download = f.name;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    });
+  }
+  // Reload to pick up artifacts
+  if (currentMeetingId) openMeeting(currentMeetingId);
+}
+
+async function regenDraft(meetingId, btnEl) {
+  const id = meetingId || currentMeetingId;
+  if (!id) return;
+  const btn = btnEl || document.getElementById('md-regen-btn');
+  const prev = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = '…'; }
+  const r = await fetch(`/api/meeting/${id}/regenerate`, {method:'POST'});
+  const d = await r.json().catch(()=>({}));
+  if(btn){ btn.disabled = false; btn.textContent = prev || '⟳ Draft'; }
+  if (d && d.artifacts && d.artifacts.length) {
+    toast(`Draft regenerated (${d.artifacts.length} file${d.artifacts.length>1?'s':''})`, 'ok');
+    d.artifacts.forEach(f => {
+      const a = document.createElement('a');
+      a.href = `/api/artifact/${f.id}/download`;
+      a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+    });
+  }
+  if (currentMeetingId === id) openMeeting(id);
+  else loadSavedMeetings();
+}
+
+async function genFinal(meetingId, btnEl) {
+  const id = meetingId || currentMeetingId;
+  if (!id) return;
+  const btn = btnEl || document.getElementById('md-final-btn');
+  const prev = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
+  const r = await fetch(`/api/meeting/${id}/finalize`, {method:'POST'});
+  const d = await r.json();
+  if(btn){ btn.disabled = false; btn.textContent = prev || '★ Export Whole Agenda'; }
+  if (!d.ok) { toast(d.message || 'Cannot generate final export.','err'); return; }
+  toast('Final export generated — downloading…','ok');
+  const files = d.artifacts || d.files || [];
+  if (files.length) {
+    files.forEach(f => {
+      const a = document.createElement('a');
+      a.href = `/api/artifact/${f.id}/download`;
+      a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+    });
+  }
+  if (currentMeetingId === id) openMeeting(id);
+  else loadSavedMeetings();
+}
+
+// ════════════════════════════════════════════════════════════
+// My Items (researcher workload)
+// ════════════════════════════════════════════════════════════
+function initMyItemsFilters() {
+  const rs = document.getElementById('mi-researcher');
+  const st = document.getElementById('mi-status');
+  while (rs.options.length) rs.remove(0);
+  rs.add(new Option(currentUser ? `Me (${currentUser})` : 'Me', currentUser || ''));
+  rs.add(new Option('All Unassigned', '__unassigned__'));
+  (_cfg.team_members || []).forEach(m => rs.add(new Option(m.name, m.name)));
+  while (st.options.length > 1) st.remove(1);
+  ['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived']
+    .forEach(s => st.add(new Option(s, s)));
+}
+
+async function loadMyItems() {
+  const who = document.getElementById('mi-researcher').value;
+  const status = document.getElementById('mi-status').value;
+  const due = document.getElementById('mi-due').value;
+  if (!who) {
+    document.getElementById('mi-tbody').innerHTML =
+      '<tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">Pick a researcher (top-right user menu) to view your assigned items.</td></tr>';
+    document.getElementById('mi-count').textContent = '';
+    return;
+  }
+  let url = `/api/workflow?assigned=${encodeURIComponent(who)}`;
+  if (status) url += `&status=${encodeURIComponent(status)}`;
+  if (due) url += `&due=${encodeURIComponent(due)}`;
+  const r = await fetch(url);
+  const rows = await r.json();
+  document.getElementById('mi-count').textContent = `${rows.length} item(s)`;
+  const tb = document.getElementById('mi-tbody');
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">No items match these filters.</td></tr>';
+    return;
+  }
+  tb.innerHTML = rows.map(a => {
+    const due_cls = a._due_class||'due-none';
+    const due_lbl = a._due_label||a.due_date||'—';
+    const hasNotes = (a.analyst_working_notes||'').trim() ? '📝' : '';
+    return `<tr class="clickable" onclick="openDrawer('${esc(a.file_number)}',${a.id})">
+      <td><span class="file-link">${a.file_number}</span></td>
+      <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.short_title||'')}</td>
+      <td style="white-space:nowrap;font-size:.75rem">${a.meeting_date||''}</td>
+      <td style="font-size:.72rem">${esc(a.body_name||'')}</td>
+      <td>${badge(a.workflow_status)}</td>
+      <td style="font-size:.78rem">${hasNotes}</td>
+      <td class="due-cell ${due_cls}">${due_lbl}</td>
+      <td onclick="event.stopPropagation()">
+        <button class="btn btn-o btn-xs" onclick="openDrawer('${esc(a.file_number)}',${a.id})">Open</button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+// Shared helpers
+// ════════════════════════════════════════════════════════════
+function badge(s) {
+  const k={' ':' ','In Progress':'InProgress','Draft Complete':'DraftComplete','In Review':'InReview'};
+  const cs=k[s]||(s||'').replace(/\s/g,'');
+  return s?`<span class="badge b-${cs}">${s}</span>`:'';
+}
+
+// Render a compact Committee → BCC progress indicator for the grid.
+// Filled dot = this stage has happened (we have a date for it), outlined = no
+// activity recorded at that stage. Supplement marker appears if applicable.
+function renderProgressCell(it) {
+  const hasCmte = !!(it.committee_appearance_date);
+  const hasBcc  = !!(it.bcc_appearance_date);
+  const curStage = (it.agenda_stage || '').toLowerCase();
+  const isSupp = /supplement/.test(curStage);
+  const dot = (filled, active, title) =>
+    `<span title="${esc(title)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;
+      ${filled ? `background:${active ? '#2563eb' : '#94a3b8'};` : 'background:transparent;'}
+      border:2px solid ${active ? '#2563eb' : (filled ? '#94a3b8' : '#cbd5e1')};
+      ${active ? 'box-shadow:0 0 0 3px rgba(37,99,235,.18);' : ''}"></span>`;
+  const link = (filled, label) =>
+    filled
+      ? `<span style="font-weight:600;color:var(--gray-700)">${label}</span>`
+      : `<span style="color:var(--gray-400);font-style:italic">${label}</span>`;
+  return `
+    <div style="display:flex;align-items:center;gap:.35rem;font-size:.7rem;line-height:1">
+      ${dot(hasCmte, curStage.includes('committee'), hasCmte ? 'At committee '+it.committee_appearance_date : 'No committee record')}
+      ${link(hasCmte, 'Cmte')}
+      <span style="color:var(--gray-300)">→</span>
+      ${dot(hasBcc, curStage.includes('bcc'), hasBcc ? 'At BCC '+it.bcc_appearance_date : 'Not yet at BCC')}
+      ${link(hasBcc, 'BCC')}
+      ${isSupp ? '<span style="margin-left:.3rem;background:#ede9fe;color:#5b21b6;padding:.1rem .35rem;border-radius:4px;font-size:.62rem;font-weight:600">+SUPP</span>' : ''}
+    </div>`;
+}
+function esc(s){
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Toast helper — used for backfill / export feedback
+let _toastT=null;
+function toast(msg, kind){
+  let el=document.getElementById('app-toast');
+  if(!el){
+    el=document.createElement('div');
+    el.id='app-toast'; el.className='toast';
+    document.body.appendChild(el);
+  }
+  el.className='toast '+(kind||'')+' show';
+  el.textContent=msg;
+  clearTimeout(_toastT);
+  _toastT=setTimeout(()=>{ el.className='toast '+(kind||''); }, 2800);
+}
+
+// Empty-state renderer — returns HTML
+function emptyState(icon, title, hint, ctaHtml){
+  return `<div class="empty">
+    <div class="icon">${icon||'📭'}</div>
+    <div class="title">${esc(title||'Nothing here yet')}</div>
+    <div class="hint">${hint||''}</div>
+    ${ctaHtml?`<div class="cta">${ctaHtml}</div>`:''}
+  </div>`;
+}
+</script>
+</body>
+</html>"""
+
+
+# ─────────────────────────────────────────────────────────────
+# API Routes
+# ─────────────────────────────────────────────────────────────
+
+@app.before_request
+def ensure_db():
+    init_db()
+
+
+@app.errorhandler(Exception)
+def _json_error(e):
+    """Return JSON for /api/* errors so the frontend never sees an HTML error
+    page (which causes 'Unexpected token <' when parsed as JSON)."""
+    from flask import request as _rq
+    import traceback as _tb, logging as _logging
+    _logging.getLogger("oca-agent").error(
+        "Unhandled error on %s: %s\n%s", _rq.path, e, _tb.format_exc())
+    if _rq.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": str(e)}), 500
+    # Non-API routes: re-raise default behavior
+    raise e
+
+
+@app.route("/")
+def index():
+    from flask import make_response
+    resp = make_response(HTML)
+    # Prevent browser from serving stale JS/CSS during active development
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
+
+
+@app.route("/favicon.ico")
+def favicon():
+    # Silence the 404 noise in the console
+    return ("", 204)
+
+
+@app.route("/api/committees")
+def api_committees():
+    from scraper import MiamiDadeScraper
+    return jsonify(sorted(MiamiDadeScraper().get_committees().keys()))
+
+
+@app.route("/api/stats")
+def api_stats():
+    from search import get_dashboard_stats
+    from workflow import get_overdue_appearances, get_due_soon_appearances, get_unassigned_appearances
+    d = get_dashboard_stats()
+    d["overdue_count"]    = len(get_overdue_appearances())
+    d["due_soon_count"]   = len(get_due_soon_appearances(7))
+    d["unassigned_count"] = len(get_unassigned_appearances())
+    return jsonify(d)
+
+
+@app.route("/api/search")
+def api_search():
+    from search import search_by_file_number, search_by_keyword, search_by_sponsor
+    file_num = request.args.get("file")
+    keyword  = request.args.get("keyword")
+    sponsor  = request.args.get("sponsor")
+    limit    = int(request.args.get("limit", 30))
+    if file_num:
+        result = search_by_file_number(file_num)
+        return jsonify({"type": "matter", "data": result})
+    elif keyword:
+        return jsonify({"type": "list", "data": search_by_keyword(keyword, limit)})
+    elif sponsor:
+        return jsonify({"type": "list", "data": search_by_sponsor(sponsor, limit)})
+    return jsonify({"type": "list", "data": []})
+
+
+@app.route("/api/appearance/<int:app_id>")
+def api_appearance(app_id):
+    from repository import get_appearance_by_id, get_matter_by_file_number, get_meeting_by_id
+    a = get_appearance_by_id(app_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+    m  = get_matter_by_file_number(a["file_number"]) or {}
+    mt = get_meeting_by_id(a["meeting_id"]) or {}
+    a["meeting_date"] = mt.get("meeting_date", "")
+    a["body_name"]    = mt.get("body_name", "")
+    # Attach all appearances for this matter so the Summary tab can render
+    # Research Notes across every stage with timestamps.
+    if m.get("id"):
+        from repository import get_all_appearances_for_matter as _gaam
+        apps = _gaam(m["id"]) or []
+        # enrich each with its meeting date/body so the UI can label by stage
+        for ap in apps:
+            ap_mt = get_meeting_by_id(ap.get("meeting_id")) or {}
+            ap["meeting_date"] = ap_mt.get("meeting_date", "")
+            ap["body_name"]    = ap_mt.get("body_name", "")
+        m["appearances"] = apps
+        # Attach the living legislative-status timeline (parsed from Legistar)
+        try:
+            from lifecycle import get_timeline_for_matter as _gtm
+            m["timeline"] = _gtm(m["id"]) or []
+        except Exception:
+            m["timeline"] = []
+    return jsonify({"appearance": a, "matter": m})
+
+
+@app.route("/api/appearance/<int:app_id>/history")
+def api_appearance_history(app_id):
+    from workflow import get_history
+    return jsonify(get_history(app_id))
+
+
+@app.route("/api/appearance/<int:app_id>/workflow", methods=["POST"])
+def api_workflow_update(app_id):
+    import workflow as wf
+    from repository import get_appearance_by_id, get_meeting_by_id, get_matter_by_file_number
+    d = request.get_json(force=True)
+    by = d.get("changed_by") or "system"
+
+    # Snapshot old values before changes (for notification logic)
+    old_app = get_appearance_by_id(app_id) or {}
+    old_assignee = old_app.get("assigned_to") or ""
+    old_status   = old_app.get("workflow_status") or ""
+
+    if d.get("status"):       wf.set_workflow_status(app_id, d["status"], by)
+    if d.get("assigned_to") is not None:
+        wf.assign_appearance(app_id, d["assigned_to"], by)
+    if d.get("reviewer") is not None:
+        wf.set_reviewer(app_id, d["reviewer"], by)
+    # due_date: present key with "" means clear it; truthy sets it
+    if "due_date" in d:        wf.set_due_date(app_id, d.get("due_date") or "", by)
+    if d.get("priority"):     wf.set_priority(app_id, d["priority"], by)
+
+    # ── Smart notifications ──────────────────────────────────────
+    try:
+        new_app = get_appearance_by_id(app_id) or {}
+        mt = get_meeting_by_id(new_app.get("meeting_id", 0)) or {}
+        matter = get_matter_by_file_number(new_app.get("file_number", "")) or {}
+        # Enrich appearance dict for email templates
+        enriched = dict(new_app)
+        enriched.setdefault("short_title", matter.get("short_title", ""))
+        enriched["meeting_date"] = mt.get("meeting_date", "")
+        enriched["body_name"]    = mt.get("body_name", "")
+
+        new_assignee = enriched.get("assigned_to") or ""
+        new_status   = enriched.get("workflow_status") or ""
+
+        # 1. New assignment → notify assignee
+        if new_assignee and new_assignee != old_assignee:
+            notifications.send_assignment_notification(enriched)
+
+        # 2. Status → Draft Complete → notify reviewer
+        if new_status == "Draft Complete" and old_status != "Draft Complete":
+            notifications.send_draft_complete_notification(enriched)
+
+    except Exception as _e:
+        app.logger.warning(f"Notification error: {_e}")
+
+    return jsonify({"ok": True})
+
+
+@app.route("/api/appearance/<int:app_id>/notes", methods=["POST"])
+def api_notes_update(app_id):
+    import workflow as wf
+    d = request.get_json(force=True)
+    by = d.get("changed_by") or "system"
+    if d.get("working_notes"):   wf.append_working_notes(app_id, d["working_notes"], changed_by=by)
+    if d.get("reviewer_notes"):  wf.append_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
+    if "finalized_brief" in d:   wf.set_finalized_brief(app_id, d.get("finalized_brief") or "", changed_by=by)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/appearance/<int:app_id>/ai", methods=["POST"])
+def api_ai_update(app_id):
+    import workflow as wf
+    d = request.get_json(force=True)
+    by = d.get("changed_by") or "system"
+    wf.update_ai_summary(app_id, d.get("summary", ""), d.get("watch_points"), by)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/appearance/<int:app_id>/export", methods=["POST"])
+def api_export_appearance(app_id):
+    """Per-item export: generate Excel + Word for JUST this appearance.
+    Registers them as item-level artifacts."""
+    from repository import get_appearance_by_id
+    from exporters import export_for_appearance
+    import artifacts as art
+    import workflow as wf
+    a = get_appearance_by_id(app_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+
+    output_dir = Path("output") / f"meeting_{a['meeting_id']}" / f"item_{app_id}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    files = export_for_appearance(app_id, output_dir)
+
+    registered = []
+    for f in files:
+        suffix = f.suffix.lower()
+        if suffix == ".xlsx":
+            atype, label = "excel_draft", f"Item {a.get('file_number','')} — Tracking"
+        elif suffix == ".docx":
+            atype, label = "word_draft",  f"Item {a.get('file_number','')} — Research"
+        else:
+            continue
+        aid = art.register_artifact(
+            atype, f,
+            meeting_id=a["meeting_id"],
+            appearance_id=app_id,
+            label=label,
+            is_final=False,
+            supersede_previous=True,
+        )
+        registered.append(art.get_artifact(aid))
+
+    wf.log_history(app_id, "export", note=f"Regenerated item export ({len(registered)} artifacts)")
+    out = [{"name": Path(r["file_path"]).name,
+            "url":  f"/api/artifact/{r['id']}/download",
+            "label": r.get("label"),
+            "artifact_id": r["id"],
+            "is_final": bool(r.get("is_final"))}
+           for r in registered]
+    return jsonify({"ok": True, "files": out, "meeting_id": a["meeting_id"]})
+
+
+# ── Saved Meetings / Meeting package API ──────────────────────
+
+@app.route("/api/meetings")
+def api_meetings():
+    import meeting_service
+    return jsonify(meeting_service.list_saved_meetings())
+
+
+@app.route("/api/meeting/<int:meeting_id>")
+def api_meeting_detail(meeting_id):
+    import meeting_service
+    pkg = meeting_service.get_meeting_package(meeting_id)
+    if not pkg:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(pkg)
+
+
+@app.route("/api/meeting/<int:meeting_id>/regenerate", methods=["POST"])
+def api_meeting_regenerate(meeting_id):
+    import meeting_service
+    registered = meeting_service.generate_draft_export(meeting_id, Path("output"))
+    return jsonify({"ok": True, "artifacts": registered})
+
+
+@app.route("/api/meeting/<int:meeting_id>/finalize", methods=["POST"])
+def api_meeting_finalize(meeting_id):
+    import meeting_service
+    ok, msg, registered = meeting_service.generate_final_export(meeting_id, Path("output"))
+    return jsonify({"ok": ok, "message": msg, "artifacts": registered})
+
+
+@app.route("/api/meeting/<int:meeting_id>/artifacts")
+def api_meeting_artifacts(meeting_id):
+    import artifacts as art
+    return jsonify(art.get_current_artifacts_for_meeting(meeting_id))
+
+
+# ── Lifecycle / backfill endpoints ────────────────────────────
+
+@app.route("/api/matter/<int:matter_id>/timeline")
+def api_matter_timeline(matter_id):
+    import lifecycle as lc
+    return jsonify(lc.get_timeline_for_matter(matter_id))
+
+
+@app.route("/api/appearance/<int:appearance_id>/timeline")
+def api_appearance_timeline(appearance_id):
+    """Return the full lifecycle for this appearance's matter + every
+    appearance we have in our DB, merged and sorted chronologically."""
+    import lifecycle as lc
+    from repository import get_appearance_by_id, get_all_appearances_for_matter
+    app_row = get_appearance_by_id(appearance_id)
+    if not app_row:
+        return jsonify({"error": "not found"}), 404
+    mid = app_row["matter_id"]
+    history = lc.get_timeline_for_matter(mid)
+    apps = get_all_appearances_for_matter(mid)
+    our_events = []
+    for a in apps:
+        our_events.append({
+            "event_date": a.get("meeting_date", ""),
+            "body_name":  a.get("body_name", ""),
+            "action":     f"On agenda — {a.get('workflow_status','New')}",
+            "source":     "agendaiq",
+            "appearance_id": a["id"],
+            "committee_item_number": a.get("committee_item_number", ""),
+            "bcc_item_number":       a.get("bcc_item_number", ""),
+            "agenda_stage":          a.get("agenda_stage", ""),
+            "has_notes": bool((a.get("analyst_working_notes") or "").strip()
+                               or (a.get("finalized_brief") or "").strip()),
+        })
+    merged = sorted(history + our_events,
+                    key=lambda e: (e.get("event_date") or "", e.get("source") or ""))
+    return jsonify({"matter_id": mid, "events": merged})
+
+
+@app.route("/api/appearance/<int:appearance_id>/pdf")
+def api_appearance_pdf(appearance_id):
+    """Serve the locally-cached item PDF if we have one, otherwise redirect
+    to the remote item_pdf_url."""
+    from flask import send_file, redirect
+    from repository import get_appearance_by_id
+    a = get_appearance_by_id(appearance_id)
+    if not a:
+        return "Not found", 404
+    lp = a.get("item_pdf_local_path") or ""
+    if lp and Path(lp).exists():
+        return send_file(lp, as_attachment=True,
+                         download_name=f"file_{a.get('file_number','item')}.pdf")
+    remote = a.get("item_pdf_url") or ""
+    if remote:
+        return redirect(remote)
+    return "No PDF available", 404
+
+
+@app.route("/api/backfill/status")
+def api_backfill_status():
+    """Quick probe: how many appearances are missing Legistar URLs or have no
+    lifecycle rows. Used by the UI to decide whether to show a nudge banner."""
+    with database.get_db() as conn:
+        total = conn.execute("SELECT COUNT(*) c FROM appearances").fetchone()["c"]
+        missing_url = conn.execute(
+            "SELECT COUNT(*) c FROM appearances WHERE matter_url IS NULL OR matter_url=''"
+        ).fetchone()["c"]
+        missing_pdf = conn.execute(
+            "SELECT COUNT(*) c FROM appearances WHERE (item_pdf_url IS NULL OR item_pdf_url='') "
+            "AND (item_pdf_local_path IS NULL OR item_pdf_local_path='')"
+        ).fetchone()["c"]
+        matters = conn.execute("SELECT COUNT(*) c FROM matters").fetchone()["c"]
+        matters_with_timeline = conn.execute(
+            "SELECT COUNT(DISTINCT matter_id) c FROM matter_timeline"
+        ).fetchone()["c"]
+        # A matter is "unvisited" if we've never attempted lifecycle parse.
+        # Once attempted, lifecycle_refreshed_at is set — even if no events
+        # were found (rare but possible for empty/withdrawn matters).
+        matters_unvisited = conn.execute(
+            """SELECT COUNT(*) c FROM matters
+               WHERE lifecycle_refreshed_at IS NULL OR lifecycle_refreshed_at=''"""
+        ).fetchone()["c"]
+    return jsonify({
+        "total_appearances":      total,
+        "missing_matter_url":     missing_url,
+        "missing_item_pdf":       missing_pdf,
+        "total_matters":          matters,
+        "matters_with_timeline":  matters_with_timeline,
+        "matters_unvisited":      matters_unvisited,
+        "needs_backfill":         (missing_url > 0) or (matters_unvisited > 0),
+    })
+
+
+# ── Background backfill with live progress ────────────────────
+# The backfill re-hits Legistar once per matter and can take several minutes
+# for a full DB. Running it synchronously inside a request blocks every other
+# API call on Flask's single dev thread, making the whole UI appear dead. We
+# run it in a background thread and expose progress via a polled endpoint
+# plus an SSE stream so the UI can show a live progress bar.
+import threading as _threading
+
+_bf_state = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "only_missing": None,
+    "total": 0,
+    "done": 0,
+    "current": "",
+    "events": [],       # rolling log of status lines (last ~30)
+    "summary": None,    # dict when finished
+    "error": None,
+}
+_bf_lock = _threading.Lock()
+
+
+def _bf_log(msg: str):
+    with _bf_lock:
+        _bf_state["current"] = msg
+        _bf_state["events"].append({"ts": now_iso(), "msg": msg})
+        if len(_bf_state["events"]) > 60:
+            _bf_state["events"] = _bf_state["events"][-60:]
+
+
+def _bf_progress(msg: str):
+    # Expected format: "[i/total] …File# XXXX"
+    try:
+        if msg.startswith("[") and "/" in msg and "]" in msg:
+            head = msg[1:msg.index("]")]
+            i, total = head.split("/")
+            with _bf_lock:
+                _bf_state["done"] = int(i)
+                _bf_state["total"] = int(total)
+    except Exception:
+        pass
+    _bf_log(msg)
+
+
+def _run_backfill(only_missing: bool):
+    import lifecycle as lc
+    try:
+        from paths import PDF_CACHE_DIR
+        pdf_dir = PDF_CACHE_DIR
+        _bf_log(f"Starting backfill (only_missing={only_missing})…")
+        summary = lc.backfill_urls_and_lifecycle(
+            pdf_dir,
+            only_missing_urls=only_missing,
+            progress_callback=_bf_progress,
+        )
+        with _bf_lock:
+            _bf_state["summary"] = summary
+            _bf_state["finished_at"] = now_iso()
+            _bf_state["running"] = False
+        _bf_log(
+            f"Done — {summary.get('matters',0)} matters · "
+            f"{summary.get('urls_filled',0)} links · "
+            f"{summary.get('pdfs_downloaded',0)} PDFs · "
+            f"{summary.get('timeline_events',0)} lifecycle events · "
+            f"{summary.get('stub_appearances',0)} committee stubs"
+        )
+    except Exception as e:
+        with _bf_lock:
+            _bf_state["error"] = str(e)
+            _bf_state["finished_at"] = now_iso()
+            _bf_state["running"] = False
+        _bf_log(f"Backfill failed: {e}")
+
+
+@app.route("/api/backfill/urls-and-lifecycle", methods=["POST"])
+def api_backfill():
+    """Kick off the backfill in a background thread. Returns immediately.
+    Poll /api/backfill/progress or subscribe to /api/backfill/stream for
+    live updates."""
+    payload = request.get_json(silent=True) or {}
+    only_missing = bool(payload.get("only_missing", True))
+    with _bf_lock:
+        if _bf_state["running"]:
+            return jsonify({"ok": False, "error": "Already running",
+                            "progress": _bf_public_state()}), 409
+        _bf_state.update({
+            "running": True, "started_at": now_iso(), "finished_at": None,
+            "only_missing": only_missing, "total": 0, "done": 0,
+            "current": "queued…", "events": [], "summary": None, "error": None,
+        })
+    t = _threading.Thread(target=_run_backfill, args=(only_missing,), daemon=True)
+    t.start()
+    return jsonify({"ok": True, "started": True, "progress": _bf_public_state()})
+
+
+def _bf_public_state():
+    with _bf_lock:
+        return {
+            "running":     _bf_state["running"],
+            "started_at":  _bf_state["started_at"],
+            "finished_at": _bf_state["finished_at"],
+            "total":       _bf_state["total"],
+            "done":        _bf_state["done"],
+            "current":     _bf_state["current"],
+            "percent":     round((_bf_state["done"] / _bf_state["total"]) * 100)
+                              if _bf_state["total"] else 0,
+            "events":      list(_bf_state["events"][-20:]),
+            "summary":     _bf_state["summary"],
+            "error":       _bf_state["error"],
+        }
+
+
+@app.route("/api/backfill/progress")
+def api_backfill_progress():
+    return jsonify(_bf_public_state())
+
+
+@app.route("/api/artifact/<int:artifact_id>/download")
+def api_artifact_download(artifact_id):
+    import artifacts as art
+    row = art.get_artifact(artifact_id)
+    if not row:
+        return "Not found", 404
+    fp = Path(row["file_path"])
+    if not fp.exists():
+        return "File missing on disk", 404
+    return send_file(str(fp.resolve()), as_attachment=True, download_name=fp.name)
+
+
+@app.route("/api/workflow")
+def api_workflow():
+    from datetime import datetime, timedelta
+    from search import list_appearances_by_status
+    import db as _db
+
+    status   = request.args.get("status")
+    assigned = request.args.get("assigned")
+    due_filter = request.args.get("due")
+
+    with _db.get_db() as conn:
+        where = ["1=1"]
+        params = []
+        if status:
+            where.append("a.workflow_status=?"); params.append(status)
+        if assigned == "__unassigned__":
+            where.append("(a.assigned_to IS NULL OR a.assigned_to='')")
+        elif assigned:
+            where.append("a.assigned_to=?"); params.append(assigned)
+
+        today = datetime.utcnow().date()
+        if due_filter == "overdue":
+            where.append("a.due_date < ? AND a.due_date != '' AND a.due_date IS NOT NULL")
+            params.append(today.strftime("%Y-%m-%d"))
+        elif due_filter and due_filter.isdigit():
+            cutoff = (today + timedelta(days=int(due_filter))).strftime("%Y-%m-%d")
+            where.append("a.due_date >= ? AND a.due_date <= ? AND a.due_date != ''")
+            params.extend([today.strftime("%Y-%m-%d"), cutoff])
+
+        rows = conn.execute(
+            f"""SELECT a.*, m.file_number, m.short_title, m.sponsor,
+                       mt.meeting_date, mt.body_name
+                FROM appearances a
+                JOIN matters m ON m.id=a.matter_id
+                JOIN meetings mt ON mt.id=a.meeting_id
+                WHERE {' AND '.join(where)}
+                ORDER BY mt.meeting_date DESC, a.id DESC
+                LIMIT 200""",
+            params
+        ).fetchall()
+
+    today_str = today.strftime("%Y-%m-%d")
+    result = []
+    for r in rows:
+        row = dict(r)
+        due = row.get("due_date") or ""
+        if due:
+            if due < today_str: row["_due_class"]="due-over"; row["_due_label"]=f"⚠ {due}"
+            elif due <= (today + timedelta(days=7)).strftime("%Y-%m-%d"):
+                row["_due_class"]="due-soon"; row["_due_label"]=f"⏰ {due}"
+            else: row["_due_class"]="due-ok"; row["_due_label"]=due
+        result.append(row)
+    return jsonify(result)
+
+
+@app.route("/api/config")
+def api_config_get():
+    cfg = notifications.load_config()
+    # Don't send password over wire
+    safe = {k: v for k, v in cfg.items() if k != "smtp_password"}
+    return jsonify(safe)
+
+
+@app.route("/api/config", methods=["POST"])
+def api_config_set():
+    cfg = notifications.load_config()
+    new = request.get_json(force=True)
+    cfg.update(new)
+    notifications.save_config(cfg)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/test-email", methods=["POST"])
+def api_test_email():
+    try:
+        cfg = notifications.load_config()
+        notifications._send_email(cfg, "[AgendaIQ] Test Email",
+            "<p>This is a test email from AgendaIQ. Email notifications are working!</p>")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/run", methods=["POST"])
+def api_run():
+    from oca_agenda_agent_v6 import process_committees
+    from scraper import MiamiDadeScraper
+    from analyzer import AgendaAnalyzer
+
+    data = request.get_json(force=True)
+    date_str      = data.get("date")
+    from_date_str = data.get("from_date")
+    selected      = data.get("committees", [])
+
+    job_id     = str(uuid.uuid4())
+    q          = queue.Queue()
+    output_dir = Path("output") / job_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    JOBS[job_id] = {"status": "running", "queue": q, "output_dir": output_dir, "files": []}
+
+    def _run():
+        try:
+            api_key  = load_api_key()
+            analyzer = AgendaAnalyzer(api_key)
+            scraper  = MiamiDadeScraper()
+            all_c    = scraper.get_committees()
+            matched  = {k: v for k, v in all_c.items() if k in selected} if selected else all_c
+            parsed, mode = (parse_date_arg(from_date_str), "range") if from_date_str \
+                      else (parse_date_arg(date_str), "single")
+
+            def cb(msg):
+                q.put({"type": "progress", "message": msg})
+
+            results = process_committees(matched, parsed, mode, output_dir, analyzer, scraper, cb)
+            files = [f.name for f in sorted(output_dir.glob("*Part1*.xlsx")) +
+                                      sorted(output_dir.glob("*Part2*.docx"))]
+            JOBS[job_id].update({"status": "complete", "files": files})
+            q.put({"type": "complete", "results": results, "files": files})
+        except Exception as exc:
+            JOBS[job_id]["status"] = "error"
+            q.put({"type": "error", "message": str(exc)})
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/stream/<job_id>")
+def api_stream(job_id):
+    if job_id not in JOBS:
+        return jsonify({"error": "not found"}), 404
+    def generate():
+        q = JOBS[job_id]["queue"]
+        while True:
+            try:
+                msg = q.get(timeout=30)
+                yield f"data: {json.dumps(msg)}\n\n"
+                if msg["type"] in ("complete", "error"):
+                    break
+            except queue.Empty:
+                yield f"data: {json.dumps({'type':'ping'})}\n\n"
+    return Response(generate(), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/api/download/<job_id>/<filename>")
+def api_download(job_id, filename):
+    if job_id not in JOBS:
+        return "Not found", 404
+    fp = JOBS[job_id]["output_dir"] / Path(filename).name
+    if not fp.exists():
+        return "Not found", 404
+    return send_file(str(fp.resolve()), as_attachment=True, download_name=fp.name)
+
+
+# ─────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    init_db()
+    notifications.start_background_checker(interval_hours=1)
+    print(f"\n  AgendaIQ v6 → http://localhost:{port}\n")
+    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

@@ -1,0 +1,53 @@
+# Render.com deployment config.
+# Push this repo to GitHub, then in Render: New → Blueprint → point at the repo.
+# Render will read this file and create the service + disk automatically.
+
+services:
+  - type: web
+    name: agendaiq
+    runtime: python
+    plan: starter              # $7/mo — bump to "standard" if you need more RAM
+    region: oregon             # closest to Miami is "ohio"; change if preferred
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -c "from db import init_db; init_db()" && gunicorn app_v6:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 180
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: agendaiq-data
+      mountPath: /data         # matches DATA_DIR below
+      sizeGB: 1                # plenty for SQLite + pdf_cache; bump later if needed
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: PYTHON_VERSION
+        value: "3.11"
+      # Set these in the Render dashboard (do NOT commit secrets to the repo):
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: APP_PASSWORD
+        sync: false            # shared demo password; remove once SSO is in
+
+  # Nightly backup of the SQLite DB to S3 / Backblaze B2
+  - type: cron
+    name: agendaiq-backup
+    runtime: python
+    schedule: "0 7 * * *"      # 07:00 UTC = 03:00 America/New_York
+    buildCommand: pip install -r requirements.txt boto3
+    startCommand: python backup_db.py
+    disk:
+      name: agendaiq-data      # same disk as the web service — shared mount
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: BACKUP_BUCKET
+        sync: false
+      - key: BACKUP_ENDPOINT_URL
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_DEFAULT_REGION
+        sync: false
