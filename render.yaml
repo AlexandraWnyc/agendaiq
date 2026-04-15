@@ -27,27 +27,6 @@ services:
       - key: APP_PASSWORD
         sync: false            # shared demo password; remove once SSO is in
 
-  # Nightly backup of the SQLite DB to S3 / Backblaze B2
-  - type: cron
-    name: agendaiq-backup
-    runtime: python
-    schedule: "0 7 * * *"      # 07:00 UTC = 03:00 America/New_York
-    buildCommand: pip install -r requirements.txt boto3
-    startCommand: python backup_db.py
-    disk:
-      name: agendaiq-data      # same disk as the web service — shared mount
-      mountPath: /data
-      sizeGB: 1
-    envVars:
-      - key: DATA_DIR
-        value: /data
-      - key: BACKUP_BUCKET
-        sync: false
-      - key: BACKUP_ENDPOINT_URL
-        sync: false
-      - key: AWS_ACCESS_KEY_ID
-        sync: false
-      - key: AWS_SECRET_ACCESS_KEY
-        sync: false
-      - key: AWS_DEFAULT_REGION
-        sync: false
+# Nightly backups: Render cron jobs can't share a disk with a web service,
+# so backups run inside the web service itself on an internal timer once
+# BACKUP_BUCKET + AWS creds are set. See backup_db.py + notifications.py.
