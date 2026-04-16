@@ -174,9 +174,34 @@ def get_appearance(matter_id: int, meeting_id: int) -> dict | None:
         return dict(row) if row else None
 
 
-def get_latest_appearance_for_matter(matter_id: int) -> dict | None:
-    """Return the most recent appearance for a matter (by created_at)."""
+def get_latest_appearance_for_matter(matter_id: int,
+                                     before_meeting_id: int | None = None) -> dict | None:
+    """Return the most recent *earlier* appearance for a matter.
+
+    If before_meeting_id is given, only consider appearances whose meeting
+    date is strictly earlier than the meeting identified by before_meeting_id.
+    This prevents carrying notes *backward* from a later stage (e.g. BCC)
+    to an earlier one (e.g. committee).
+    """
     with get_db() as conn:
+        if before_meeting_id is not None:
+            # Get the meeting date of the target meeting
+            target = conn.execute(
+                "SELECT meeting_date FROM meetings WHERE id=?",
+                (before_meeting_id,)
+            ).fetchone()
+            if target:
+                row = conn.execute(
+                    """SELECT a.* FROM appearances a
+                       JOIN meetings m ON m.id = a.meeting_id
+                       WHERE a.matter_id = ?
+                         AND m.meeting_date < ?
+                       ORDER BY m.meeting_date DESC, a.created_at DESC
+                       LIMIT 1""",
+                    (matter_id, target["meeting_date"])
+                ).fetchone()
+                return dict(row) if row else None
+        # Fallback: no meeting context, return most recent by created_at
         row = conn.execute(
             """SELECT * FROM appearances
                WHERE matter_id=?
@@ -224,8 +249,8 @@ def create_or_update_appearance(matter_id: int, meeting_id: int,
                 )
         return app_id, False
 
-    # Determine carry-forward
-    prior = get_latest_appearance_for_matter(matter_id)
+    # Determine carry-forward — only from chronologically earlier meetings
+    prior = get_latest_appearance_for_matter(matter_id, before_meeting_id=meeting_id)
     carried = 1 if prior else 0
     prior_id = prior["id"] if prior else None
 
