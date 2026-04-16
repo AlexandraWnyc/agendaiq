@@ -3218,7 +3218,7 @@ async function _txAutoFetch(videoUrl) {
   const btn = document.getElementById('md-transcript-btn');
   const mid = currentMeetingId;
   const panel = _txGetPanel();
-  panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Searching YouTube…';
+  panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Searching for meeting recording…';
 
   try {
     const body = {meeting_id: mid};
@@ -4396,46 +4396,12 @@ def api_backfill_transcript():
         if _tx_state["running"]:
             return jsonify({"ok": False, "error": "Transcript backfill already running"}), 409
 
-    # If raw transcript was pasted, skip YouTube search entirely
-    # If no video_url provided, do a synchronous YouTube search first
-    # so we can return candidates to the UI if no confident match
-    if not video_url and not raw_transcript:
-        try:
-            import transcript as tx
-            from repository import get_meeting_by_id
-            meeting = get_meeting_by_id(meeting_id)
-            if not meeting:
-                return jsonify({"ok": False, "error": "Meeting not found"}), 404
-            candidates = tx.search_youtube_videos(
-                meeting["body_name"], meeting["meeting_date"]
-            )
-            if not candidates:
-                return jsonify({
-                    "ok": False, "error": "No YouTube videos found matching this meeting",
-                    "candidates": [],
-                })
-            best = candidates[0]
-            if best["match_score"] < 0.4:
-                return jsonify({
-                    "ok": False,
-                    "error": "No confident match found. Best candidate below threshold.",
-                    "candidates": [
-                        {"title": c["title"], "url": c["url"],
-                         "match_score": round(c["match_score"], 3)}
-                        for c in candidates[:5]
-                    ],
-                })
-            # Good match — use it
-            video_url = best["url"]
-        except Exception as e:
-            log.exception("Transcript video search error")
-            return jsonify({"ok": False, "error": str(e)}), 500
-
-    # Start the async pipeline with the resolved video_url
+    # Start the async pipeline — Granicus (Strategy 1) and YouTube (Strategy 2)
+    # are both handled inside backfill_transcript()
     with _tx_lock:
         _tx_state.update({
-            "running": True, "phase": "transcript", "pct": 10,
-            "msg": "Video matched — downloading transcript…",
+            "running": True, "phase": "transcript", "pct": 5,
+            "msg": "Searching for meeting recording…",
             "done": False, "result": None,
         })
 
