@@ -144,6 +144,79 @@ nav{display:flex;gap:.2rem;margin-left:1.25rem}
 @media(max-width:1024px){.g2{grid-template-columns:1fr}.g4{grid-template-columns:1fr 1fr}}
 @media(max-width:640px){.g3{grid-template-columns:1fr 1fr}.g4{grid-template-columns:1fr 1fr}}
 
+/* ════════════════════════════════════════════════════════════
+   MOBILE / TABLET RESPONSIVE
+════════════════════════════════════════════════════════════ */
+@media(max-width:820px){
+  /* Header collapses, nav wraps */
+  header{height:auto;min-height:56px;padding:.5rem .75rem;flex-wrap:wrap;gap:.4rem}
+  .logo h1{font-size:1rem}
+  .logo small{display:none}
+  nav{order:3;width:100%;margin-left:0;overflow-x:auto;padding-bottom:.25rem;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none}
+  nav::-webkit-scrollbar{display:none}
+  .nb{flex-shrink:0;padding:.45rem .7rem;font-size:.78rem}
+  .hbadge{display:none}
+  #current-user-sel{max-width:140px;font-size:.7rem !important}
+
+  /* Pages get less side padding */
+  .pg{margin:1rem auto;padding:0 .65rem}
+  .g2,.g3,.g4{grid-template-columns:1fr !important;gap:.85rem}
+
+  /* Cards full-width, less padding */
+  .card .cb,.card .ch{padding:.85rem .9rem}
+
+  /* Tables: horizontal scroll wrap */
+  .pg table{display:block;overflow-x:auto;white-space:nowrap;
+    -webkit-overflow-scrolling:touch;font-size:.78rem}
+  .pg table th,.pg table td{padding:.45rem .55rem !important}
+
+  /* Drawer becomes a true full-screen sheet */
+  #drawer{width:100vw !important;right:-100vw}
+  #drawer.open{right:0}
+  .dr-header{padding:.75rem .85rem .65rem}
+  .dr-title{font-size:.95rem;padding-right:42px}
+  .dr-tabs{overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .dr-tabs::-webkit-scrollbar{display:none}
+  .dtab{padding:.55rem .8rem;font-size:.74rem;flex-shrink:0}
+  .dr-body{padding:.75rem}
+
+  /* Help modal full-screen on phones */
+  #help-modal > div{max-width:100% !important;width:100% !important;
+    height:100vh;border-radius:0 !important;overflow-y:auto}
+  .htab{padding:.55rem .7rem;font-size:.76rem}
+
+  /* Workflow filters stack */
+  .wf-filters{flex-direction:column;align-items:stretch !important}
+  .wf-filters > div{width:100%}
+  .wf-filters select{width:100%}
+
+  /* Welcome strip tile grid → 1 col */
+  .qa-tile{padding:.6rem .7rem}
+
+  /* Buttons: bigger tap targets */
+  .btn{min-height:38px;padding:.5rem .85rem}
+  .btn-sm{min-height:34px;padding:.4rem .7rem}
+
+  /* Inputs: prevent iOS auto-zoom (font-size must be ≥16px) */
+  input,select,textarea{font-size:16px !important}
+
+  /* Bulk-action button row wraps */
+  .pg [onclick^="bulk"]{margin-bottom:.3rem}
+}
+
+@media(max-width:480px){
+  /* Tighter on phones */
+  .pg{padding:0 .5rem}
+  .logo h1{font-size:.92rem}
+  .nb{font-size:.74rem;padding:.4rem .55rem}
+  .dr-meta{font-size:.7rem;gap:.3rem .8rem}
+  .ds-title{font-size:.66rem}
+  .editable-field{font-size:.78rem;padding:.6rem}
+  /* Hide the v6 chip and Acting-as label text on tiny screens */
+  #current-user-sel{max-width:110px}
+}
+
 /* ── Stats ── */
 .stat{background:var(--gray-50);border:1px solid var(--gray-200);border-radius:8px;
   padding:.75rem;text-align:center}
