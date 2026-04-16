@@ -2,11 +2,21 @@
 app_v6.py — AgendaIQ v6 Web Application (full rebuild)
 Matter Detail Drawer · Workflow Audit Trail · Due-Date Alerts · Cross-linking
 """
-import os, sys, uuid, json, queue, threading
+import os, sys, uuid, json, queue, threading, logging
 from pathlib import Path
 from flask import Flask, Response, jsonify, request, send_file
 
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Configure logging EARLY so all modules (scraper, lifecycle, etc.)
+# can write to stdout via the "oca-agent" logger.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+    stream=sys.stdout,
+    force=True,       # override any prior basicConfig
+)
 
 import db as database
 from db import init_db, get_db
