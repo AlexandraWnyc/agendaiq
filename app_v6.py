@@ -706,6 +706,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     </button>
     <button class="nb" id="nb-myitems" onclick="showPg('myitems')" title="Items assigned to you">My Items</button>
     <button class="nb" id="nb-settings" onclick="showPg('settings')" title="Team & configuration">Settings</button>
+    <button class="nb" id="nb-help" onclick="showPg('help')" title="Help & Reference guide">Help</button>
   </nav>
   <div style="margin-left:auto;display:flex;align-items:center;gap:.55rem;">
     <button class="nb" onclick="showHelp()" title="Quick tour of AgendaIQ"
@@ -1337,6 +1338,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
   </div>
 </div>
 
+<!-- ═══════════════════════════ HELP PAGE ═══════════════════════════ -->
+<div class="pg" id="pg-help">
+  <div id="help-page-content"></div>
+</div>
+
 <!-- ═══════════════════════════ MATTER DETAIL DRAWER ═══════════════════════════ -->
 <div id="drawer-bg" onclick="closeDrawer()"></div>
 <div id="drawer">
@@ -1418,6 +1424,63 @@ function hideHelp(e) {
   const m = document.getElementById('help-modal');
   if (m) m.style.display = 'none';
 }
+function loadHelpPage() {
+  const container = document.getElementById('help-page-content');
+  if (!container) return;
+  if (container.children.length) return; // already loaded
+  // Clone the modal inner content (skip the modal backdrop wrapper)
+  const modal = document.getElementById('help-modal');
+  if (!modal) return;
+  const inner = modal.querySelector(':scope > div'); // the white card
+  if (!inner) return;
+  const clone = inner.cloneNode(true);
+  // Remove the close button and adjust header for page context
+  const closeBtn = clone.querySelector('button[onclick*="hideHelp"]');
+  if (closeBtn) closeBtn.remove();
+  // Remove max-height constraint on the content area
+  const contentArea = clone.querySelector('[style*="max-height"]');
+  if (contentArea) contentArea.style.maxHeight = 'none';
+  // Re-wire the tab switches to target the cloned panes
+  clone.querySelectorAll('.htab').forEach(btn => {
+    const origClick = btn.getAttribute('onclick') || '';
+    const m = origClick.match(/switchHelpTab\('(\w+)'/);
+    if (m) {
+      const tab = m[1];
+      btn.onclick = function() {
+        clone.querySelectorAll('.htab').forEach(b=>b.classList.remove('on'));
+        clone.querySelectorAll('.hpane').forEach(p=>{p.classList.remove('on');p.style.display='none';});
+        this.classList.add('on');
+        const pane = clone.querySelector('#hpane-'+tab) || clone.querySelectorAll('.hpane')[['tour','howto','columns','statuses','tabs'].indexOf(tab)];
+        if (pane) { pane.classList.add('on'); pane.style.display='block'; }
+      };
+    }
+  });
+  // Give cloned panes unique IDs so they don't collide with modal
+  clone.querySelectorAll('[id^="hpane-"]').forEach(p => {
+    p.id = 'pg-' + p.id;
+  });
+  // Re-wire cloned tab clicks to use new IDs
+  clone.querySelectorAll('.htab').forEach(btn => {
+    const origClick = btn.getAttribute('onclick') || '';
+    btn.removeAttribute('onclick');
+  });
+  clone.querySelectorAll('.htab').forEach((btn, i) => {
+    const tabs = ['tour','howto','columns','statuses','tabs'];
+    btn.onclick = function() {
+      clone.querySelectorAll('.htab').forEach(b=>b.classList.remove('on'));
+      clone.querySelectorAll('.hpane').forEach(p=>{p.classList.remove('on');p.style.display='none';});
+      this.classList.add('on');
+      const pane = clone.querySelector('#pg-hpane-'+tabs[i]);
+      if (pane) { pane.classList.add('on'); pane.style.display='block'; }
+    };
+  });
+  clone.style.boxShadow = '0 4px 20px rgba(0,0,0,.08)';
+  clone.style.borderRadius = '14px';
+  clone.style.overflow = 'hidden';
+  clone.style.border = '1px solid var(--gray-200)';
+  container.appendChild(clone);
+}
+
 function dismissWelcome() {
   const el = document.getElementById('welcome-strip');
   if (el) el.style.display = 'none';
@@ -1443,6 +1506,7 @@ function showPg(name) {
   if (name==='settings')  loadSettings();
   if (name==='meetings')  loadSavedMeetings();
   if (name==='myitems')   { initMyItemsFilters(); loadMyItems(); }
+  if (name==='help')      loadHelpPage();
 }
 
 // ════════════════════════════════════════════════════════════
