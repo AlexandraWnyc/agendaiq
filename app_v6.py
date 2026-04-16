@@ -1066,7 +1066,6 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div style="margin-left:auto;display:flex;gap:.4rem;align-items:flex-end">
       <button class="btn btn-o btn-sm" onclick="bulkAssign()">Bulk Assign</button>
       <button class="btn btn-o btn-sm" onclick="bulkStatus()">Bulk Status</button>
-      <button class="btn btn-o btn-sm" onclick="bulkDueDate()">Bulk Due Date</button>
     </div>
   </div>
   <div class="card">
@@ -1655,7 +1654,7 @@ function renderResultFiles(jid,files) {
           <div style="font-size:.7rem;color:var(--gray-400)">${ext==='xlsx'?'Excel Tracking':'Part 1 — Agenda Debrief (deliverable)'}</div>
         </div>
       </div>
-      <a class="dlbtn" href="/api/download/${jid}/${encodeURIComponent(f)}">↓ Download</a>
+      <a class="dlbtn" href="/api/download/${jid}/${encodeURIComponent(f)}" download="${esc(f)}">↓ Download</a>
     </div>`;}).join('')
     :'<p style="color:var(--gray-400);font-size:.82rem">No new files — all items may already be processed.</p>';
   card.style.display='';
@@ -1865,15 +1864,24 @@ async function bulkAssign() {
   const members=(_cfg.team_members||[]).map(m=>m.name);
   if(!members.length){alert('No team members configured. Add team members in Settings first.');return;}
   const opts=members.map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  const d=new Date(); d.setDate(d.getDate()+7);
+  const defaultDue=d.toISOString().slice(0,10);
   showBulkModal(
-    `Assign ${ids.length} item(s) to…`,
-    `<select id="bulk-assign-sel" style="width:100%;margin:0;">${opts}</select>`,
+    `Assign ${ids.length} item(s)`,
+    `<label style="font-size:.78rem;color:var(--gray-600);display:block;margin-bottom:.25rem">Assign to</label>
+     <select id="bulk-assign-sel" style="width:100%;margin:0;">${opts}</select>
+     <label style="font-size:.78rem;color:var(--gray-600);display:block;margin-top:.65rem;margin-bottom:.25rem">Due date <span style="color:var(--gray-400)">(optional)</span></label>
+     <input type="date" id="bulk-assign-due" value="${defaultDue}" style="width:100%;margin:0;">
+     <div style="margin-top:.3rem;font-size:.7rem;color:var(--gray-400)">Leave blank to skip setting a due date.</div>`,
     async ()=>{
       const person=document.getElementById('bulk-assign-sel')?.value;
       if(!person)return;
+      const due=document.getElementById('bulk-assign-due')?.value||'';
+      const payload={assigned_to:person,changed_by:currentUser};
+      if(due) payload.due_date=due;
       await Promise.all(ids.map(id=>
         fetch(`/api/appearance/${id}/workflow`,{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({assigned_to:person,changed_by:currentUser})})
+          body:JSON.stringify(payload)})
       ));
       loadWorkflow(); loadDashboard();
     }
@@ -2247,16 +2255,30 @@ function renderDrawerNotes(body, app) {
     <hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
     <div class="ds">
       <div class="ds-title">ANALYST WORKING NOTES</div>
-      ${wn ? `<div class="editable-field" style="margin-bottom:.6rem;font-size:.78rem">${esc(wn)}</div>` : ''}
-      <textarea id="new-working-note" placeholder="Add working note… (will be appended with timestamp)"></textarea>
-      <button class="btn btn-s btn-sm" onclick="addNote('working')">Append Note</button>
+      <textarea id="edit-working-notes" style="min-height:120px;font-size:.78rem;margin-bottom:.4rem"
+        placeholder="Working notes — editable. Changes are saved when you click Save.">${esc(wn)}</textarea>
+      <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.5rem">
+        <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Notes</button>
+        <span id="wn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
+      </div>
+      <div style="border-top:1px dashed var(--gray-200);padding-top:.5rem;margin-top:.25rem">
+        <textarea id="new-working-note" rows="2" placeholder="Quick append — add a timestamped note…"></textarea>
+        <button class="btn btn-s btn-sm" onclick="addNote('working')">+ Append Timestamped Note</button>
+      </div>
     </div>
     <hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
     <div class="ds">
       <div class="ds-title">REVIEWER NOTES</div>
-      ${rn ? `<div class="editable-field" style="margin-bottom:.6rem;font-size:.78rem">${esc(rn)}</div>` : ''}
-      <textarea id="new-reviewer-note" placeholder="Add reviewer note…"></textarea>
-      <button class="btn btn-s btn-sm" onclick="addNote('reviewer')">Append Note</button>
+      <textarea id="edit-reviewer-notes" style="min-height:80px;font-size:.78rem;margin-bottom:.4rem"
+        placeholder="Reviewer notes — editable.">${esc(rn)}</textarea>
+      <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.5rem">
+        <button class="btn btn-p btn-sm" onclick="saveFullNotes('reviewer')">Save Notes</button>
+        <span id="rn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
+      </div>
+      <div style="border-top:1px dashed var(--gray-200);padding-top:.5rem;margin-top:.25rem">
+        <textarea id="new-reviewer-note" rows="2" placeholder="Quick append — add a timestamped note…"></textarea>
+        <button class="btn btn-s btn-sm" onclick="addNote('reviewer')">+ Append Timestamped Note</button>
+      </div>
     </div>
     <div style="margin-top:1rem;padding:.55rem .75rem;background:#fef3c7;border:1px solid #fde68a;
       border-radius:7px;font-size:.72rem;color:#78350f">
@@ -2449,6 +2471,22 @@ async function saveWorkflowFromDrawer() {
   _drData.appData=ar.appearance;
 }
 
+async function saveFullNotes(type) {
+  if(!currentAppId)return;
+  const field = type==='working' ? 'edit-working-notes' : 'edit-reviewer-notes';
+  const msgEl = type==='working' ? 'wn-save-msg' : 'rn-save-msg';
+  const val = document.getElementById(field)?.value || '';
+  const key = type==='working' ? 'analyst_working_notes' : 'reviewer_notes';
+  await fetch(`/api/appearance/${currentAppId}/notes`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({[key]:val,replace:true,changed_by:currentUser})
+  });
+  const m=document.getElementById(msgEl);
+  if(m){m.textContent='✓ Saved';m.style.display='';setTimeout(()=>m.style.display='none',2500);}
+  const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+  _drData.appData=ar.appearance;
+}
+
 async function addNote(type) {
   if(!currentAppId)return;
   const el=document.getElementById(`new-${type==='working'?'working':'reviewer'}-note`);
@@ -2553,20 +2591,47 @@ function renderDrawerApps(body, matter) {
       badge(a.workflow_status||'New'),
     ].filter(Boolean).join(' ');
 
-    const notesSection = hasAnyNotes ? `
+    // Separate change-detection notes from regular analyst notes
+    let changeBlock = '';
+    let regularNotes = analyst;
+    const chIdx = analyst.indexOf('[Changes from committee to BCC version]');
+    if (chIdx >= 0) {
+      changeBlock = analyst.slice(chIdx + '[Changes from committee to BCC version]'.length).split('\n\n[')[0].trim();
+      regularNotes = (analyst.slice(0, chIdx) + analyst.slice(chIdx).replace(/\[Changes from committee to BCC version\][^\[]*/, '')).trim();
+    }
+    // Also separate carried-forward notes
+    let carriedBlock = '';
+    const cfIdx = regularNotes.indexOf('[Carried from prior committee appearance]');
+    if (cfIdx >= 0) {
+      carriedBlock = regularNotes.slice(cfIdx + '[Carried from prior committee appearance]'.length).split('\n\n[')[0].trim();
+      regularNotes = (regularNotes.slice(0, cfIdx) + regularNotes.slice(cfIdx).replace(/\[Carried from prior committee appearance\][^\[]*/, '')).trim();
+    }
+    const hasContent = regularNotes||carriedBlock||changeBlock||reviewer;
+
+    const notesSection = hasContent ? `
       <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:7px;
         padding:.55rem .75rem;margin-top:.55rem;font-size:.78rem;line-height:1.55">
-        ${analyst ? `
+        ${changeBlock ? `
+          <div style="margin-bottom:.5rem;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:.5rem .65rem">
+            <div style="font-weight:600;color:#991b1b;font-size:.7rem;letter-spacing:.4px">⚠ CHANGES DETECTED (COMMITTEE → BCC)</div>
+            <div style="white-space:pre-wrap;color:#7f1d1d;margin-top:.25rem">${esc(changeBlock).slice(0,600)}${changeBlock.length>600?'…':''}</div>
+          </div>`:''}
+        ${carriedBlock ? `
+          <div style="margin-bottom:.5rem;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:.5rem .65rem">
+            <div style="font-weight:600;color:#92400e;font-size:.7rem;letter-spacing:.4px">↩ CARRIED FROM COMMITTEE</div>
+            <div style="white-space:pre-wrap;color:#78350f;margin-top:.25rem">${esc(carriedBlock).slice(0,600)}${carriedBlock.length>600?'…':''}</div>
+          </div>`:''}
+        ${regularNotes ? `
           <div style="margin-bottom:.4rem">
             <div style="font-weight:600;color:#056f3a;font-size:.7rem;letter-spacing:.4px">📝 ANALYST NOTES</div>
-            <div style="white-space:pre-wrap;color:var(--gray-800)">${esc(analyst).slice(0,800)}${analyst.length>800?'…':''}</div>
+            <div style="white-space:pre-wrap;color:var(--gray-800)">${esc(regularNotes).slice(0,800)}${regularNotes.length>800?'…':''}</div>
           </div>`:''}
         ${reviewer ? `
           <div style="margin-bottom:.4rem">
             <div style="font-weight:600;color:#7a1e1e;font-size:.7rem;letter-spacing:.4px">👁 REVIEWER NOTES</div>
             <div style="white-space:pre-wrap;color:var(--gray-800)">${esc(reviewer).slice(0,800)}${reviewer.length>800?'…':''}</div>
           </div>`:''}
-        ${!isCurrent && hasAnyNotes ? `
+        ${!isCurrent && hasContent ? `
           <div style="margin-top:.55rem;text-align:right">
             <button class="btn btn-o btn-xs" onclick="event.stopPropagation();copyPriorNotes(${a.id})">
               ⧉ Copy prior notes into current
@@ -2652,7 +2717,7 @@ async function exportAndDownload() {
     // Create temporary links and click them
     d.files.forEach(f=>{
       const a=document.createElement('a');
-      a.href=f.url; a.download=f.name; document.body.appendChild(a); a.click();
+      a.href=f.url; a.download=f.name||''; a.target='_self'; document.body.appendChild(a); a.click();
       document.body.removeChild(a);
     });
   }
@@ -3045,7 +3110,7 @@ function renderMeetingDetail(pkg) {
           <div style="font-size:.7rem;color:${finColor};font-weight:600">${fin}</div>
         </div>
       </div>
-      <a class="dlbtn" href="/api/artifact/${a.id}/download">↓ Download</a>
+      <a class="dlbtn" href="/api/artifact/${a.id}/download" download="${esc(a.file_path?.split('/').pop()||'')}">↓ Download</a>
     </div>`;
   }).join('') : '<p style="color:var(--gray-400);font-size:.82rem">No exports yet. Click Regenerate Draft to create them.</p>';
 
@@ -3251,7 +3316,7 @@ async function regenDraft(meetingId, btnEl) {
     d.artifacts.forEach(f => {
       const a = document.createElement('a');
       a.href = `/api/artifact/${f.id}/download`;
-      a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+      a.download = f.name || f.label || ''; a.target='_self'; document.body.appendChild(a); a.click(); a.remove();
     });
   }
   if (currentMeetingId === id) openMeeting(id);
@@ -3274,7 +3339,7 @@ async function genFinal(meetingId, btnEl) {
     files.forEach(f => {
       const a = document.createElement('a');
       a.href = `/api/artifact/${f.id}/download`;
-      a.download = ''; document.body.appendChild(a); a.click(); a.remove();
+      a.download = f.name || f.label || ''; a.target='_self'; document.body.appendChild(a); a.click(); a.remove();
     });
   }
   if (currentMeetingId === id) openMeeting(id);
@@ -3576,8 +3641,15 @@ def api_notes_update(app_id):
     import workflow as wf
     d = request.get_json(force=True)
     by = d.get("changed_by") or "system"
-    if d.get("working_notes"):   wf.append_working_notes(app_id, d["working_notes"], changed_by=by)
-    if d.get("reviewer_notes"):  wf.append_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
+    if d.get("replace"):
+        # Full-replace mode: overwrite the entire field
+        if "analyst_working_notes" in d:
+            wf.replace_working_notes(app_id, d["analyst_working_notes"], changed_by=by)
+        if "reviewer_notes" in d:
+            wf.replace_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
+    else:
+        if d.get("working_notes"):   wf.append_working_notes(app_id, d["working_notes"], changed_by=by)
+        if d.get("reviewer_notes"):  wf.append_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
     if "finalized_brief" in d:   wf.set_finalized_brief(app_id, d.get("finalized_brief") or "", changed_by=by)
     return jsonify({"ok": True})
 

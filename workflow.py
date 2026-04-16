@@ -163,6 +163,12 @@ def append_reviewer_notes(appearance_id: int, note: str, replace: bool = False,
     log_history(appearance_id, "reviewer_note_added", note=note[:200], changed_by=changed_by)
 
 
+def replace_working_notes(appearance_id: int, notes: str, changed_by: str = None):
+    append_working_notes(appearance_id, notes, replace=True, changed_by=changed_by)
+
+def replace_reviewer_notes(appearance_id: int, notes: str, changed_by: str = None):
+    append_reviewer_notes(appearance_id, notes, replace=True, changed_by=changed_by)
+
 def update_ai_summary(appearance_id: int, summary: str, watch_points: str = None,
                        changed_by: str = None):
     """Allow analysts to edit the AI-generated summary inline."""
