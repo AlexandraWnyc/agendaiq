@@ -9,7 +9,12 @@ services:
     plan: starter              # $7/mo — bump to "standard" if you need more RAM
     region: oregon             # closest to Miami is "ohio"; change if preferred
     buildCommand: pip install -r requirements.txt
-    startCommand: python -c "from db import init_db; init_db()" && gunicorn app_v6:app --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 180
+    # NOTE: workers=1 is REQUIRED. The analyze pipeline uses an in-memory
+    # JOBS dict keyed by job_id. With >1 worker the SSE stream request
+    # often lands on a worker that doesn't have that job → progress box
+    # stays empty even though analysis is running. threads=8 gives plenty
+    # of concurrency (SSE connections are I/O-bound).
+    startCommand: python -c "from db import init_db; init_db()" && gunicorn app_v6:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 300
     healthCheckPath: /healthz
     autoDeploy: true
     disk:

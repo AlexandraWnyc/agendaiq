@@ -288,6 +288,25 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE appearances ADD COLUMN analysis_cached_tokens INTEGER",
     "ALTER TABLE appearances ADD COLUMN analysis_at TEXT",
     "CREATE INDEX IF NOT EXISTS idx_app_analysis_hash ON appearances(analysis_input_hash)",
+
+    # ── AI Chat per appearance ──────────────────────────────
+    # Each researcher can have a private conversation with the AI about
+    # a specific agenda item. Chats are scoped to (appearance_id, user)
+    # so they stay private. Users can append selected AI responses to
+    # their working notes or Part 1 summary via the UI.
+    """CREATE TABLE IF NOT EXISTS chat_messages (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        appearance_id INTEGER NOT NULL,
+        username      TEXT NOT NULL,
+        role          TEXT NOT NULL CHECK(role IN ('user','assistant')),
+        content       TEXT NOT NULL,
+        web_search    INTEGER DEFAULT 0,
+        appended_to   TEXT,
+        created_at    TEXT NOT NULL,
+        FOREIGN KEY (appearance_id) REFERENCES appearances(id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_chat_app_user ON chat_messages(appearance_id, username)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_created  ON chat_messages(created_at)",
 ]
 
 # Meeting package status values

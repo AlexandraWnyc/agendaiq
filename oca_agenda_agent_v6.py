@@ -77,9 +77,29 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
     total_files = 0
     results_summary = []
 
+    # ── Progress helper ───────────────────────────────────────
+    # `progress_callback` may be the old 1-arg callable (just a message) or
+    # a new signature (message, phase=..., pct=...). We wrap it so both
+    # work. `phase` is one of: scanning, analyzing, exporting, done.
+    def _emit(message: str, phase: str | None = None, pct: float | None = None):
+        if not progress_callback:
+            return
+        try:
+            progress_callback(message, phase=phase, pct=pct)
+        except TypeError:
+            # Old signature — fall back to message-only
+            progress_callback(message)
+
+    _emit("Starting — scanning Legistar for matching agendas…",
+          phase="scanning", pct=1)
+
+    # Rough progress model: scanning = 0-15%, analyzing = 15-90%, exporting = 90-100%
+    n_committees = max(1, len(committees))
+
     for ci, (cname, ccode) in enumerate(committees.items()):
-        if progress_callback:
-            progress_callback(f"Processing {cname}... ({ci+1}/{len(committees)})")
+        cmte_base_pct = 1 + (ci / n_committees) * 14  # scanning phase 1-15%
+        _emit(f"Scanning {cname} for matching agendas ({ci+1}/{len(committees)})…",
+              phase="scanning", pct=cmte_base_pct)
 
         log.info(f"\n  {cname}")
         if mode == "single":
@@ -89,16 +109,22 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
 
         if not matching_dates:
             log.info(f"  No matching agendas")
+            _emit(f"{cname}: no agenda found for this date",
+                  phase="scanning", pct=cmte_base_pct)
             results_summary.append({
                 "committee": cname, "status": "No agenda found", "items": 0, "new": 0
             })
             continue
 
         for adate in matching_dates:
+            _emit(f"{cname} ({adate}): reading agenda item list…",
+                  phase="scanning", pct=cmte_base_pct + 2)
             items = scraper.get_agenda_items(ccode, cname, adate)
             log.info(f"  {adate}: {len(items)} items on site")
 
             if not items:
+                _emit(f"{cname} ({adate}): 0 items on agenda — skipping",
+                      phase="scanning", pct=cmte_base_pct + 3)
                 continue
 
             # Determine stage/meeting_type from body name.
@@ -127,6 +153,8 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
 
             if not new_items:
                 log.info(f"  SKIPPING: All {len(items)} items already in DB")
+                _emit(f"{cname} ({adate}): all {len(items)} items already analyzed — skipping",
+                      phase="scanning", pct=cmte_base_pct + 5)
                 results_summary.append({
                     "committee": cname, "date": adate,
                     "status": f"Skipped (all {len(items)} items already processed)",
@@ -135,18 +163,22 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 continue
 
             log.info(f"  {len(new_items)} new items to process (out of {len(items)} total)")
+            _emit(f"{cname} ({adate}): {len(new_items)} new item(s) to analyze "
+                  f"(out of {len(items)} total on agenda)",
+                  phase="analyzing", pct=15)
 
             processed_appearances = []
+            n_new = max(1, len(new_items))
 
             for i, item in enumerate(new_items, 1):
                 file_num = str(item.get("matter_id", ""))
                 if not file_num:
                     continue
 
-                if progress_callback:
-                    progress_callback(
-                        f"{cname}: item {i}/{len(new_items)} (File# {file_num})"
-                    )
+                # analyzing phase covers pct 15% → 90%
+                item_pct = 15 + ((i - 1) / n_new) * 75
+                _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) — fetching details…",
+                      phase="analyzing", pct=item_pct)
                 log.info(f"    [{i}/{len(new_items)}] File# {file_num}...")
 
                 # Fetch routing info from matter.asp
@@ -263,11 +295,17 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 item_pdf_local = ""
                 if item.get("pdf_path"):
                     item_pdf_local = item["pdf_path"]
+                    _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) — reading cached PDF…",
+                          phase="analyzing", pct=item_pct + 1)
                     pdf_text = extract_pdf_text(Path(item["pdf_path"]))
                 elif item.get("pdf_url"):
+                    _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) — downloading PDF…",
+                          phase="analyzing", pct=item_pct + 1)
                     pp = scraper.download_pdf(item["pdf_url"], pdf_dir)
                     if pp:
                         item_pdf_local = str(pp)
+                        _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) — extracting text from PDF…",
+                              phase="analyzing", pct=item_pct + 2)
                         pdf_text = extract_pdf_text(pp)
 
                 # Persist the local PDF path on the appearance if we got one
@@ -342,6 +380,9 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                     if cached:
                         log.info(f"    HIT cache (from appearance "
                                  f"{cached['source_appearance_id']}) — skipping API call")
+                        _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) "
+                              "— reused cached analysis (\u2714 saved API call)",
+                              phase="analyzing", pct=item_pct + 60)
                         part1 = cached["part1"]
                         part2 = cached["part2"]
                         full  = (part1 + "\n\n" + part2).strip()
@@ -359,6 +400,9 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                                      "cache_read_input_tokens": 0,
                                      "cache_creation_input_tokens": 0}
                     else:
+                        _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) "
+                              "— analyzing with Claude (Part 1 + Part 2)…",
+                              phase="analyzing", pct=item_pct + 20)
                         part1, part2, full, analysis_meta = analyzer.analyze_item(
                             display,
                             item.get("short_title", item.get("title", "")),
@@ -367,6 +411,11 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                             item.get("page_text", ""),
                             prior_context=prior_context,
                         )
+                        _usage_dbg = (analysis_meta or {}).get("usage") or {}
+                        _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) "
+                              f"— Claude responded ({_usage_dbg.get('input_tokens', 0):,} in / "
+                              f"{_usage_dbg.get('output_tokens', 0):,} out tokens)",
+                              phase="analyzing", pct=item_pct + 55)
                         time.sleep(20)
 
                         # ── Leg history summary ───────────────────
@@ -376,6 +425,9 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                                      "cache_creation_input_tokens": 0}
                         raw_hist = item.get("legislative_history_raw", "")
                         if raw_hist and len(raw_hist) > 50:
+                            _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) "
+                                  "— summarizing legislative history…",
+                                  phase="analyzing", pct=item_pct + 65)
                             leg_summary, leg_usage = analyzer.summarize_leg_history(
                                 raw_hist, item.get("short_title", "")
                             )
@@ -425,9 +477,13 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
 
             # ── Generate exports ─────────────────────────────────
             if processed_appearances:
+                _emit(f"  Generating Excel + Word exports for {cname}...",
+                      phase="exporting", pct=92)
                 gen_files = exporters.export_for_meeting(meeting_id, output_dir)
                 total_files += len(gen_files)
                 _log_updates(output_dir, cname, new_items, adate)
+                _emit(f"  Created {len(gen_files)} export file(s) for {cname}.",
+                      phase="exporting", pct=96)
 
                 results_summary.append({
                     "committee": cname,
@@ -438,6 +494,8 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                     "meeting_id": meeting_id,
                 })
 
+    _emit(f"Done — {total_items} item(s) processed, {total_files} export file(s) created.",
+          phase="done", pct=100)
     return {
         "total_items_analyzed": total_items,
         "total_new_items":      total_new,

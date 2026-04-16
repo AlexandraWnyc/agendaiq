@@ -9,13 +9,28 @@ from flask import Flask, Response, jsonify, request, send_file
 sys.path.insert(0, str(Path(__file__).parent))
 
 import db as database
-from db import init_db
+from db import init_db, get_db
 from utils import load_api_key, parse_date_arg, now_iso
 from schema import WORKFLOW_STATUSES
 import notifications
 
 app = Flask(__name__)
 JOBS: dict = {}
+
+
+def _current_user() -> str:
+    """Extract the username from Basic Auth header, or 'anonymous'."""
+    auth = request.headers.get("Authorization", "")
+    if auth.lower().startswith("basic "):
+        try:
+            import base64
+            raw = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8", "ignore")
+            user, _, _ = raw.partition(":")
+            if user:
+                return user
+        except Exception:
+            pass
+    return "anonymous"
 
 # ─────────────────────────────────────────────────────────────
 # Optional shared-password gate (for cloud demo before SSO lands).
@@ -370,6 +385,27 @@ a.dlbtn:hover{background:var(--blue)}
 .app-row .date{font-size:.78rem;font-weight:600;color:var(--gray-800);min-width:80px}
 .app-row .body{font-size:.75rem;color:var(--gray-600);flex:1}
 .app-row .right{display:flex;align-items:center;gap:.4rem}
+
+/* ── AI Chat in drawer ── */
+.chat-wrap{display:flex;flex-direction:column;height:calc(100vh - 220px);overflow:hidden}
+.chat-msgs{flex:1;overflow-y:auto;padding:.5rem 0;display:flex;flex-direction:column;gap:.5rem}
+.chat-msg{padding:.5rem .75rem;border-radius:10px;font-size:.82rem;line-height:1.45;max-width:88%;white-space:pre-wrap;word-wrap:break-word}
+.chat-msg.user{background:var(--blue1);color:#fff;align-self:flex-end;border-bottom-right-radius:3px}
+.chat-msg.assistant{background:var(--gray-100);color:var(--gray-800);align-self:flex-start;border-bottom-left-radius:3px}
+.chat-msg .chat-actions{margin-top:.35rem;display:flex;gap:.4rem}
+.chat-msg .chat-actions button{font-size:.68rem;padding:1px 6px;border-radius:4px;border:1px solid var(--gray-300);
+  background:#fff;color:var(--gray-600);cursor:pointer;transition:all .15s}
+.chat-msg .chat-actions button:hover{border-color:var(--blue2);color:var(--blue2)}
+.chat-msg .chat-actions .appended{color:var(--green);border-color:var(--green);cursor:default}
+.chat-input-row{display:flex;gap:.4rem;padding:.5rem 0 0;border-top:1px solid var(--gray-200);align-items:flex-end}
+.chat-input-row textarea{flex:1;font-size:.82rem;border:1px solid var(--gray-300);border-radius:8px;padding:.45rem .6rem;
+  resize:none;min-height:38px;max-height:100px;font-family:inherit;line-height:1.4}
+.chat-input-row textarea:focus{border-color:var(--blue2);outline:none;box-shadow:0 0 0 2px rgba(37,99,235,.12)}
+.chat-send-btn{padding:.4rem .75rem;border-radius:8px;background:var(--blue2);color:#fff;
+  font-size:.8rem;font-weight:600;border:none;cursor:pointer;white-space:nowrap;height:38px}
+.chat-send-btn:disabled{opacity:.5;cursor:not-allowed}
+.chat-ws-toggle{display:flex;align-items:center;gap:.35rem;font-size:.72rem;color:var(--gray-500);padding:.25rem 0}
+.chat-ws-toggle input{margin:0}
 
 /* ── Workflow page ── */
 .wf-filters{display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:1rem;align-items:flex-end}
@@ -761,6 +797,14 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           <div class="howto-q">The committee date/number columns are empty — what do I do?</div>
           <div class="howto-a">Click the yellow <em>⚠ Missing data</em> banner on the Meetings page and run the Backfill. It pulls Legistar legislative history for every item and back-fills prior committee appearances.</div>
         </div>
+        <div class="howto-item">
+          <div class="howto-q">What do the progress phases (Scanning, Analyzing, Exporting) mean?</div>
+          <div class="howto-a">When you run an analysis, the progress bar shows three phases: <strong>Scanning</strong> (checking Legistar for matching agendas, 0-15%), <strong>Analyzing</strong> (AI reads each item's PDF, generates summary and watch points, 15-90%), and <strong>Exporting</strong> (creating Excel and Word deliverables, 90-100%). The colored badge above the log updates in real time. If you reload the browser during analysis, it automatically reconnects and shows progress from where it left off.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">How do I use the AI Chat?</div>
+          <div class="howto-a">Open any item drawer and click the <strong>AI Chat</strong> tab. Type a question and hit Send. The AI knows the item's context (title, file number, existing analysis, watch points). Toggle <em>Enable web search</em> to let the AI search the web for current information. Your chat is private — other users cannot see it. To save an AI response, click <strong>+ Add to Notes</strong> (appends to your Analyst Working Notes) or <strong>+ Add to Part 1</strong> (appends to the item's Agenda Debrief summary).</div>
+        </div>
       </div>
 
       <!-- COLUMN GUIDE -->
@@ -932,6 +976,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <div class="ch"><div class="ch-left"><div class="cicon">📊</div>Progress</div></div>
         <div class="cb">
           <div class="srow"><div class="sdot" id="sdot"></div>
+            <span id="phase-badge" style="display:none;font-size:.68rem;font-weight:600;padding:1px 8px;border-radius:10px;background:var(--blue1);color:#fff;margin-right:6px;text-transform:uppercase;letter-spacing:.04em"></span>
             <span id="stxt" style="font-size:.85rem;font-weight:500;color:var(--gray-600)">Waiting…</span></div>
           <div class="pw"><div class="pb" id="pb"></div></div>
           <div class="logbox" id="logbox"></div>
@@ -1279,6 +1324,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <button class="dtab on" onclick="drTab('summary',this)" title="Part 1 Deliverable: Debrief + Watchpoints + Leg History + Research Notes">Part 1 · Debrief</button>
     <button class="dtab" onclick="drTab('notes',this)">Notes</button>
     <button class="dtab" onclick="drTab('deep',this)" title="Reference only — not exported">Deep Research</button>
+    <button class="dtab" onclick="drTab('chat',this)" title="Private AI chat about this item">AI Chat</button>
     <button class="dtab" onclick="drTab('history',this)">History</button>
     <button class="dtab" onclick="drTab('appearances',this)">Appearances</button>
     <button class="dtab" onclick="drTab('lifecycle',this)">Lifecycle</button>
@@ -1318,6 +1364,8 @@ let currentFileNum = null;
     loadDashboard(),
   ]);
   loadWorkflow();
+  // Auto-reattach to any running job (e.g. after browser reload)
+  checkActiveJobs();
 })();
 
 // ════════════════════════════════════════════════════════════
@@ -1495,31 +1543,78 @@ async function runAgent() {
   jobId=job_id; listenJob(job_id);
 }
 
-function listenJob(id) {
+const PHASE_LABELS = {
+  scanning: 'Scanning',
+  analyzing: 'Analyzing',
+  exporting: 'Exporting',
+  done: 'Complete',
+};
+
+function _handleProgressMsg(msg, id) {
+  const isReplay = msg.replay;
+  if(msg.type==='ping') return;
+  if(msg.type==='progress'){
+    if(!isReplay) addLog(msg.message);
+    const pct = msg.pct;
+    if(pct != null) {
+      document.getElementById('pb').style.width = Math.min(99, Math.round(pct))+'%';
+    }
+    const phaseLabel = PHASE_LABELS[msg.phase] || msg.phase || '';
+    const badge = document.getElementById('phase-badge');
+    if(phaseLabel) {
+      badge.textContent = phaseLabel;
+      badge.style.display = '';
+      const colors = {Scanning:'#3b82f6',Analyzing:'#f59e0b',Exporting:'#8b5cf6',Complete:'#22c55e'};
+      badge.style.background = colors[phaseLabel] || 'var(--blue1)';
+    }
+    const shortMsg = msg.message.length > 80 ? msg.message.slice(0,77)+'...' : msg.message;
+    setSt('run', shortMsg);
+  }
+  if(msg.type==='complete'){
+    if(evtSrc){evtSrc.close(); evtSrc=null;}
+    setPb(false);
+    document.getElementById('pb').style.width='100%';
+    const badge = document.getElementById('phase-badge');
+    badge.textContent='Complete'; badge.style.display=''; badge.style.background='#22c55e';
+    const ni = msg.results ? msg.results.total_new_items : 0;
+    const nf = msg.results ? msg.results.total_files : 0;
+    setSt('ok',`Done — ${ni} new item(s), ${nf} files`);
+    addLog(`Complete: ${ni} new items`,'ok');
+    if(id && msg.files) renderResultFiles(id, msg.files);
+    resetBtn(); loadDashboard(); loadWorkflow();
+  }
+  if(msg.type==='error'){
+    if(evtSrc){evtSrc.close(); evtSrc=null;}
+    setPb(false);
+    document.getElementById('phase-badge').style.display='none';
+    setSt('err','Error: '+msg.message); addLog('ERROR: '+msg.message,'err'); resetBtn();
+  }
+}
+
+function listenJob(id, replay) {
   if(evtSrc)evtSrc.close();
-  evtSrc=new EventSource(`/api/stream/${id}`);
-  let n=0;
+  const url = replay ? `/api/stream/${id}?replay=1` : `/api/stream/${id}`;
+  evtSrc=new EventSource(url);
   evtSrc.onmessage=e=>{
     const msg=JSON.parse(e.data);
-    if(msg.type==='ping')return;
-    if(msg.type==='progress'){
-      addLog(msg.message);n++;
-      document.getElementById('pb').style.width=Math.min(90,n*4)+'%';
-      setSt('run',msg.message);
-    }
-    if(msg.type==='complete'){
-      evtSrc.close(); setPb(false);
-      document.getElementById('pb').style.width='100%';
-      setSt('ok',`Done — ${msg.results.total_new_items} new item(s), ${msg.results.total_files} files`);
-      addLog(`✓ Complete: ${msg.results.total_new_items} new items`,'ok');
-      renderResultFiles(id,msg.files);
-      resetBtn(); loadDashboard(); loadWorkflow();
-    }
-    if(msg.type==='error'){
-      evtSrc.close(); setPb(false);
-      setSt('err','Error: '+msg.message); addLog('ERROR: '+msg.message,'err'); resetBtn();
-    }
+    _handleProgressMsg(msg, id);
   };
+}
+
+async function checkActiveJobs() {
+  // Auto-reattach to a running job after browser reload
+  try {
+    const r = await fetch('/api/jobs/active');
+    const d = await r.json();
+    const running = (d.jobs||[]).find(j=>j.status==='running');
+    if(running) {
+      jobId = running.job_id;
+      setSt('run','Reconnecting to running analysis…'); setPb(true);
+      const btn=document.getElementById('run-btn');
+      btn.disabled=true; btn.textContent='Running…';
+      listenJob(running.job_id, true);
+    }
+  } catch(e) {}
 }
 
 function renderResultFiles(jid,files) {
@@ -1866,6 +1961,7 @@ function drTab(tab, el) {
   if(tab==='summary') renderDrawerSummary(body,matter,appData,save);
   if(tab==='notes')   renderDrawerNotes(body,appData);
   if(tab==='deep')    renderDrawerDeepResearch(body,appData);
+  if(tab==='chat')    renderDrawerChat(body,appData);
   if(tab==='history') renderDrawerHistory(body,appData);
   if(tab==='appearances') renderDrawerApps(body,matter);
   if(tab==='lifecycle')   renderDrawerLifecycle(body,appData);
@@ -2186,6 +2282,125 @@ async function saveDeepResearch() {
     const ar = await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
     _drData.appData = ar.appearance;
   }
+}
+
+// ── AI Chat tab ─────────────────────────────────────────────
+let _chatLoading = false;
+async function renderDrawerChat(body, app) {
+  if(!app?.id){ body.innerHTML='<p style="color:var(--gray-400)">No appearance.</p>'; return; }
+  body.innerHTML = `
+    <div class="chat-wrap">
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;
+        padding:.5rem .75rem;margin-bottom:.5rem;font-size:.74rem;color:#1e40af;line-height:1.45">
+        <strong>Private AI Chat</strong> — Ask questions about this item. Your chat history is private to you.
+        You can append any AI response to your Working Notes or Part 1 summary.
+      </div>
+      <div class="chat-msgs" id="chat-msgs"></div>
+      <div class="chat-ws-toggle">
+        <label style="display:flex;align-items:center;gap:.3rem;cursor:pointer">
+          <input type="checkbox" id="chat-ws" /> Enable web search
+        </label>
+        <span style="color:var(--gray-400)">(AI will search the web for current info)</span>
+      </div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" placeholder="Ask about this item..." rows="1"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMsg();}"></textarea>
+        <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMsg()">Send</button>
+      </div>
+    </div>`;
+  // Load history
+  try {
+    const r = await fetch(`/api/chat/${app.id}/messages`);
+    const d = await r.json();
+    const container = document.getElementById('chat-msgs');
+    (d.messages||[]).forEach(m => _appendChatBubble(container, m));
+    container.scrollTop = container.scrollHeight;
+  } catch(e) {}
+}
+
+function _appendChatBubble(container, msg) {
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + msg.role;
+  let html = esc(msg.content);
+  if(msg.role === 'assistant') {
+    const appendedNotes = msg.appended_to === 'notes';
+    const appendedPart1 = msg.appended_to === 'part1';
+    html += `<div class="chat-actions">
+      <button onclick="appendChatToTarget(${msg.id},'notes',this)" ${appendedNotes?'class="appended" disabled':''}>
+        ${appendedNotes ? 'Added to Notes' : '+ Add to Notes'}</button>
+      <button onclick="appendChatToTarget(${msg.id},'part1',this)" ${appendedPart1?'class="appended" disabled':''}>
+        ${appendedPart1 ? 'Added to Part 1' : '+ Add to Part 1'}</button>
+    </div>`;
+  }
+  div.innerHTML = html;
+  container.appendChild(div);
+}
+
+async function sendChatMsg() {
+  if(_chatLoading || !currentAppId) return;
+  const input = document.getElementById('chat-input');
+  const msg = input.value.trim();
+  if(!msg) return;
+  const ws = document.getElementById('chat-ws')?.checked || false;
+  const container = document.getElementById('chat-msgs');
+  const btn = document.getElementById('chat-send-btn');
+
+  // Show user bubble immediately
+  _appendChatBubble(container, {role:'user', content:msg});
+  input.value = '';
+  container.scrollTop = container.scrollHeight;
+
+  // Show typing indicator
+  const typing = document.createElement('div');
+  typing.className = 'chat-msg assistant';
+  typing.style.opacity = '.5';
+  typing.textContent = 'Thinking...';
+  container.appendChild(typing);
+  container.scrollTop = container.scrollHeight;
+
+  _chatLoading = true;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/chat/${currentAppId}/send`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ message: msg, web_search: ws })
+    });
+    const d = await r.json();
+    typing.remove();
+    if(d.error) {
+      _appendChatBubble(container, {role:'assistant', content:'Error: '+d.error});
+    } else {
+      _appendChatBubble(container, d);
+    }
+    container.scrollTop = container.scrollHeight;
+  } catch(e) {
+    typing.remove();
+    _appendChatBubble(container, {role:'assistant', content:'Connection error.'});
+  }
+  _chatLoading = false;
+  btn.disabled = false;
+  input.focus();
+}
+
+async function appendChatToTarget(msgId, target, btnEl) {
+  if(!currentAppId) return;
+  try {
+    const r = await fetch(`/api/chat/${currentAppId}/append`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ message_id: msgId, target: target })
+    });
+    const d = await r.json();
+    if(d.ok) {
+      btnEl.textContent = target==='notes' ? 'Added to Notes' : 'Added to Part 1';
+      btnEl.classList.add('appended');
+      btnEl.disabled = true;
+      // Refresh drawer data
+      const ar = await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+      _drData.appData = ar.appearance;
+    }
+  } catch(e) {}
 }
 
 async function saveWorkflowFromDrawer() {
@@ -3731,6 +3946,38 @@ def api_test_email():
         return jsonify({"ok": False, "error": str(e)})
 
 
+def _persist_progress(output_dir: Path, msg: dict):
+    """Append one progress/complete/error event to progress.jsonl for resume.
+    Silent on failure — in-memory queue is the authoritative source."""
+    try:
+        with open(output_dir / "progress.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(msg) + "\n")
+    except Exception:
+        pass
+
+
+def _read_persisted_progress(output_dir: Path) -> list[dict]:
+    """Read back all events written so far for this job. Used when a user
+    reloads the browser and we need to replay what they missed."""
+    p = output_dir / "progress.jsonl"
+    if not p.exists():
+        return []
+    out: list[dict] = []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception:
+        return out
+    return out
+
+
 @app.route("/api/run", methods=["POST"])
 def api_run():
     from oca_agenda_agent_v6 import process_committees
@@ -3743,10 +3990,48 @@ def api_run():
     selected      = data.get("committees", [])
 
     job_id     = str(uuid.uuid4())
-    q          = queue.Queue()
     output_dir = Path("output") / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
-    JOBS[job_id] = {"status": "running", "queue": q, "output_dir": output_dir, "files": []}
+    # subscribers: list of queue.Queue, one per SSE connection. The cb
+    # broadcasts to all of them so reconnecting clients get their own copy.
+    JOBS[job_id] = {
+        "status":     "running",
+        "subscribers": [],
+        "output_dir": output_dir,
+        "files":      [],
+        "started_at": now_iso(),
+        "label":      ", ".join(selected) if selected else "All committees",
+        "date":       from_date_str or date_str or "",
+        "mode":       "range" if from_date_str else "single",
+    }
+    # Persist job metadata so a future process can still describe it
+    try:
+        (output_dir / "job.json").write_text(json.dumps({
+            "job_id":     job_id,
+            "started_at": JOBS[job_id]["started_at"],
+            "label":      JOBS[job_id]["label"],
+            "date":       JOBS[job_id]["date"],
+            "mode":       JOBS[job_id]["mode"],
+            "committees": selected,
+        }), encoding="utf-8")
+    except Exception:
+        pass
+
+    def _broadcast(payload):
+        """Push an event to every connected SSE listener AND to disk."""
+        _persist_progress(output_dir, payload)
+        dead = []
+        for i, sq in enumerate(JOBS[job_id]["subscribers"]):
+            try:
+                sq.put_nowait(payload)
+            except Exception:
+                dead.append(i)
+        # Prune dead subscribers (iterate in reverse to keep indices stable)
+        for i in reversed(dead):
+            try:
+                JOBS[job_id]["subscribers"].pop(i)
+            except Exception:
+                pass
 
     def _run():
         try:
@@ -3758,36 +4043,85 @@ def api_run():
             parsed, mode = (parse_date_arg(from_date_str), "range") if from_date_str \
                       else (parse_date_arg(date_str), "single")
 
-            def cb(msg):
-                q.put({"type": "progress", "message": msg})
+            def cb(msg, phase=None, pct=None):
+                payload = {
+                    "type":    "progress",
+                    "message": msg,
+                    "phase":   phase,
+                    "pct":     pct,
+                    "ts":      now_iso(),
+                }
+                _broadcast(payload)
 
             results = process_committees(matched, parsed, mode, output_dir, analyzer, scraper, cb)
             files = [f.name for f in sorted(output_dir.glob("*Part1*.xlsx")) +
                                       sorted(output_dir.glob("*Part2*.docx"))]
             JOBS[job_id].update({"status": "complete", "files": files})
-            q.put({"type": "complete", "results": results, "files": files})
+            _broadcast({"type": "complete", "results": results, "files": files})
         except Exception as exc:
             JOBS[job_id]["status"] = "error"
-            q.put({"type": "error", "message": str(exc)})
+            _broadcast({"type": "error", "message": str(exc)})
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"job_id": job_id})
+
+
+@app.route("/api/jobs/active")
+def api_jobs_active():
+    """Return jobs that are still running or just finished, so the browser
+    can reattach after a reload. Sorted newest first."""
+    out = []
+    for jid, meta in JOBS.items():
+        out.append({
+            "job_id":     jid,
+            "status":     meta.get("status"),
+            "started_at": meta.get("started_at"),
+            "label":      meta.get("label"),
+            "date":       meta.get("date"),
+            "mode":       meta.get("mode"),
+            "files":      meta.get("files", []),
+        })
+    out.sort(key=lambda j: j.get("started_at") or "", reverse=True)
+    return jsonify({"jobs": out})
 
 
 @app.route("/api/stream/<job_id>")
 def api_stream(job_id):
     if job_id not in JOBS:
         return jsonify({"error": "not found"}), 404
+    replay = request.args.get("replay", "0") == "1"
+    meta   = JOBS[job_id]
+    output_dir = meta["output_dir"]
+
+    # Register a fresh queue for this SSE connection so multiple
+    # tabs / reconnects each get their own copy of live events.
+    my_q = queue.Queue()
+    meta["subscribers"].append(my_q)
+
     def generate():
-        q = JOBS[job_id]["queue"]
-        while True:
+        try:
+            if replay:
+                for event in _read_persisted_progress(output_dir):
+                    event = dict(event)
+                    event["replay"] = True
+                    yield f"data: {json.dumps(event)}\n\n"
+                # If job already finished, we're done
+                if meta.get("status") in ("complete", "error"):
+                    return
+            while True:
+                try:
+                    msg = my_q.get(timeout=30)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                    if msg["type"] in ("complete", "error"):
+                        break
+                except queue.Empty:
+                    yield f"data: {json.dumps({'type':'ping'})}\n\n"
+        finally:
+            # Unsubscribe when the connection closes
             try:
-                msg = q.get(timeout=30)
-                yield f"data: {json.dumps(msg)}\n\n"
-                if msg["type"] in ("complete", "error"):
-                    break
-            except queue.Empty:
-                yield f"data: {json.dumps({'type':'ping'})}\n\n"
+                meta["subscribers"].remove(my_q)
+            except (ValueError, KeyError):
+                pass
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
@@ -3800,6 +4134,183 @@ def api_download(job_id, filename):
     if not fp.exists():
         return "Not found", 404
     return send_file(str(fp.resolve()), as_attachment=True, download_name=fp.name)
+
+
+# ═══════════════════════════════════════════════════════════════
+# AI Chat endpoints — private per-user conversations about items
+# ═══════════════════════════════════════════════════════════════
+
+@app.route("/api/chat/<int:appearance_id>/messages")
+def api_chat_history(appearance_id):
+    """Return chat history for (appearance, user). Private per user."""
+    user = _current_user()
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, role, content, web_search, appended_to, created_at
+               FROM chat_messages
+               WHERE appearance_id=? AND username=?
+               ORDER BY created_at ASC""",
+            (appearance_id, user)
+        ).fetchall()
+    return jsonify({"messages": [dict(r) for r in rows]})
+
+
+@app.route("/api/chat/<int:appearance_id>/send", methods=["POST"])
+def api_chat_send(appearance_id):
+    """Send a user message and get an AI response. Optionally use web search."""
+    import httpx
+    from anthropic import Anthropic
+
+    user = _current_user()
+    data = request.get_json(force=True)
+    user_msg = (data.get("message") or "").strip()
+    use_web  = bool(data.get("web_search", False))
+    if not user_msg:
+        return jsonify({"error": "Empty message"}), 400
+
+    # Fetch item context for the AI
+    with get_db() as conn:
+        app_row = conn.execute(
+            """SELECT a.*, m.short_title, m.full_title, m.file_number as matter_file_number
+               FROM appearances a
+               JOIN matters m ON m.id = a.matter_id
+               WHERE a.id=?""",
+            (appearance_id,)
+        ).fetchone()
+    if not app_row:
+        return jsonify({"error": "Appearance not found"}), 404
+    app_row = dict(app_row)
+
+    # Build conversation history (last 20 messages for context window)
+    with get_db() as conn:
+        history = conn.execute(
+            """SELECT role, content FROM chat_messages
+               WHERE appearance_id=? AND username=?
+               ORDER BY created_at ASC""",
+            (appearance_id, user)
+        ).fetchall()
+    history = [dict(r) for r in history][-20:]
+
+    # System prompt with item context
+    title = app_row.get("appearance_title") or app_row.get("short_title") or app_row.get("full_title") or ""
+    file_num = app_row.get("matter_file_number") or app_row.get("file_number") or ""
+    ai_summary = app_row.get("ai_summary_for_appearance") or ""
+    watch_pts = app_row.get("watch_points_for_appearance") or ""
+    leg_hist = app_row.get("leg_history_summary") or ""
+
+    sys_prompt = (
+        "You are a research assistant for the Office of the Commission Auditor (OCA) at Miami-Dade County. "
+        "You are helping a researcher analyze a specific agenda item. Be concise, factual, and professional. "
+        "Do NOT use markdown formatting. Use plain text only. For bullets, use dashes.\n\n"
+        f"ITEM CONTEXT:\n"
+        f"File Number: {file_num}\n"
+        f"Title: {title}\n"
+    )
+    if ai_summary:
+        sys_prompt += f"\nEXISTING AI ANALYSIS:\n{ai_summary[:2000]}\n"
+    if watch_pts:
+        sys_prompt += f"\nWATCH POINTS:\n{watch_pts[:500]}\n"
+    if leg_hist:
+        sys_prompt += f"\nLEGISLATIVE HISTORY:\n{leg_hist[:500]}\n"
+
+    # Build messages array
+    messages = []
+    for h in history:
+        messages.append({"role": h["role"], "content": h["content"]})
+    messages.append({"role": "user", "content": user_msg})
+
+    # Save user message to DB
+    now = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at) VALUES (?,?,?,?,?,?)",
+            (appearance_id, user, "user", user_msg, 0, now)
+        )
+
+    # Call Claude
+    try:
+        api_key = load_api_key()
+        client = Anthropic(api_key=api_key, http_client=httpx.Client(verify=False))
+        kw = {
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 1500,
+            "system": sys_prompt,
+            "messages": messages,
+        }
+        if use_web:
+            kw["tools"] = [{"type": "web_search_20250305", "name": "web_search"}]
+
+        resp = client.messages.create(**kw)
+        ai_text = "\n".join(b.text for b in resp.content if hasattr(b, "text")).strip()
+        if not ai_text:
+            ai_text = "(No response generated)"
+    except Exception as e:
+        ai_text = f"[Error: {e}]"
+
+    # Save assistant message
+    now2 = now_iso()
+    with get_db() as conn:
+        conn.execute(
+            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at) VALUES (?,?,?,?,?,?)",
+            (appearance_id, user, "assistant", ai_text, 1 if use_web else 0, now2)
+        )
+
+    return jsonify({"role": "assistant", "content": ai_text, "created_at": now2})
+
+
+@app.route("/api/chat/<int:appearance_id>/append", methods=["POST"])
+def api_chat_append(appearance_id):
+    """Append a chat message's content to working notes or Part 1."""
+    user = _current_user()
+    data = request.get_json(force=True)
+    msg_id = data.get("message_id")
+    target = data.get("target", "notes")  # 'notes' or 'part1'
+
+    if target not in ("notes", "part1"):
+        return jsonify({"error": "Invalid target"}), 400
+
+    # Fetch the chat message
+    with get_db() as conn:
+        msg_row = conn.execute(
+            "SELECT * FROM chat_messages WHERE id=? AND appearance_id=? AND username=?",
+            (msg_id, appearance_id, user)
+        ).fetchone()
+    if not msg_row:
+        return jsonify({"error": "Message not found"}), 404
+
+    content = msg_row["content"]
+    now = now_iso()
+
+    with get_db() as conn:
+        if target == "notes":
+            existing = conn.execute(
+                "SELECT analyst_working_notes FROM appearances WHERE id=?", (appearance_id,)
+            ).fetchone()
+            old_notes = (existing["analyst_working_notes"] or "") if existing else ""
+            separator = "\n\n--- AI Chat Note (added by {}) ---\n".format(user)
+            new_notes = old_notes + separator + content
+            conn.execute(
+                "UPDATE appearances SET analyst_working_notes=?, analyst_notes_updated_at=?, analyst_notes_updated_by=?, updated_at=? WHERE id=?",
+                (new_notes, now, user, now, appearance_id)
+            )
+        else:  # part1
+            existing = conn.execute(
+                "SELECT ai_summary_for_appearance FROM appearances WHERE id=?", (appearance_id,)
+            ).fetchone()
+            old_text = (existing["ai_summary_for_appearance"] or "") if existing else ""
+            separator = "\n\n--- Additional Context (added by {}) ---\n".format(user)
+            new_text = old_text + separator + content
+            conn.execute(
+                "UPDATE appearances SET ai_summary_for_appearance=?, updated_at=? WHERE id=?",
+                (new_text, now, appearance_id)
+            )
+
+        # Mark the chat message as appended
+        conn.execute(
+            "UPDATE chat_messages SET appended_to=? WHERE id=?", (target, msg_id)
+        )
+
+    return jsonify({"ok": True, "target": target})
 
 
 # ─────────────────────────────────────────────────────────────
