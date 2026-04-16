@@ -338,6 +338,16 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
     from scraper import MiamiDadeScraper
 
     sc = MiamiDadeScraper()
+    # Warm up the session by hitting the Legistar landing page first.
+    # During normal analysis the scraper visits the committee list and
+    # agenda pages before get_item_detail — those requests establish
+    # session cookies that matter.asp may depend on.
+    try:
+        sc.session.get("https://www.miamidade.gov/govaction/", timeout=15)
+        log.info("  Legistar session warmed up")
+    except Exception as e:
+        log.warning(f"  Session warm-up failed (continuing anyway): {e}")
+
     Path(pdf_dir).mkdir(parents=True, exist_ok=True)
 
     summary = {"matters": 0, "urls_filled": 0, "pdfs_downloaded": 0,
@@ -402,7 +412,15 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                 ).fetchall()
                 for a in apps:
                     updates, params = [], []
-                    if detail_url and not (a["matter_url"] or ""):
+                    # Always overwrite matter_url — old values may be
+                    # bridge URLs (searchforpdf.asp) instead of the final
+                    # matter.asp link.
+                    if detail_url and "matter.asp" in detail_url:
+                        old_url = a["matter_url"] or ""
+                        if old_url != detail_url:
+                            updates.append("matter_url=?"); params.append(detail_url)
+                            summary["urls_filled"] += 1
+                    elif detail_url and not (a["matter_url"] or ""):
                         updates.append("matter_url=?"); params.append(detail_url)
                         summary["urls_filled"] += 1
                     if pdf_url and not (a["item_pdf_url"] or ""):
@@ -473,6 +491,8 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                 log.debug(f"  stub backfill skipped for matter {mid}: {_e}")
 
             summary["matters"] += 1
+            # Small delay to avoid rate-limiting from the county site
+            import time; time.sleep(0.4)
         except Exception as e:
             log.error(f"  backfill failed for File# {fn}: {e}")
             summary["errors"] += 1
