@@ -368,6 +368,15 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
             detail_url = detail.get("detail_url") or ""
             pdf_url    = detail.get("pdf_url") or ""
             raw_hist   = detail.get("legislative_history_raw") or ""
+            log.info(f"  backfill File# {fn}: detail_url={bool(detail_url)}, "
+                     f"pdf_url={bool(pdf_url)}, raw_hist_len={len(raw_hist)}")
+            if raw_hist:
+                log.info(f"  raw_hist preview: {raw_hist[:200]}")
+            else:
+                # Log what we got from the page to diagnose why history is empty
+                page_text = detail.get("page_text") or detail.get("routing_info") or ""
+                log.info(f"  NO leg history. page_text_len={len(page_text)}, "
+                         f"keys={list(detail.keys())[:10]}")
 
             # If get_item_detail didn't set detail_url (it usually doesn't;
             # the URL it hit is the matter.asp URL itself), reconstruct it.

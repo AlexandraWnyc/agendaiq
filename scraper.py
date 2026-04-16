@@ -217,9 +217,12 @@ class MiamiDadeScraper:
                 resp = self.session.get(url, timeout=30)
                 resp.raise_for_status()
                 if len(resp.text) < 1000:
+                    log.debug(f"    matter.asp too short ({len(resp.text)} chars), trying next URL")
                     continue
+                log.debug(f"    matter.asp OK: {len(resp.text)} chars from {url}")
                 soup = BeautifulSoup(resp.text, "html.parser")
                 page_text = soup.get_text(separator="\n", strip=True)
+                log.debug(f"    page_text: {len(page_text)} chars")
 
                 # Approach A: label and value in same TD
                 fields_same_td = {}
@@ -283,13 +286,24 @@ class MiamiDadeScraper:
                         routing.append(f"{lbl}: {v}")
 
                 leg_hist = ""
-                if "Legislative History" in page_text:
-                    idx = page_text.index("Legislative History")
-                    end = page_text.find("Legislative Text", idx)
+                # Case-insensitive search for legislative history section
+                page_lower = page_text.lower()
+                lh_idx = page_lower.find("legislative history")
+                if lh_idx >= 0:
+                    # Use the original-case text from the found position
+                    end = page_lower.find("legislative text", lh_idx)
                     if end == -1:
-                        end = idx + 2000
-                    leg_hist = page_text[idx:end].strip()
+                        end = lh_idx + 3000
+                    leg_hist = page_text[lh_idx:end].strip()
                     routing.append("\n" + leg_hist)
+                    log.debug(f"    Leg history found at pos {lh_idx}, len={len(leg_hist)}")
+                else:
+                    log.debug(f"    No 'Legislative History' in page_text (len={len(page_text)})")
+                    # Try finding it in the raw HTML as well
+                    raw_lower = resp.text.lower()
+                    raw_idx = raw_lower.find("legislative history")
+                    if raw_idx >= 0:
+                        log.info(f"    Found 'legislative history' in raw HTML at pos {raw_idx} but NOT in parsed text!")
                 item["legislative_history_raw"] = leg_hist
 
                 if "Legislative Text" in page_text:
