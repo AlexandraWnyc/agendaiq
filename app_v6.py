@@ -3178,100 +3178,158 @@ async function runBackfill(onlyMissing) {
 /* ── Transcript Backfill ─────────────────────────────────── */
 let _txPollTimer = null;
 
-async function backfillTranscript() {
-  const btn = document.getElementById('md-transcript-btn');
-  if (btn) btn.disabled = true;
-
-  // Build a small modal for progress + optional manual URL override
-  const mid = currentMeetingId;
-  if (!mid) { toast('Open a meeting first.', 'err'); if (btn) btn.disabled = false; return; }
-
-  // Quick confirm
-  const go = confirm(
-    'Search YouTube for this meeting\'s recording, download the transcript, ' +
-    'and append per-item discussion summaries to analyst notes?\n\n' +
-    'This may take 1-2 minutes.');
-  if (!go) { if (btn) btn.disabled = false; return; }
-
-  // Create / reveal progress panel
+function _txGetPanel() {
   let panel = document.getElementById('tx-progress');
   if (!panel) {
     const card = document.getElementById('md-artifacts');
-    if (!card) { toast('UI element missing', 'err'); if (btn) btn.disabled = false; return; }
+    if (!card) return null;
     panel = document.createElement('div');
     panel.id = 'tx-progress';
     panel.style.cssText = 'margin-top:.6rem;padding:.6rem .75rem;border-radius:.5rem;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem;';
     card.prepend(panel);
   }
-  panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Starting…';
   panel.style.display = 'block';
+  return panel;
+}
+
+async function backfillTranscript() {
+  const btn = document.getElementById('md-transcript-btn');
+  if (btn) btn.disabled = true;
+
+  const mid = currentMeetingId;
+  if (!mid) { toast('Open a meeting first.', 'err'); if (btn) btn.disabled = false; return; }
+
+  const panel = _txGetPanel();
+  if (!panel) { toast('UI element missing', 'err'); if (btn) btn.disabled = false; return; }
+
+  // Show options: auto-fetch or paste
+  panel.innerHTML = `<b>🎙 Transcript Backfill</b>
+    <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap">
+      <button class="btn btn-p btn-sm" onclick="_txAutoFetch()">🔍 Auto-fetch from YouTube</button>
+      <button class="btn btn-o btn-sm" onclick="_txShowPaste()">📋 Paste Transcript</button>
+    </div>
+    <div style="font-size:.72rem;color:#64748b;margin-top:.3rem">
+      Auto-fetch searches YouTube and downloads captions automatically.<br>
+      If that fails (cloud IP blocked), paste the transcript manually — open the YouTube video,
+      click "…" → "Show transcript", copy all text, and paste it here.
+    </div>`;
+}
+
+async function _txAutoFetch(videoUrl) {
+  const btn = document.getElementById('md-transcript-btn');
+  const mid = currentMeetingId;
+  const panel = _txGetPanel();
+  panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Searching YouTube…';
 
   try {
+    const body = {meeting_id: mid};
+    if (videoUrl) body.video_url = videoUrl;
     const r = await fetch('/api/backfill/transcript', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({meeting_id: mid})
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
     });
     const d = await r.json();
 
     if (!d.ok) {
-      // If low-confidence match, show candidates for manual selection
+      // Show error + paste fallback
+      let errorHtml = esc(d.error || d.message || 'Failed');
+      let candidatesHtml = '';
       if (d.candidates && d.candidates.length) {
-        let opts = d.candidates.map((c, i) =>
-          `${i+1}. ${c.title} (score: ${(c.match_score*100).toFixed(0)}%)\n   ${c.url}`
-        ).join('\n');
-        const pick = prompt(
-          'No confident auto-match found. Paste a YouTube URL or pick a number:\n\n' + opts);
-        if (pick) {
-          let url = pick.trim();
-          // If they typed a number, grab the URL from candidates
-          const num = parseInt(url, 10);
-          if (!isNaN(num) && num >= 1 && num <= d.candidates.length) {
-            url = d.candidates[num - 1].url;
-          }
-          if (url.includes('youtube') || url.includes('youtu.be')) {
-            panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Retrying with selected video…';
-            const r2 = await fetch('/api/backfill/transcript', {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({meeting_id: mid, video_url: url})
-            });
-            const d2 = await r2.json();
-            _handleTranscriptResult(d2, panel, btn);
-            return;
-          }
-        }
-        panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(d.error || d.message || 'Failed');
-        if (btn) btn.disabled = false;
-        return;
+        candidatesHtml = '<div style="margin-top:.4rem;font-size:.75rem"><b>Possible matches:</b><br>' +
+          d.candidates.map((c, i) =>
+            `<a href="#" onclick="event.preventDefault();_txAutoFetch(\'${esc(c.url)}\')" style="color:#2563eb">${i+1}. ${esc(c.title)} (${(c.match_score*100).toFixed(0)}%)</a>`
+          ).join('<br>') + '</div>';
       }
-
-      panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(d.error || d.message || 'Unknown error');
+      panel.innerHTML = `<b>🎙 Transcript Backfill</b><br>
+        <span style="color:#dc2626">❌ ${errorHtml}</span>
+        ${candidatesHtml}
+        <div style="margin-top:.5rem;border-top:1px dashed #c7d2fe;padding-top:.4rem">
+          <b>Workaround:</b> Open the YouTube video → click "…" → "Show transcript" → copy all text
+          <button class="btn btn-o btn-sm" style="margin-top:.3rem" onclick="_txShowPaste()">📋 Paste Transcript Instead</button>
+        </div>`;
       if (btn) btn.disabled = false;
       return;
     }
 
-    // Poll for progress
-    _txPollTimer = setInterval(async () => {
-      try {
-        const pr = await fetch('/api/backfill/transcript/progress');
-        const pd = await pr.json();
-        if (pd.phase === 'transcript') {
-          panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
-            `<div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">` +
-            `<div style="width:${pd.pct||0}%;height:100%;background:#6366f1;transition:width .3s"></div></div>` +
-            `<span style="color:#4338ca">${esc(pd.msg || 'Working…')}</span>`;
-        }
-        if (pd.done) {
-          clearInterval(_txPollTimer); _txPollTimer = null;
-          _handleTranscriptResult(pd.result, panel, btn);
-        }
-      } catch(_) {}
-    }, 1200);
+    _txStartPolling(panel, btn);
   } catch(e) {
     panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(e.message || String(e));
     if (btn) btn.disabled = false;
   }
+}
+
+function _txShowPaste() {
+  const panel = _txGetPanel();
+  panel.innerHTML = `<b>🎙 Paste Meeting Transcript</b>
+    <div style="font-size:.72rem;color:#475569;margin:.3rem 0">
+      Open the YouTube video → click <b>"…" → "Show transcript"</b> → select all → copy → paste below.
+      Or paste any other transcript source (Granicus, etc.)
+    </div>
+    <div style="margin-bottom:.3rem">
+      <label style="font-size:.72rem;color:#64748b">Video URL (optional — for linking back):</label>
+      <input type="text" id="tx-video-url" placeholder="https://youtube.com/watch?v=..." style="font-size:.78rem;padding:.3rem .5rem;width:100%">
+    </div>
+    <textarea id="tx-paste-area" rows="8" placeholder="Paste the full transcript here…"
+      style="width:100%;font-size:.75rem;font-family:monospace;margin-bottom:.4rem"></textarea>
+    <div style="display:flex;gap:.4rem">
+      <button class="btn btn-p btn-sm" onclick="_txSubmitPaste()">🎙 Analyze Transcript</button>
+      <button class="btn btn-o btn-sm" onclick="document.getElementById('tx-progress').style.display='none';document.getElementById('md-transcript-btn').disabled=false">Cancel</button>
+    </div>`;
+}
+
+async function _txSubmitPaste() {
+  const panel = _txGetPanel();
+  const btn = document.getElementById('md-transcript-btn');
+  const mid = currentMeetingId;
+  const rawText = (document.getElementById('tx-paste-area')?.value || '').trim();
+  const videoUrl = (document.getElementById('tx-video-url')?.value || '').trim();
+
+  if (!rawText || rawText.length < 100) {
+    toast('Transcript too short — paste the full transcript text.', 'err');
+    return;
+  }
+
+  panel.innerHTML = `<b>🎙 Transcript Backfill</b><br>Analyzing ${rawText.length.toLocaleString()} chars of transcript…`;
+
+  try {
+    const r = await fetch('/api/backfill/transcript', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        meeting_id: mid,
+        video_url: videoUrl || undefined,
+        raw_transcript: rawText,
+      })
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(d.error || d.message || 'Failed');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    _txStartPolling(panel, btn);
+  } catch(e) {
+    panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(e.message || String(e));
+    if (btn) btn.disabled = false;
+  }
+}
+
+function _txStartPolling(panel, btn) {
+  _txPollTimer = setInterval(async () => {
+    try {
+      const pr = await fetch('/api/backfill/transcript/progress');
+      const pd = await pr.json();
+      if (pd.phase === 'transcript') {
+        panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
+          `<div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">` +
+          `<div style="width:${pd.pct||0}%;height:100%;background:#6366f1;transition:width .3s"></div></div>` +
+          `<span style="color:#4338ca">${esc(pd.msg || 'Working…')}</span>`;
+      }
+      if (pd.done) {
+        clearInterval(_txPollTimer); _txPollTimer = null;
+        _handleTranscriptResult(pd.result, panel, btn);
+      }
+    } catch(_) {}
+  }, 1200);
 }
 
 function _handleTranscriptResult(d, panel, btn) {
@@ -4331,6 +4389,7 @@ def api_backfill_transcript():
     data = request.get_json(force=True)
     meeting_id = data.get("meeting_id")
     video_url = data.get("video_url")
+    raw_transcript = data.get("raw_transcript")
     if not meeting_id:
         return jsonify({"ok": False, "error": "meeting_id required"}), 400
 
@@ -4338,9 +4397,10 @@ def api_backfill_transcript():
         if _tx_state["running"]:
             return jsonify({"ok": False, "error": "Transcript backfill already running"}), 409
 
+    # If raw transcript was pasted, skip YouTube search entirely
     # If no video_url provided, do a synchronous YouTube search first
     # so we can return candidates to the UI if no confident match
-    if not video_url:
+    if not video_url and not raw_transcript:
         try:
             import transcript as tx
             from repository import get_meeting_by_id
@@ -4386,6 +4446,7 @@ def api_backfill_transcript():
             result = tx.backfill_transcript(
                 meeting_id,
                 video_url=video_url,
+                raw_transcript=raw_transcript,
                 emit=_tx_emit,
             )
             with _tx_lock:

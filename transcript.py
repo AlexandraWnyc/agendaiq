@@ -353,10 +353,24 @@ def download_transcript(video_id: str, output_dir: Path = None) -> str:
         output_dir = Path(tempfile.mkdtemp())
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Strategy 1: youtube-transcript-api (preferred — no JS runtime needed)
+    # ── Strategy 1: youtube-transcript-api with optional proxy
+    # YouTube blocks cloud provider IPs. Use YOUTUBE_PROXY env var to route
+    # through a residential proxy (e.g. "http://user:pass@proxy:port").
+    proxy_url = os.environ.get("YOUTUBE_PROXY", "")
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
-        ytt_api = YouTubeTranscriptApi()
+        import requests as _req
+
+        # Configure proxy if available
+        ytt_kwargs = {}
+        if proxy_url:
+            log.info(f"  Using proxy for YouTube: {proxy_url[:30]}…")
+            session = _req.Session()
+            session.proxies = {"http": proxy_url, "https": proxy_url}
+            ytt_api = YouTubeTranscriptApi(http_client=session)
+        else:
+            ytt_api = YouTubeTranscriptApi()
+
         log.info(f"  Fetching transcript via youtube-transcript-api for {video_id}")
 
         # Try to get English transcript (auto-generated or manual)
@@ -367,16 +381,13 @@ def download_transcript(video_id: str, output_dir: Path = None) -> str:
             pass
 
         if not transcript:
-            # Try listing available transcripts and pick any English variant
             try:
                 transcript_list = ytt_api.list(video_id)
-                # Try to find any English transcript
                 for t in transcript_list:
                     lang = (t.language_code or "").lower()
                     if lang.startswith("en"):
                         transcript = t.fetch()
                         break
-                # If no English, try translating the first available to English
                 if not transcript:
                     for t in transcript_list:
                         if t.is_translatable:
@@ -814,6 +825,7 @@ def _ts_to_seconds(ts: str) -> int:
 
 def backfill_transcript(meeting_id: int, output_dir: Path = None,
                         video_url: str = None,
+                        raw_transcript: str = None,
                         emit=None) -> dict:
     """Full pipeline: find video → download transcript → segment → store.
 
@@ -821,6 +833,7 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         meeting_id: Database meeting ID
         output_dir: Where to cache transcript files
         video_url: If provided, skip YouTube search and use this URL directly
+        raw_transcript: If provided, skip both search AND download — use this text directly
         emit: Optional SSE callback for progress updates
 
     Returns:
@@ -840,6 +853,48 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
     if not appearances:
         return {"status": "error", "message": "No items for this meeting"}
 
+    # ── Shortcut: if raw transcript was pasted, skip search + download
+    if raw_transcript and raw_transcript.strip():
+        _emit(f"Using pasted transcript ({len(raw_transcript):,} chars). Segmenting by item…",
+              phase="transcript", pct=50)
+        transcript = raw_transcript.strip()
+        video_id = None
+        video_title = "(pasted transcript)"
+        final_url = video_url or ""
+        transcript_len = len(transcript)
+
+        items_for_ai = []
+        for app in appearances:
+            items_for_ai.append({
+                "file_number": app.get("file_number", ""),
+                "committee_item_number": app.get("committee_item_number", ""),
+                "short_title": app.get("appearance_title", ""),
+            })
+
+        segments = segment_transcript_by_items(
+            transcript, items_for_ai, body_name, meeting_date
+        )
+        if not segments:
+            return {"status": "error", "message": "AI segmentation returned no results"}
+
+        _emit(f"Segmented {len(segments)} items. Storing notes…",
+              phase="transcript", pct=80)
+
+        updated = store_transcript_notes(meeting_id, segments, final_url, video_title)
+
+        _emit(f"Done — {updated} items updated with meeting discussion notes.",
+              phase="transcript", pct=100)
+
+        return {
+            "status": "ok",
+            "video_id": None,
+            "video_title": video_title,
+            "video_url": final_url,
+            "transcript_length": transcript_len,
+            "items_segmented": len(segments),
+            "items_updated": updated,
+        }
+
     # Step 1: Find the YouTube video
     _emit(f"Searching YouTube for {body_name} {meeting_date}…",
           phase="transcript", pct=10)
@@ -849,7 +904,6 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
     final_url = video_url
 
     if video_url:
-        # Extract video ID from URL
         m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', video_url)
         if m:
             video_id = m.group(1)
