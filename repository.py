@@ -270,13 +270,34 @@ def create_or_update_appearance(matter_id: int, meeting_id: int,
         "analyst_working_notes",
         "ai_summary_for_appearance",
         "watch_points_for_appearance",
+        "finalized_brief",
     ]
     if prior and carried:
+        # Build a human-readable label: "Government Operations 3/10/2026, Item 2A"
+        prior_meeting_info = None
+        with get_db() as conn:
+            prior_meeting_info = conn.execute(
+                "SELECT body_name, meeting_date FROM meetings WHERE id=?",
+                (prior["meeting_id"],)
+            ).fetchone()
+        prior_item_num = prior.get("committee_item_number") or prior.get("bcc_item_number") or ""
+        if prior_meeting_info:
+            label_parts = []
+            if prior_meeting_info["body_name"]:
+                label_parts.append(prior_meeting_info["body_name"])
+            if prior_meeting_info["meeting_date"]:
+                label_parts.append(prior_meeting_info["meeting_date"])
+            if prior_item_num:
+                label_parts.append(f"Item {prior_item_num}")
+            carry_label = ", ".join(label_parts) if label_parts else f"prior appearance {prior_id}"
+        else:
+            carry_label = f"prior appearance {prior_id}"
+
         for cf in carry_fields:
             pv = prior.get(cf)
             if pv:
                 cols.append(cf)
-                vals.append(f"[Carried from prior appearance {prior_id}]\n{pv}")
+                vals.append(f"[Carried from {carry_label}]\n{pv}")
 
     # ── Sticky researcher / reviewer ──────────────────────────────────
     # When a matter reappears at a later stage (e.g. committee → BCC), keep

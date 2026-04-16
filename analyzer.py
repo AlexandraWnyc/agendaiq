@@ -27,7 +27,7 @@ MODEL = "claude-haiku-4-5-20251001"
 # Character budgets (~4 chars ≈ 1 token for English). Lower these to cut cost.
 PDF_TEXT_BUDGET_CHARS   = 15000   # ~3,750 tokens. Was 30,000 in scraper cap.
 PAGE_TEXT_BUDGET_CHARS  = 4000
-PRIOR_CTX_BUDGET_CHARS  = 1500
+PRIOR_CTX_BUDGET_CHARS  = 4000
 LEG_HIST_BUDGET_CHARS   = 2000
 
 SOP_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
@@ -266,7 +266,11 @@ class AgendaAnalyzer:
                                                      pdf_budget_chars)
         ctx  = f"COMMITTEE: {committee_name}\nITEM NUMBER: {item_number}\nTITLE: {title}\n"
         if prior_context:
-            ctx += (f"\n--- PRIOR ANALYSIS CONTEXT (for reference, do not simply repeat) ---\n"
+            ctx += (f"\n--- PRIOR STAGE CONTEXT (AI analysis + researcher notes from committee) ---\n"
+                    f"IMPORTANT: Review ALL prior notes below. Your analysis should build on this "
+                    f"prior work — do not simply repeat it. If the researcher flagged specific "
+                    f"concerns, address them. If anything has changed from the committee version, "
+                    f"call it out explicitly.\n"
                     f"{prior_context[:PRIOR_CTX_BUDGET_CHARS]}\n"
                     f"--- END PRIOR CONTEXT ---\n")
         if page_text:

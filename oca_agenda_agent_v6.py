@@ -326,6 +326,8 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 prior_pdf_text = ""
                 prior_summary = ""
                 prior_notes = ""
+                prior_meeting_date = ""
+                prior_body_name = ""
                 if is_new_appearance:
                     current_app = repo.get_appearance_by_id(appearance_id)
                     if current_app and current_app.get("prior_appearance_id"):
@@ -336,10 +338,33 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                             prior_summary = (
                                 prior_app.get("ai_summary_for_appearance", "") or ""
                             )
-                            prior_context = prior_summary
                             prior_notes = (
                                 prior_app.get("analyst_working_notes", "") or ""
                             )
+                            # Get meeting info for date attribution
+                            prior_meeting = repo.get_meeting_by_id(prior_app.get("meeting_id"))
+                            if prior_meeting:
+                                prior_meeting_date = prior_meeting.get("meeting_date", "")
+                                prior_body_name = prior_meeting.get("body_name", "")
+                            # Build rich prior context: AI summary + researcher notes
+                            ctx_parts = []
+                            if prior_summary:
+                                ctx_parts.append(
+                                    f"[AI ANALYSIS from {prior_body_name} {prior_meeting_date}]\n"
+                                    f"{prior_summary}"
+                                )
+                            if prior_notes:
+                                # Strip any previously carried-forward prefixes
+                                # (handles both old "[Carried from prior appearance 118]"
+                                #  and new "[Carried from Body Name, 2026-03-10, Item 2A]")
+                                clean_notes = re.sub(
+                                    r'^\[Carried from [^\]]+\]\s*', '', prior_notes
+                                ).strip()
+                                ctx_parts.append(
+                                    f"[RESEARCHER NOTES from {prior_body_name} {prior_meeting_date}]\n"
+                                    f"{clean_notes}"
+                                )
+                            prior_context = "\n\n".join(ctx_parts)
                             # Try to get the prior committee PDF text for
                             # change detection
                             prior_pdf_path = prior_app.get("item_pdf_local_path", "")
@@ -478,15 +503,30 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 # ── Build carried-forward notes ──────────────────
                 # Combine prior notes + change detection into the
                 # analyst working notes for this appearance.
+                # Build readable label: "Government Operations 2026-03-10"
+                prior_label = f"{prior_body_name} {prior_meeting_date}".strip() or "prior committee appearance"
                 carried_notes_parts = []
                 if prior_notes:
+                    # Strip any previously-carried prefixes to avoid nesting
+                    clean_prior = re.sub(
+                        r'^\[Carried from [^\]]+\]\s*', '', prior_notes
+                    ).strip()
+                    # Include the prior committee item number for reference
+                    prior_item = prior_app.get("committee_item_number") or prior_app.get("bcc_item_number") or ""
+                    item_ref = f", Item {prior_item}" if prior_item else ""
                     carried_notes_parts.append(
-                        f"[Carried from prior committee appearance]\n{prior_notes}"
+                        f"[Carried from {prior_label}{item_ref}]\n{clean_prior}"
                     )
-                if change_notes and "no substantive changes" not in change_notes.lower():
-                    carried_notes_parts.append(
-                        f"[Changes from committee to BCC version]\n{change_notes}"
-                    )
+                # Always include change detection result — even "no changes"
+                if change_notes:
+                    if "no substantive changes" in change_notes.lower():
+                        carried_notes_parts.append(
+                            f"[No changes from {prior_label} to BCC version]\n{change_notes}"
+                        )
+                    else:
+                        carried_notes_parts.append(
+                            f"[Changes from {prior_label} to BCC version]\n{change_notes}"
+                        )
                 if carried_notes_parts:
                     combined_notes = "\n\n".join(carried_notes_parts)
                     try:
@@ -816,6 +856,47 @@ def cmd_export(args):
         print("No files generated — no matching data found.")
 
 
+def cmd_transcript(args):
+    init_db()
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    import transcript as tx
+
+    def _print_progress(msg, phase="transcript", pct=0):
+        bar = f"[{'█' * (pct // 5)}{'░' * (20 - pct // 5)}] {pct}%"
+        print(f"  {bar}  {msg}")
+
+    print(f"\n🎙 Transcript Backfill — meeting ID {args.meeting_id}")
+    print("=" * 50)
+
+    result = tx.backfill_transcript(
+        args.meeting_id,
+        output_dir=output_dir,
+        video_url=args.video_url,
+        emit=_print_progress,
+    )
+
+    if result["status"] == "ok":
+        print(f"\n✓ SUCCESS")
+        print(f"  Video:        {result.get('video_title', 'N/A')}")
+        print(f"  URL:          {result.get('video_url', 'N/A')}")
+        print(f"  Transcript:   {result.get('transcript_length', 0):,} characters")
+        print(f"  Segmented:    {result.get('items_segmented', 0)} items")
+        print(f"  Updated:      {result.get('items_updated', 0)} appearances")
+        if result.get("transcript_file"):
+            print(f"  Raw saved to: {result['transcript_file']}")
+    else:
+        print(f"\n✗ FAILED: {result.get('message', 'Unknown error')}")
+        if result.get("candidates"):
+            print("\n  Possible matches (use --video-url to override):")
+            for c in result["candidates"][:5]:
+                score = c.get("match_score", 0)
+                print(f"    [{score:.0%}] {c.get('title', 'N/A')}")
+                print(f"          {c.get('url', '')}")
+        sys.exit(1)
+
+
 # ─────────────────────────────────────────────────────────────
 # CLI entry point
 # ─────────────────────────────────────────────────────────────
@@ -837,6 +918,8 @@ Examples:
   python oca_agenda_agent_v6.py notes  --appearance 123 --append-working "Check amendment"
   python oca_agenda_agent_v6.py export --date 4/15/2026
   python oca_agenda_agent_v6.py export --file 251862
+  python oca_agenda_agent_v6.py transcript --meeting-id 42
+  python oca_agenda_agent_v6.py transcript --meeting-id 42 --video-url "https://youtube.com/watch?v=XYZ"
         """
     )
 
@@ -887,6 +970,15 @@ Examples:
     p_exp.add_argument("--file",   default=None, help="File number")
     p_exp.add_argument("--output-dir", default="output", dest="output_dir")
 
+    # ── transcript ──
+    p_tx = sub.add_parser("transcript",
+        help="Backfill meeting transcript from YouTube recording")
+    p_tx.add_argument("--meeting-id", type=int, required=True, dest="meeting_id",
+                       help="Database meeting ID")
+    p_tx.add_argument("--video-url", default=None, dest="video_url",
+                       help="YouTube video URL (skip auto-search)")
+    p_tx.add_argument("--output-dir", default="output", dest="output_dir")
+
     args = parser.parse_args()
 
     if args.verbose:
@@ -896,12 +988,13 @@ Examples:
         database.set_db_path(args.db)
 
     dispatch = {
-        "process": cmd_process,
-        "search":  cmd_search,
-        "history": cmd_history,
-        "update":  cmd_update,
-        "notes":   cmd_notes,
-        "export":  cmd_export,
+        "process":    cmd_process,
+        "search":     cmd_search,
+        "history":    cmd_history,
+        "update":     cmd_update,
+        "notes":      cmd_notes,
+        "export":     cmd_export,
+        "transcript": cmd_transcript,
     }
     dispatch[args.command](args)
 

@@ -1235,6 +1235,10 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <div style="display:flex;gap:.4rem">
         <button class="btn btn-o btn-sm" id="md-regen-btn" onclick="regenDraft()">↻ Regenerate Draft</button>
         <button class="btn btn-s btn-sm" id="md-final-btn" onclick="genFinal()" disabled>✓ Generate Final Export</button>
+        <button class="btn btn-o btn-sm" id="md-transcript-btn" onclick="backfillTranscript()"
+          title="Search YouTube for this meeting's recording, download the auto-generated transcript, and add per-item discussion summaries to notes">
+          🎙 Backfill Meeting Transcript
+        </button>
       </div>
     </div>
     <div class="cb" id="md-artifacts"></div>
@@ -2117,9 +2121,61 @@ async function renderDrawerLifecycle(body, appData) {
 }
 
 function renderDrawerSummary(body, matter, app, saveBtn) {
-  const ai = app?.ai_summary_for_appearance || matter?.latest_ai_summary_part1 || '';
+  let ai = app?.ai_summary_for_appearance || matter?.latest_ai_summary_part1 || '';
   const wp = app?.watch_points_for_appearance || matter?.latest_watch_points || '';
   const cf = app?.carried_forward_from_prior;
+
+  // Strip "[Carried from ...]" prefix from AI summary for cleaner display
+  const carriedPrefixMatch = ai.match(/^\[Carried from ([^\]]+)\]\s*/);
+  let carriedFromLabel = '';
+  if (carriedPrefixMatch) {
+    carriedFromLabel = carriedPrefixMatch[1];
+    ai = ai.slice(carriedPrefixMatch[0].length);
+  }
+
+  // Parse change detection from analyst working notes for prominent display
+  const notes = (app?.analyst_working_notes || '').trim();
+  let changeDetectionHtml = '';
+  const cdChanges = notes.match(/\[(Changes from ([^\]]+) to BCC version)\]\s*([\s\S]*?)(?=\n\n\[|$)/);
+  const cdNoChanges = notes.match(/\[(No changes from ([^\]]+) to BCC version)\]\s*([\s\S]*?)(?=\n\n\[|$)/);
+  if (cdChanges) {
+    const label = cdChanges[2];
+    const detail = (cdChanges[3]||'').trim();
+    changeDetectionHtml = `
+      <div style="background:#fef2f2;border:2px solid #fca5a5;border-radius:10px;
+        padding:.75rem 1rem;margin-bottom:.75rem">
+        <div style="font-weight:700;color:#991b1b;font-size:.85rem;margin-bottom:.35rem">
+          ⚠ CHANGES DETECTED — ${esc(label)} → BCC
+        </div>
+        <div style="white-space:pre-wrap;color:#7f1d1d;font-size:.82rem;line-height:1.55">
+          ${esc(detail).slice(0,1200)}${detail.length>1200?'…':''}
+        </div>
+      </div>`;
+  } else if (cdNoChanges) {
+    const label = cdNoChanges[2];
+    changeDetectionHtml = `
+      <div style="background:#f0fdf4;border:2px solid #86efac;border-radius:10px;
+        padding:.75rem 1rem;margin-bottom:.75rem">
+        <div style="font-weight:700;color:#166534;font-size:.85rem">
+          ✓ NO CHANGES — ${esc(label)} → BCC
+        </div>
+        <div style="color:#15803d;font-size:.8rem;margin-top:.2rem">
+          No substantive changes detected between the committee and BCC versions of this item.
+        </div>
+      </div>`;
+  } else if (cf && carriedFromLabel) {
+    // Item was carried forward but no change detection ran (maybe no PDF available)
+    changeDetectionHtml = `
+      <div style="background:#fffbeb;border:2px solid #fde68a;border-radius:10px;
+        padding:.65rem 1rem;margin-bottom:.75rem">
+        <div style="font-weight:700;color:#92400e;font-size:.82rem">
+          ↩ Carried from ${esc(carriedFromLabel)}
+        </div>
+        <div style="color:#78350f;font-size:.78rem;margin-top:.2rem">
+          This debrief was carried forward from a prior committee appearance. Change detection was not available (PDF may not have been present at both stages).
+        </div>
+      </div>`;
+  }
 
   // Gather ALL appearances for this matter (current + prior) so Research
   // Notes on the Part 1 deliverable show the full researcher trail.
@@ -2178,6 +2234,7 @@ function renderDrawerSummary(body, matter, app, saveBtn) {
         onclick="drTab('appearances',document.querySelectorAll('.dtab')[4])">
         ⓘ Prior research exists — ${priorWithNotes.length} earlier appearance${priorWithNotes.length>1?'s':''} with notes. Scroll down to Research Notes or open the Appearances tab.
       </div>` : ''}
+    ${changeDetectionHtml}
     <div class="ds">
       <div class="ds-title">
         <span>AGENDA DEBRIEF</span>
@@ -2354,9 +2411,16 @@ function renderDrawerNotes(body, app) {
 // ─── Deep Research tab (formerly "Finalized Brief") ───────────
 // This is reference-only material — NOT included in exports.
 function renderDrawerDeepResearch(body, app) {
-  const fb = app?.finalized_brief || '';
+  let fb = app?.finalized_brief || '';
   const whenF = app?.finalized_brief_updated_at || '';
   const whoF  = app?.finalized_brief_updated_by || '';
+  // Strip carried-forward prefix for cleaner display
+  const drCarried = fb.match(/^\[Carried from ([^\]]+)\]\s*/);
+  let drCarriedLabel = '';
+  if (drCarried) {
+    drCarriedLabel = drCarried[1];
+    fb = fb.slice(drCarried[0].length);
+  }
   const fmt = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); };
   body.innerHTML = `
     <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;
@@ -2365,6 +2429,11 @@ function renderDrawerDeepResearch(body, app) {
       deeper analysis, source citations, or context a researcher may want to consult later.
       <span style="display:block;margin-top:.2rem;color:#6d28d9;font-weight:600">⚠ This content is NOT exported and does NOT appear in the Part 1 deliverable.</span>
     </div>
+    ${drCarriedLabel ? `
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
+      padding:.5rem .75rem;margin-bottom:.75rem;font-size:.74rem;color:#92400e">
+      ↩ These notes were carried forward from <strong>${esc(drCarriedLabel)}</strong>. You can edit them for this appearance.
+    </div>` : ''}
     <div class="ds">
       <div class="ds-title">
         <span>DEEP RESEARCH NOTES</span>
@@ -2656,38 +2725,62 @@ function renderDrawerApps(body, matter) {
     ].filter(Boolean).join(' ');
 
     // Separate change-detection notes from regular analyst notes
+    // Supports both old format "[Changes from committee to BCC version]"
+    // and new format "[Changes from Body Name 2026-04-13 to BCC version]"
     let changeBlock = '';
+    let changeLabel = '';
+    let noChanges = false;
     let regularNotes = analyst;
-    const chIdx = analyst.indexOf('[Changes from committee to BCC version]');
-    if (chIdx >= 0) {
-      changeBlock = analyst.slice(chIdx + '[Changes from committee to BCC version]'.length).split('\n\n[')[0].trim();
-      regularNotes = (analyst.slice(0, chIdx) + analyst.slice(chIdx).replace(/\[Changes from committee to BCC version\][^\[]*/, '')).trim();
+    // Check for changes block (with dynamic prior label)
+    const chMatch = analyst.match(/\[(Changes from [^\]]+to BCC version)\]/);
+    if (chMatch) {
+      const fullTag = '[' + chMatch[1] + ']';
+      changeLabel = chMatch[1].replace('Changes from ', '').replace(' to BCC version', '');
+      changeBlock = analyst.slice(analyst.indexOf(fullTag) + fullTag.length).split('\n\n[')[0].trim();
+      regularNotes = (analyst.slice(0, analyst.indexOf(fullTag)) + analyst.slice(analyst.indexOf(fullTag)).replace(/\[Changes from [^\]]+to BCC version\][^\[]*/, '')).trim();
     }
-    // Also separate carried-forward notes
+    // Check for "No changes" block
+    const ncMatch = regularNotes.match(/\[(No changes from [^\]]+to BCC version)\]/);
+    if (ncMatch) {
+      noChanges = true;
+      const ncTag = '[' + ncMatch[1] + ']';
+      changeLabel = ncMatch[1].replace('No changes from ', '').replace(' to BCC version', '');
+      changeBlock = regularNotes.slice(regularNotes.indexOf(ncTag) + ncTag.length).split('\n\n[')[0].trim();
+      regularNotes = (regularNotes.slice(0, regularNotes.indexOf(ncTag)) + regularNotes.slice(regularNotes.indexOf(ncTag)).replace(/\[No changes from [^\]]+to BCC version\][^\[]*/, '')).trim();
+    }
+    // Also separate carried-forward notes (supports dynamic labels)
     let carriedBlock = '';
-    const cfIdx = regularNotes.indexOf('[Carried from prior committee appearance]');
-    if (cfIdx >= 0) {
-      carriedBlock = regularNotes.slice(cfIdx + '[Carried from prior committee appearance]'.length).split('\n\n[')[0].trim();
-      regularNotes = (regularNotes.slice(0, cfIdx) + regularNotes.slice(cfIdx).replace(/\[Carried from prior committee appearance\][^\[]*/, '')).trim();
+    let carriedLabel = '';
+    const cfMatch = regularNotes.match(/\[(Carried from [^\]]+)\]/);
+    if (cfMatch) {
+      const cfTag = '[' + cfMatch[1] + ']';
+      carriedLabel = cfMatch[1].replace('Carried from ', '');
+      carriedBlock = regularNotes.slice(regularNotes.indexOf(cfTag) + cfTag.length).split('\n\n[')[0].trim();
+      regularNotes = (regularNotes.slice(0, regularNotes.indexOf(cfTag)) + regularNotes.slice(regularNotes.indexOf(cfTag)).replace(/\[Carried from [^\]]+\][^\[]*/, '')).trim();
     }
-    const hasContent = regularNotes||carriedBlock||changeBlock||reviewer;
+    const hasContent = regularNotes||carriedBlock||changeBlock||noChanges||reviewer;
 
     const notesSection = hasContent ? `
       <div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:7px;
         padding:.55rem .75rem;margin-top:.55rem;font-size:.78rem;line-height:1.55">
-        ${changeBlock ? `
+        ${(changeBlock && !noChanges) ? `
           <div style="margin-bottom:.5rem;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:.5rem .65rem">
-            <div style="font-weight:600;color:#991b1b;font-size:.7rem;letter-spacing:.4px">⚠ CHANGES DETECTED (COMMITTEE → BCC)</div>
+            <div style="font-weight:600;color:#991b1b;font-size:.7rem;letter-spacing:.4px">⚠ CHANGES DETECTED${changeLabel ? ' ('+esc(changeLabel)+' → BCC)' : ' (COMMITTEE → BCC)'}</div>
             <div style="white-space:pre-wrap;color:#7f1d1d;margin-top:.25rem">${esc(changeBlock).slice(0,600)}${changeBlock.length>600?'…':''}</div>
+          </div>`:''}
+        ${noChanges ? `
+          <div style="margin-bottom:.5rem;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:.5rem .65rem">
+            <div style="font-weight:600;color:#166534;font-size:.7rem;letter-spacing:.4px">✓ NO CHANGES${changeLabel ? ' ('+esc(changeLabel)+' → BCC)' : ' (COMMITTEE → BCC)'}</div>
+            <div style="color:#15803d;margin-top:.2rem;font-size:.76rem">No substantive changes detected between committee and BCC versions. The item appears identical.</div>
           </div>`:''}
         ${carriedBlock ? `
           <div style="margin-bottom:.5rem;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:.5rem .65rem">
-            <div style="font-weight:600;color:#92400e;font-size:.7rem;letter-spacing:.4px">↩ CARRIED FROM COMMITTEE</div>
+            <div style="font-weight:600;color:#92400e;font-size:.7rem;letter-spacing:.4px">↩ NOTES FROM ${carriedLabel ? esc(carriedLabel).toUpperCase() : 'COMMITTEE'}</div>
             <div style="white-space:pre-wrap;color:#78350f;margin-top:.25rem">${esc(carriedBlock).slice(0,600)}${carriedBlock.length>600?'…':''}</div>
           </div>`:''}
         ${regularNotes ? `
           <div style="margin-bottom:.4rem">
-            <div style="font-weight:600;color:#056f3a;font-size:.7rem;letter-spacing:.4px">📝 ANALYST NOTES</div>
+            <div style="font-weight:600;color:#056f3a;font-size:.7rem;letter-spacing:.4px">📝 ANALYST NOTES (THIS APPEARANCE)</div>
             <div style="white-space:pre-wrap;color:var(--gray-800)">${esc(regularNotes).slice(0,800)}${regularNotes.length>800?'…':''}</div>
           </div>`:''}
         ${reviewer ? `
@@ -3006,6 +3099,122 @@ async function runBackfill(onlyMissing) {
       const b = document.getElementById(id); if (b) b.disabled = false;
     });
   }
+}
+
+/* ── Transcript Backfill ─────────────────────────────────── */
+let _txPollTimer = null;
+
+async function backfillTranscript() {
+  const btn = document.getElementById('md-transcript-btn');
+  if (btn) btn.disabled = true;
+
+  // Build a small modal for progress + optional manual URL override
+  const mid = currentMeetingId;
+  if (!mid) { toast('Open a meeting first.', 'err'); if (btn) btn.disabled = false; return; }
+
+  // Quick confirm
+  const go = confirm(
+    'Search YouTube for this meeting\\'s recording, download the transcript, ' +
+    'and append per-item discussion summaries to analyst notes?\\n\\n' +
+    'This may take 1-2 minutes.');
+  if (!go) { if (btn) btn.disabled = false; return; }
+
+  // Create / reveal progress panel
+  let panel = document.getElementById('tx-progress');
+  if (!panel) {
+    const card = document.getElementById('md-artifacts');
+    if (!card) { toast('UI element missing', 'err'); if (btn) btn.disabled = false; return; }
+    panel = document.createElement('div');
+    panel.id = 'tx-progress';
+    panel.style.cssText = 'margin-top:.6rem;padding:.6rem .75rem;border-radius:.5rem;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem;';
+    card.prepend(panel);
+  }
+  panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Starting…';
+  panel.style.display = 'block';
+
+  try {
+    const r = await fetch('/api/backfill/transcript', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({meeting_id: mid})
+    });
+    const d = await r.json();
+
+    if (!d.ok) {
+      // If low-confidence match, show candidates for manual selection
+      if (d.candidates && d.candidates.length) {
+        let opts = d.candidates.map((c, i) =>
+          `${i+1}. ${c.title} (score: ${(c.match_score*100).toFixed(0)}%)\\n   ${c.url}`
+        ).join('\\n');
+        const pick = prompt(
+          'No confident auto-match found. Paste a YouTube URL or pick a number:\\n\\n' + opts);
+        if (pick) {
+          let url = pick.trim();
+          // If they typed a number, grab the URL from candidates
+          const num = parseInt(url, 10);
+          if (!isNaN(num) && num >= 1 && num <= d.candidates.length) {
+            url = d.candidates[num - 1].url;
+          }
+          if (url.includes('youtube') || url.includes('youtu.be')) {
+            panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Retrying with selected video…';
+            const r2 = await fetch('/api/backfill/transcript', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({meeting_id: mid, video_url: url})
+            });
+            const d2 = await r2.json();
+            _handleTranscriptResult(d2, panel, btn);
+            return;
+          }
+        }
+        panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(d.error || d.message || 'Failed');
+        if (btn) btn.disabled = false;
+        return;
+      }
+
+      panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(d.error || d.message || 'Unknown error');
+      if (btn) btn.disabled = false;
+      return;
+    }
+
+    // Poll for progress
+    _txPollTimer = setInterval(async () => {
+      try {
+        const pr = await fetch('/api/backfill/transcript/progress');
+        const pd = await pr.json();
+        if (pd.phase === 'transcript') {
+          panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
+            `<div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">` +
+            `<div style="width:${pd.pct||0}%;height:100%;background:#6366f1;transition:width .3s"></div></div>` +
+            `<span style="color:#4338ca">${esc(pd.msg || 'Working…')}</span>`;
+        }
+        if (pd.done) {
+          clearInterval(_txPollTimer); _txPollTimer = null;
+          _handleTranscriptResult(pd.result, panel, btn);
+        }
+      } catch(_) {}
+    }, 1200);
+  } catch(e) {
+    panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' + esc(e.message || String(e));
+    if (btn) btn.disabled = false;
+  }
+}
+
+function _handleTranscriptResult(d, panel, btn) {
+  if (d && d.status === 'ok') {
+    panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
+      `<span style="color:#15803d">✓ Done — ${d.items_updated || 0} items updated with discussion notes</span><br>` +
+      `<span style="font-size:.75rem;color:#64748b">Video: ${esc(d.video_title || '')} · ` +
+      `${(d.transcript_length||0).toLocaleString()} chars · ${d.items_segmented||0} segments</span>` +
+      (d.video_url ? `<br><a href="${esc(d.video_url)}" target="_blank" style="font-size:.75rem">▶ Watch Recording</a>` : '');
+    toast(`Transcript backfill complete — ${d.items_updated} items updated`, 'ok');
+    // Refresh the meeting detail view to show new notes
+    if (currentMeetingId) openMeeting(currentMeetingId);
+  } else {
+    panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' +
+      esc((d && (d.message || d.error)) || 'Failed');
+  }
+  if (btn) btn.disabled = false;
 }
 
 async function loadSavedMeetings() {
@@ -4018,6 +4227,112 @@ def _bf_public_state():
 @app.route("/api/backfill/progress")
 def api_backfill_progress():
     return jsonify(_bf_public_state())
+
+
+# ── Transcript Backfill ──────────────────────────────────────────
+_tx_lock = _threading.Lock()
+_tx_state = {
+    "running": False, "phase": None, "pct": 0, "msg": "",
+    "done": False, "result": None,
+}
+
+def _tx_emit(msg, phase="transcript", pct=0):
+    with _tx_lock:
+        _tx_state["msg"] = msg
+        _tx_state["phase"] = phase
+        _tx_state["pct"] = pct
+
+@app.route("/api/backfill/transcript", methods=["POST"])
+def api_backfill_transcript():
+    data = request.get_json(force=True)
+    meeting_id = data.get("meeting_id")
+    video_url = data.get("video_url")
+    if not meeting_id:
+        return jsonify({"ok": False, "error": "meeting_id required"}), 400
+
+    with _tx_lock:
+        if _tx_state["running"]:
+            return jsonify({"ok": False, "error": "Transcript backfill already running"}), 409
+
+    # If no video_url provided, do a synchronous YouTube search first
+    # so we can return candidates to the UI if no confident match
+    if not video_url:
+        try:
+            import transcript as tx
+            from repository import get_meeting_by_id
+            meeting = get_meeting_by_id(meeting_id)
+            if not meeting:
+                return jsonify({"ok": False, "error": "Meeting not found"}), 404
+            candidates = tx.search_youtube_videos(
+                meeting["body_name"], meeting["meeting_date"]
+            )
+            if not candidates:
+                return jsonify({
+                    "ok": False, "error": "No YouTube videos found matching this meeting",
+                    "candidates": [],
+                })
+            best = candidates[0]
+            if best["match_score"] < 0.4:
+                return jsonify({
+                    "ok": False,
+                    "error": "No confident match found. Best candidate below threshold.",
+                    "candidates": [
+                        {"title": c["title"], "url": c["url"],
+                         "match_score": round(c["match_score"], 3)}
+                        for c in candidates[:5]
+                    ],
+                })
+            # Good match — use it
+            video_url = best["url"]
+        except Exception as e:
+            log.exception("Transcript video search error")
+            return jsonify({"ok": False, "error": str(e)}), 500
+
+    # Start the async pipeline with the resolved video_url
+    with _tx_lock:
+        _tx_state.update({
+            "running": True, "phase": "transcript", "pct": 10,
+            "msg": "Video matched — downloading transcript…",
+            "done": False, "result": None,
+        })
+
+    def _run():
+        try:
+            import transcript as tx
+            result = tx.backfill_transcript(
+                meeting_id,
+                video_url=video_url,
+                emit=_tx_emit,
+            )
+            with _tx_lock:
+                _tx_state["result"] = result
+                _tx_state["done"] = True
+                _tx_state["running"] = False
+                _tx_state["pct"] = 100
+                _tx_state["msg"] = "Done"
+        except Exception as e:
+            log.exception("Transcript backfill error")
+            with _tx_lock:
+                _tx_state["result"] = {"status": "error", "message": str(e)}
+                _tx_state["done"] = True
+                _tx_state["running"] = False
+                _tx_state["msg"] = f"Error: {e}"
+
+    t = _threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "started": True})
+
+
+@app.route("/api/backfill/transcript/progress")
+def api_transcript_progress():
+    with _tx_lock:
+        return jsonify({
+            "phase": _tx_state["phase"],
+            "pct": _tx_state["pct"],
+            "msg": _tx_state["msg"],
+            "done": _tx_state["done"],
+            "result": _tx_state["result"],
+        })
 
 
 @app.route("/api/artifact/<int:artifact_id>/download")

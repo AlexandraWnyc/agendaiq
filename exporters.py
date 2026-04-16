@@ -20,8 +20,9 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
 from docx import Document
-from docx.shared import Pt, RGBColor, Inches
+from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
 
 from utils import safe_filename, extract_watch_points
 
@@ -156,11 +157,24 @@ def export_excel(rows_data: list[dict], output_path: Path,
 
 
 def _section(doc, label: str, color=(0x2E, 0x75, 0xB6)):
-    """Write a coloured bold section label."""
+    """Write a coloured bold section label with a subtle bottom border and spacing."""
     p = doc.add_paragraph()
+    p.paragraph_format.space_before = Pt(10)
+    p.paragraph_format.space_after = Pt(4)
+    # Add a bottom border via XML for visual separation
+    pPr = p._p.get_or_add_pPr()
+    pBdr = pPr.makeelement(qn('w:pBdr'), {})
+    bottom = pBdr.makeelement(qn('w:bottom'), {
+        qn('w:val'): 'single',
+        qn('w:sz'): '4',
+        qn('w:space'): '1',
+        qn('w:color'): '{:02X}{:02X}{:02X}'.format(*color),
+    })
+    pBdr.append(bottom)
+    pPr.append(pBdr)
     r = p.add_run(label)
     r.font.bold = True
-    r.font.size = Pt(11)
+    r.font.size = Pt(12)
     r.font.color.rgb = RGBColor(*color)
     return p
 
@@ -203,12 +217,13 @@ def export_word(items_data: list[dict], output_path: Path,
 
         if title:
             p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(2)
             r = p.add_run(title)
             r.font.italic = True
-            r.font.size = Pt(12)
-            r.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+            r.font.size = Pt(11)
+            r.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
 
-        # ── Workflow chip
+        # ── Workflow chip (compact metadata line)
         ws = item.get("workflow_status") or "New"
         at = item.get("assigned_to") or ""
         rv = item.get("reviewer") or ""
@@ -218,7 +233,8 @@ def export_word(items_data: list[dict], output_path: Path,
         if rv: meta_bits.append(f"Reviewer: {rv}")
         if dd: meta_bits.append(f"Due: {dd}")
         p = doc.add_paragraph()
-        r = p.add_run("  ·  ".join(meta_bits))
+        p.paragraph_format.space_after = Pt(6)
+        r = p.add_run("  \u00B7  ".join(meta_bits))
         r.font.size = Pt(9)
         r.font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
 
@@ -286,7 +302,19 @@ def export_word(items_data: list[dict], output_path: Path,
         if notes_blocks:
             _section(doc, "RESEARCH NOTES", color=(0x05, 0x6F, 0x3A))
             for blk in notes_blocks:
-                _write_clean_text_to_doc(doc, blk)
+                # First line is the label (e.g. "Analyst (user · date):")
+                lines = blk.split("\n", 1)
+                if len(lines) == 2:
+                    p = doc.add_paragraph()
+                    p.paragraph_format.space_before = Pt(4)
+                    p.paragraph_format.space_after = Pt(2)
+                    r = p.add_run(lines[0])
+                    r.font.bold = True
+                    r.font.size = Pt(10)
+                    r.font.color.rgb = RGBColor(0x05, 0x6F, 0x3A)
+                    _write_clean_text_to_doc(doc, lines[1])
+                else:
+                    _write_clean_text_to_doc(doc, blk)
                 doc.add_paragraph("")
 
         # NOTE: finalized_brief (Deep Research Notes) is deliberately NOT
@@ -304,24 +332,42 @@ def export_word(items_data: list[dict], output_path: Path,
 
 
 def _write_clean_text_to_doc(doc, text: str):
-    """Parse cleaned text into properly formatted Word paragraphs."""
+    """Parse cleaned text into properly formatted Word paragraphs.
+    Detects section headers (lines ending with colon, ALL-CAPS lines,
+    known labels) and renders them bold for easy scanning."""
+    # Explicit header patterns (case-insensitive)
     header_patterns = re.compile(
         r'^(ITEM\s|Sponsor:|Summary:|District|'
         r'Purpose and Background:|Fiscal Impact:|Additional Notes:|'
-        r'RESEARCH CONTEXT:|WATCH POINTS:|PART [12])',
+        r'RESEARCH CONTEXT:|WATCH POINTS:|PART [12]|'
+        r'Key (Issues|Points|Concerns|Findings)|OCA Relevance|'
+        r'Background:|Recommendation:|Action Required:|'
+        r'Contract (Details|Value|Term)|Funding Source:|'
+        r'Carried Forward|Change Detection|Changes? Detected|'
+        r'No Changes|Amendments?:|Impact:|Overview:|'
+        r'Analyst|Reviewer|Notes?:|Context:)',
         re.I
     )
+    # Also treat any ALL-CAPS line (3+ words) as a header
+    allcaps_pattern = re.compile(r'^[A-Z][A-Z\s&\-/,]{6,}$')
+
     for line in text.split("\n"):
         line = line.strip()
         if not line:
             continue
-        if header_patterns.match(line):
+
+        is_header = header_patterns.match(line) or allcaps_pattern.match(line)
+
+        if is_header:
             p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(2)
             if ":" in line:
                 label, _, value = line.partition(":")
                 rh = p.add_run(label + ":")
                 rh.font.bold = True
                 rh.font.size = Pt(11)
+                rh.font.color.rgb = RGBColor(0x1F, 0x29, 0x37)
                 if value.strip():
                     rv = p.add_run("  " + value.strip())
                     rv.font.size = Pt(11)
@@ -329,15 +375,30 @@ def _write_clean_text_to_doc(doc, text: str):
                 rh = p.add_run(line)
                 rh.font.bold = True
                 rh.font.size = Pt(11)
-        elif line.startswith("- "):
+                rh.font.color.rgb = RGBColor(0x1F, 0x29, 0x37)
+        elif line.startswith("- ") or line.startswith("• "):
             bullet_text = line[2:].strip()
             p = doc.add_paragraph()
-            p.paragraph_format.left_indent = Inches(0.5)
-            p.paragraph_format.first_line_indent = Inches(-0.25)
-            r = p.add_run("\u00B7  " + bullet_text)
-            r.font.size = Pt(11)
+            p.paragraph_format.left_indent = Inches(0.4)
+            p.paragraph_format.first_line_indent = Inches(-0.2)
+            p.paragraph_format.space_after = Pt(2)
+            # Bold the text before the first colon in bullets (e.g. "Fiscal Impact: ...")
+            if ":" in bullet_text and len(bullet_text.split(":")[0]) < 40:
+                blabel, _, bvalue = bullet_text.partition(":")
+                r = p.add_run("\u00B7  ")
+                r.font.size = Pt(11)
+                rb = p.add_run(blabel + ":")
+                rb.font.size = Pt(11)
+                rb.font.bold = True
+                if bvalue.strip():
+                    rv = p.add_run(" " + bvalue.strip())
+                    rv.font.size = Pt(11)
+            else:
+                r = p.add_run("\u00B7  " + bullet_text)
+                r.font.size = Pt(11)
         else:
             p = doc.add_paragraph()
+            p.paragraph_format.space_after = Pt(3)
             r = p.add_run(line)
             r.font.size = Pt(11)
 
