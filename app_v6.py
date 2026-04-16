@@ -2043,6 +2043,13 @@ async function openDrawer(fileNum, appId) {
       ? `<a target="_blank" href="/api/appearance/${appData.id}/pdf" style="color:#fff;text-decoration:underline">📄 Item PDF</a>` : '',
   ].filter(Boolean).join('');
 
+  // Add 🎙 badge to Notes tab if transcript notes exist
+  const notesTab = document.querySelectorAll('.dtab')[1]; // Notes is 2nd tab
+  if (notesTab) {
+    const hasTranscript = (appData?.analyst_working_notes || '').includes('[Meeting Discussion');
+    notesTab.innerHTML = hasTranscript ? 'Notes <span style="font-size:.65rem" title="Has meeting transcript analysis">🎙</span>' : 'Notes';
+  }
+
   // Default to summary tab
   drTab('summary', document.querySelector('.dtab'));
 }
@@ -2335,6 +2342,70 @@ function memberOptions(selectedVal, includeClear=true) {
   return clearOpt + members.map(n=>`<option${n===selectedVal?' selected':''}>${esc(n)}</option>`).join('');
 }
 
+function _renderTranscriptNotes(notesText) {
+  // Extract [Meeting Discussion — ...] blocks from analyst_working_notes
+  const regex = /\[Meeting Discussion — ([^\]]+)\]([\s\S]*?)(?=\n\n\[|$)/g;
+  const blocks = [];
+  let match;
+  while ((match = regex.exec(notesText)) !== null) {
+    blocks.push({label: match[1], body: match[2].trim()});
+  }
+  if (!blocks.length) return '';
+
+  const sections = blocks.map(b => {
+    // Parse structured fields from the body
+    const lines = b.body.split('\n');
+    let html = '';
+    let inSection = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) { html += '<div style="height:.3rem"></div>'; continue; }
+
+      // Section headers (Sentiment:, Tone:, Speaker Positions:, etc.)
+      if (/^(Sentiment|Tone|Speaker Positions|Intent & Implications|Concerns Raised|Public Comment|Vote|Amendments|Video|Speakers):/.test(trimmed)) {
+        const [lbl, ...rest] = trimmed.split(':');
+        const val = rest.join(':').trim();
+        const color = lbl === 'Sentiment' ? (
+          /supportive/i.test(val) ? '#15803d' :
+          /opposed|contentious/i.test(val) ? '#dc2626' :
+          /divided/i.test(val) ? '#d97706' : '#475569'
+        ) : '#475569';
+
+        if (lbl === 'Vote') {
+          const voteColor = /pass|approv|adopt/i.test(val) ? '#15803d' : /fail|denied|defer/i.test(val) ? '#dc2626' : '#6b7280';
+          html += `<div style="margin-top:.35rem;font-weight:700;color:${voteColor}">Vote: ${esc(val)}</div>`;
+        } else if (lbl === 'Video') {
+          const urlMatch = val.match(/(https:[^\s]+)/);
+          if (urlMatch) {
+            html += `<div style="margin-top:.3rem"><a href="${esc(urlMatch[1])}" target="_blank" style="font-size:.75rem;color:#2563eb">Watch this discussion in the recording</a></div>`;
+          }
+        } else if (lbl === 'Speaker Positions' || lbl === 'Intent & Implications' || lbl === 'Concerns Raised') {
+          html += `<div style="margin-top:.4rem;font-weight:600;font-size:.75rem;color:#334155">${esc(lbl)}:</div>`;
+          inSection = true;
+        } else {
+          html += `<div style="margin-top:.3rem"><span style="font-weight:600;font-size:.73rem;color:#475569">${esc(lbl)}:</span> <span style="color:${color}">${esc(val)}</span></div>`;
+        }
+      } else if (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('Sponsor:') || trimmed.startsWith('Opposition:') || trimmed.startsWith('Looking Ahead:') || trimmed.startsWith('Notable:')) {
+        html += `<div style="padding-left:.8rem;font-size:.76rem;color:#475569">${esc(trimmed)}</div>`;
+      } else {
+        html += `<div style="font-size:.78rem;color:#334155;line-height:1.45">${esc(trimmed)}</div>`;
+      }
+    }
+
+    return `<div style="margin-bottom:.5rem;padding:.6rem .75rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;border-left:3px solid #6366f1">
+      <div style="font-size:.72rem;font-weight:700;color:#6366f1;margin-bottom:.3rem">MEETING DISCUSSION — ${esc(b.label)}</div>
+      ${html}
+    </div>`;
+  }).join('');
+
+  return `<hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
+    <div class="ds">
+      <div class="ds-title" style="color:#6366f1">MEETING TRANSCRIPT ANALYSIS</div>
+      ${sections}
+    </div>`;
+}
+
 function renderDrawerNotes(body, app) {
   const wn = app?.analyst_working_notes || '';
   const rn = app?.reviewer_notes || '';
@@ -2375,6 +2446,7 @@ function renderDrawerNotes(body, app) {
       </div>
       <button class="btn btn-p btn-sm" onclick="saveWorkflowFromDrawer()">Save Workflow</button>
     </div>
+    ${_renderTranscriptNotes(wn)}
     <hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
     <div class="ds">
       <div class="ds-title">ANALYST WORKING NOTES</div>

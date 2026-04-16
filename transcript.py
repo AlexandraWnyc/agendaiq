@@ -561,11 +561,11 @@ def segment_transcript_by_items(transcript: str, items: list[dict],
     if len(transcript) > max_chars:
         transcript = transcript[:max_chars] + "\n[TRANSCRIPT TRUNCATED]"
 
-    prompt = f"""You are analyzing the transcript of a {committee_name} meeting held on {meeting_date}.
+    prompt = f"""You are an expert legislative analyst reviewing the transcript of a {committee_name} meeting held on {meeting_date} for the Miami-Dade County Office of the County Attorney.
 
-Below is the full auto-generated transcript with timestamps, followed by the list of agenda items discussed at this meeting.
+Below is the full auto-generated transcript with timestamps, followed by the agenda items discussed at this meeting.
 
-Your task: For EACH agenda item, find where it was discussed in the transcript and produce a concise summary of the discussion. Meetings typically follow the agenda order, though items may be taken out of order.
+Your task: For EACH agenda item, find where it was discussed and produce a thorough analysis of the discussion that captures not just WHAT was said but HOW it was said — the sentiment, tone, intent, and political dynamics.
 
 AGENDA ITEMS:
 {items_block}
@@ -575,7 +575,7 @@ TRANSCRIPT:
 
 ---
 
-For each item that was discussed, output a JSON object. Items that were NOT discussed (consent agenda items passed without discussion, items deferred, etc.) should still be noted.
+For each item, output a JSON object. Items NOT discussed (consent agenda, deferred) should still be noted.
 
 Output ONLY a JSON array with this structure:
 [
@@ -585,10 +585,29 @@ Output ONLY a JSON array with this structure:
     "discussed": true/false,
     "timestamp_start": "HH:MM:SS",
     "timestamp_end": "HH:MM:SS",
-    "discussion_summary": "2-4 sentence summary of what was said, who spoke, key points raised, any concerns or amendments",
+    "discussion_summary": "3-5 sentence summary of the substantive discussion — what was said, key arguments, specific dollar amounts, dates, or conditions mentioned",
     "speakers": ["Commissioner Name", ...],
+    "speaker_positions": {{
+      "Commissioner Name": "Supportive — argued this would benefit District 2 residents",
+      "Commissioner Other": "Opposed — raised fiscal concerns about the $5M allocation"
+    }},
+    "sentiment": {{
+      "overall": "supportive|opposed|divided|neutral|contentious",
+      "description": "Brief characterization of the room's mood — was there consensus, heated debate, disinterest?"
+    }},
+    "tone_analysis": {{
+      "tone": "collaborative|adversarial|procedural|passionate|perfunctory|skeptical",
+      "notable_moments": "Quote or paraphrase any particularly forceful, emotional, or politically significant statements"
+    }},
+    "intent_signals": {{
+      "sponsor_intent": "What was the sponsor trying to achieve? Any backroom deals or compromises hinted at?",
+      "opposition_intent": "What drove any opposition? Policy disagreement, political positioning, fiscal concerns?",
+      "future_implications": "Did anyone signal future actions — amendments at BCC, legal challenges, community pushback?"
+    }},
+    "public_comment": "Summary of any public comment on this item, including tone and sentiment of speakers" or null,
     "vote_result": "Passed 9-3" or "Deferred" or "Withdrawn" or null,
-    "amendments": "Brief description of any amendments" or null,
+    "amendments": "Brief description of any amendments, who proposed them, and whether they were accepted" or null,
+    "concerns_raised": ["Specific concern 1", "Specific concern 2"],
     "consent_agenda": true/false
   }},
   ...
@@ -597,10 +616,14 @@ Output ONLY a JSON array with this structure:
 Guidelines:
 - The chair often announces items by number ("Item 2A") or file number
 - Listen for the clerk reading the item title
-- "Consent agenda" items are typically passed as a group at the start
-- Note who spoke FOR and AGAINST each item
-- Capture specific dollar amounts, dates, or conditions mentioned
-- If an item's discussion is very brief (just reading the title + vote), note that
+- "Consent agenda" items are typically passed as a group at the start — note which items were pulled from consent for separate discussion
+- For EACH speaker, note whether they spoke FOR or AGAINST, and characterize their tone
+- Capture specific dollar amounts, dates, deadlines, or conditions mentioned
+- Note any references to prior meetings, ongoing disputes, or political context
+- Flag if commissioners expressed concerns that could become legal issues
+- If public commenters spoke, capture their sentiment and key points
+- Note procedural actions: substitutions, amendments from the floor, points of order
+- If an item's discussion is very brief (just reading title + vote), note that but still analyze the vote split
 - If you cannot find a clear discussion for an item, set discussed=false
 """
 
@@ -610,7 +633,7 @@ Guidelines:
     try:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=8192,
+            max_tokens=16384,
             messages=[{"role": "user", "content": prompt}],
         )
         text = response.content[0].text.strip()
@@ -677,7 +700,7 @@ def store_transcript_notes(meeting_id: int, segments: dict,
         if not seg.get("discussed", False) and not seg.get("consent_agenda", False):
             continue
 
-        # Build the note
+        # Build the note — rich format with sentiment/tone/intent
         parts = []
         label = f"[Meeting Discussion — {body_name} {meeting_date}]"
         parts.append(label)
@@ -687,12 +710,58 @@ def store_transcript_notes(meeting_id: int, segments: dict,
         elif seg.get("discussion_summary"):
             parts.append(seg["discussion_summary"])
 
-        if seg.get("speakers"):
+        # Sentiment & Tone
+        sentiment = seg.get("sentiment", {})
+        tone = seg.get("tone_analysis", {})
+        if sentiment.get("overall") or sentiment.get("description"):
+            s_line = f"Sentiment: {sentiment.get('overall', '').upper()}"
+            if sentiment.get("description"):
+                s_line += f" — {sentiment['description']}"
+            parts.append(s_line)
+        if tone.get("tone"):
+            t_line = f"Tone: {tone['tone']}"
+            if tone.get("notable_moments"):
+                t_line += f"\n  Notable: {tone['notable_moments']}"
+            parts.append(t_line)
+
+        # Speaker positions
+        sp = seg.get("speaker_positions", {})
+        if sp:
+            pos_lines = ["Speaker Positions:"]
+            for name, position in sp.items():
+                pos_lines.append(f"  • {name}: {position}")
+            parts.append("\n".join(pos_lines))
+        elif seg.get("speakers"):
             parts.append(f"Speakers: {', '.join(seg['speakers'])}")
+
+        # Intent signals
+        intent = seg.get("intent_signals", {})
+        if any(intent.get(k) for k in ["sponsor_intent", "opposition_intent", "future_implications"]):
+            intent_lines = ["Intent & Implications:"]
+            if intent.get("sponsor_intent"):
+                intent_lines.append(f"  Sponsor: {intent['sponsor_intent']}")
+            if intent.get("opposition_intent"):
+                intent_lines.append(f"  Opposition: {intent['opposition_intent']}")
+            if intent.get("future_implications"):
+                intent_lines.append(f"  Looking Ahead: {intent['future_implications']}")
+            parts.append("\n".join(intent_lines))
+
+        # Concerns
+        concerns = seg.get("concerns_raised", [])
+        if concerns:
+            parts.append("Concerns Raised:\n" + "\n".join(f"  • {c}" for c in concerns))
+
+        # Public comment
+        if seg.get("public_comment"):
+            parts.append(f"Public Comment: {seg['public_comment']}")
+
+        # Vote & amendments
         if seg.get("vote_result"):
             parts.append(f"Vote: {seg['vote_result']}")
         if seg.get("amendments"):
             parts.append(f"Amendments: {seg['amendments']}")
+
+        # Video link with timestamp
         if seg.get("timestamp_start"):
             ts = seg["timestamp_start"]
             te = seg.get("timestamp_end", "")
