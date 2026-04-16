@@ -202,30 +202,58 @@ def search_youtube_videos(committee_name: str, meeting_date: str,
     search_query = " ".join(query_words)
     log.info(f"  YouTube search: '{search_query}' on channel {YOUTUBE_CHANNEL_URL}")
 
+    result = None
+    # Strategy 1: Use the channel's search endpoint (most reliable)
+    channel_search_url = f"{YOUTUBE_CHANNEL_URL}/search?query={'+'.join(query_words)}"
     try:
         result = subprocess.run(
             [
                 "yt-dlp", "--flat-playlist", "--print-json",
                 "--playlist-end", str(max_results),
-                f"ytsearch{max_results}:{search_query} site:youtube.com/@miami-dadebcc6863",
+                channel_search_url,
             ],
             capture_output=True, text=True, timeout=60,
         )
-        if result.returncode != 0:
-            # Fallback: search the channel directly
+    except subprocess.TimeoutExpired:
+        log.warning("  YouTube channel search timed out")
+    except FileNotFoundError:
+        log.error("  yt-dlp not installed — run: pip install yt-dlp")
+        return []
+
+    # Strategy 2: If channel search failed, try global YouTube search
+    if not result or result.returncode != 0 or not result.stdout.strip():
+        log.info("  Channel search returned nothing, trying global ytsearch…")
+        try:
             result = subprocess.run(
                 [
                     "yt-dlp", "--flat-playlist", "--print-json",
-                    "--playlist-end", str(max_results * 3),
+                    "--playlist-end", str(max_results),
+                    f"ytsearch{max_results}:miami dade {search_query}",
+                ],
+                capture_output=True, text=True, timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("  YouTube global search timed out")
+        except FileNotFoundError:
+            pass
+
+    # Strategy 3: If still no results, list recent channel videos and match locally
+    if not result or result.returncode != 0 or not result.stdout.strip():
+        log.info("  Falling back to channel video listing…")
+        try:
+            result = subprocess.run(
+                [
+                    "yt-dlp", "--flat-playlist", "--print-json",
+                    "--playlist-end", str(max_results * 5),
                     f"{YOUTUBE_CHANNEL_URL}/videos",
                 ],
                 capture_output=True, text=True, timeout=90,
             )
-    except subprocess.TimeoutExpired:
-        log.warning("  YouTube search timed out")
-        return []
-    except FileNotFoundError:
-        log.error("  yt-dlp not installed — run: pip install yt-dlp")
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            log.warning("  All YouTube search strategies failed")
+            return []
+
+    if not result or not result.stdout.strip():
         return []
 
     # Parse JSON lines output

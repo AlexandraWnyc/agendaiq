@@ -844,7 +844,8 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <div class="coldef"><b>Leg Status</b> — Current legislative status snapshot (e.g., "In Committee," "Adopted"). Updates when backfill runs after a new meeting.</div>
         <div class="coldef"><b>Sponsor / Requester</b> — Commissioner or department that originated the item.</div>
         <div class="coldef"><b>Control</b> — Control body, usually a committee assignment.</div>
-        <div class="coldef"><b>Progress</b> — Visual indicator showing whether the item has passed through Committee and/or BCC. Filled blue dot = currently here; filled gray = already happened; outlined = not yet. <code>+SUPP</code> badge = this item is on a supplement.</div>
+        <div class="coldef"><b>Journey</b> — Chronological path showing every stage (committee, BCC) this item has passed through. Green chips = committee, blue chips = BCC. The current stage is highlighted with a bold chip. Dashed borders indicate events from Legistar history (before AgendaIQ tracking).</div>
+        <div class="coldef"><b>What's Next</b> — Forward-looking indicator showing what needs to happen next, derived from the Legistar legislative status. Green = done/adopted, blue = heading to BCC, yellow = pending.</div>
         <div class="coldef"><b>Prior Notes</b> — <strong>✓</strong> means this matter has analyst or reviewer notes on at least one prior appearance. Click the row to see them.</div>
         <div class="coldef"><b>History</b> — Quick badges showing if notes carried forward (↩ CF), AI ran, etc.</div>
         <div class="coldef"><b>Workflow</b> — Current status of the research task (see Status Guide).</div>
@@ -1288,7 +1289,8 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           <th>BCC Date</th><th>BCC #</th>
           <th>Title</th><th>Type</th><th>Leg Status</th>
           <th>Sponsor / Requester</th><th>Control</th>
-          <th title="Where this item is in the committee→BCC lifecycle. Filled dot = current stage, outlined = past, dotted = not yet. Click a cell to see the full path.">Progress</th>
+          <th title="Chronological path showing every stage this item has passed through. Current stage is highlighted.">Journey</th>
+          <th title="What needs to happen next based on Legistar legislative status and control body.">What's Next</th>
           <th title="✓ if this matter has analyst/reviewer notes from a previous appearance">Prior Notes</th>
           <th>History</th>
           <th>Workflow</th><th>Assigned</th><th>Reviewer</th><th>Due</th>
@@ -3507,12 +3509,16 @@ function _renderItemsGrid() {
     const bn = it.bcc_item_number_x         || it.bcc_item_number || '';
     // Italic + gray means date came from parsed Legistar history (no stored
     // appearance in AgendaIQ yet). Solid dark means we have the appearance.
+    const cmteCount = it.cmte_appearance_count || 0;
+    const bccCount  = it.bcc_appearance_count || 0;
+    const cmteBadge = cmteCount > 1 ? `<span style="font-size:.55rem;background:#bbf7d0;color:#166534;padding:0 3px;border-radius:3px;margin-left:2px" title="${cmteCount} committee appearances">×${cmteCount}</span>` : '';
+    const bccBadge  = bccCount > 1 ? `<span style="font-size:.55rem;background:#bfdbfe;color:#1e40af;padding:0 3px;border-radius:3px;margin-left:2px" title="${bccCount} BCC appearances">×${bccCount}</span>` : '';
     const cdSrc = it.committee_date_source === 'legistar'
       ? `<span style="font-style:italic;color:#94a3b8" title="From Legistar legislative history">${cd}</span>`
-      : (cd || '—');
+      : (cd ? cd + cmteBadge : '—');
     const bdSrc = it.bcc_date_source === 'legistar'
       ? `<span style="font-style:italic;color:#94a3b8" title="From Legistar legislative history">${bd}</span>`
-      : (bd || '—');
+      : (bd ? bd + bccBadge : '—');
 
     // Inline Links column: ↗ Legistar item page, 📄 Item PDF (local or remote).
     const linkBits = [];
@@ -3544,7 +3550,8 @@ function _renderItemsGrid() {
       <td style="font-size:.72rem;font-weight:500">${esc(it.current_status||'—')}</td>
       <td style="font-size:.72rem">${esc(it.sponsor||'—')}</td>
       <td style="font-size:.72rem">${esc(it.control_body||'—')}</td>
-      <td style="font-size:.72rem">${renderProgressCell(it)}</td>
+      <td style="font-size:.72rem">${renderJourneyCell(it)}</td>
+      <td style="font-size:.72rem">${renderNextStepCell(it)}</td>
       <td style="text-align:center">${priorCell}</td>
       <td>${historyBits.join(' ') || '—'}</td>
       <td>${badge(it.workflow_status)}</td>
@@ -3686,29 +3693,34 @@ function badge(s) {
 // Render a compact Committee → BCC progress indicator for the grid.
 // Filled dot = this stage has happened (we have a date for it), outlined = no
 // activity recorded at that stage. Supplement marker appears if applicable.
-function renderProgressCell(it) {
-  const hasCmte = !!(it.committee_appearance_date);
-  const hasBcc  = !!(it.bcc_appearance_date);
-  const curStage = (it.agenda_stage || '').toLowerCase();
-  const isSupp = /supplement/.test(curStage);
-  const dot = (filled, active, title) =>
-    `<span title="${esc(title)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;
-      ${filled ? `background:${active ? '#2563eb' : '#94a3b8'};` : 'background:transparent;'}
-      border:2px solid ${active ? '#2563eb' : (filled ? '#94a3b8' : '#cbd5e1')};
-      ${active ? 'box-shadow:0 0 0 3px rgba(37,99,235,.18);' : ''}"></span>`;
-  const link = (filled, label) =>
-    filled
-      ? `<span style="font-weight:600;color:var(--gray-700)">${label}</span>`
-      : `<span style="color:var(--gray-400);font-style:italic">${label}</span>`;
-  return `
-    <div style="display:flex;align-items:center;gap:.35rem;font-size:.7rem;line-height:1">
-      ${dot(hasCmte, curStage.includes('committee'), hasCmte ? 'At committee '+it.committee_appearance_date : 'No committee record')}
-      ${link(hasCmte, 'Cmte')}
-      <span style="color:var(--gray-300)">→</span>
-      ${dot(hasBcc, curStage.includes('bcc'), hasBcc ? 'At BCC '+it.bcc_appearance_date : 'Not yet at BCC')}
-      ${link(hasBcc, 'BCC')}
-      ${isSupp ? '<span style="margin-left:.3rem;background:#ede9fe;color:#5b21b6;padding:.1rem .35rem;border-radius:4px;font-size:.62rem;font-weight:600">+SUPP</span>' : ''}
-    </div>`;
+function renderJourneyCell(it) {
+  const steps = it.journey || [];
+  if (!steps.length) return '<span style="color:var(--gray-400);font-size:.7rem">—</span>';
+  return `<div style="display:flex;align-items:center;gap:0;font-size:.65rem;line-height:1;flex-wrap:nowrap;overflow:hidden">` +
+    steps.map((s, i) => {
+      const colors = s.stage === 'bcc'
+        ? {bg: s.is_current ? '#2563eb' : '#93c5fd', fg: s.is_current ? '#fff' : '#1e3a5f'}
+        : {bg: s.is_current ? '#16a34a' : '#bbf7d0', fg: s.is_current ? '#fff' : '#14532d'};
+      const fromLeg = s.from_legistar ? 'border:1px dashed #94a3b8;' : '';
+      const arrow = i < steps.length - 1
+        ? '<span style="color:#94a3b8;font-size:.6rem;margin:0 1px">→</span>' : '';
+      const title = `${s.body_name || s.label} ${s.full_date || ''}${s.action ? ' — ' + s.action : ''}${s.from_legistar ? ' (from Legistar)' : ''}`;
+      return `<span title="${esc(title)}" style="display:inline-flex;align-items:center;padding:1px 4px;border-radius:3px;background:${colors.bg};color:${colors.fg};white-space:nowrap;font-weight:${s.is_current?700:500};${fromLeg}">${esc(s.label)} ${esc(s.date)}</span>${arrow}`;
+    }).join('') + '</div>';
+}
+
+function renderNextStepCell(it) {
+  const ns = it.next_step || '';
+  const nst = it.next_step_type || 'pending';
+  if (!ns || ns === '—') return '<span style="color:var(--gray-400);font-size:.72rem">—</span>';
+  const styles = {
+    done:    'background:#f0fdf4;color:#15803d;border:1px solid #86efac',
+    bcc:     'background:#eff6ff;color:#1d4ed8;border:1px solid #93c5fd',
+    cmte:    'background:#f0fdf4;color:#166534;border:1px solid #86efac',
+    pending: 'background:#fffbeb;color:#92400e;border:1px solid #fde68a',
+  };
+  const icons = {done: '✓', bcc: '→', cmte: '→', pending: '⏳'};
+  return `<span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:.68rem;font-weight:600;white-space:nowrap;${styles[nst]||styles.pending}">${icons[nst]||''} ${esc(ns)}</span>`;
 }
 function esc(s){
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');

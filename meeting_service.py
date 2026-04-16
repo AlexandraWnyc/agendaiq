@@ -111,55 +111,192 @@ def get_meeting_package(meeting_id: int) -> dict | None:
         prior = get_all_appearances_for_matter(matter["id"]) if matter else []
         prior_other = [p for p in prior if p["id"] != a["id"]]
 
-        # Cross-stage lookup: find the matching committee appearance and BCC
-        # appearance across ALL meetings for this matter so the grid can show
-        # Cmte Date/# and BCC Date/# on a single row regardless of which
-        # agenda we are viewing.
-        cmte_app = next(
-            (p for p in prior if (p.get("agenda_stage") or "").lower() == "committee"
-             or ("committee" in (p.get("body_name") or "").lower()
-                 and "board of county" not in (p.get("body_name") or "").lower())),
-            None,
+        # Cross-stage lookup: find ALL committee and BCC appearances so we
+        # can show the full journey and use the LATEST dates.
+        def _is_cmte(p):
+            s = (p.get("agenda_stage") or "").lower()
+            bn = (p.get("body_name") or "").lower()
+            return s == "committee" or ("committee" in bn and "board of county" not in bn)
+
+        def _is_bcc(p):
+            s = (p.get("agenda_stage") or "").lower()
+            bn = (p.get("body_name") or "").lower()
+            return s == "bcc" or "board of county commissioners" in bn
+
+        cmte_apps = sorted(
+            [p for p in prior if _is_cmte(p)],
+            key=lambda x: x.get("meeting_date") or "", reverse=True
         )
-        bcc_app = next(
-            (p for p in prior if (p.get("agenda_stage") or "").lower() == "bcc"
-             or "board of county commissioners" in (p.get("body_name") or "").lower()),
-            None,
+        bcc_apps = sorted(
+            [p for p in prior if _is_bcc(p)],
+            key=lambda x: x.get("meeting_date") or "", reverse=True
         )
 
-        # Fallback: if current appearance IS the committee/BCC one, use self
+        # Use the LATEST appearance at each stage for cross-stage columns
+        cmte_app = cmte_apps[0] if cmte_apps else None
+        bcc_app = bcc_apps[0] if bcc_apps else None
+
         cur_stage = (a.get("agenda_stage") or "").lower()
         if cur_stage == "committee" and not cmte_app:
             cmte_app = a
+            cmte_apps = [a]
         if cur_stage == "bcc" and not bcc_app:
             bcc_app = a
+            bcc_apps = [a]
 
-        # Secondary fallback: parsed Legistar lifecycle events. If we have no
-        # stored appearance at a given stage (e.g. the committee hearing was
-        # before AgendaIQ was tracking) use the earliest matching event from
-        # matter_timeline so cmte/BCC dates populate even on first encounter.
+        # Secondary fallback: parsed Legistar lifecycle events.
         cmte_date_from_lc = ""
         cmte_body_from_lc = ""
         cmte_item_from_lc = ""
         bcc_date_from_lc  = ""
         bcc_item_from_lc  = ""
-        if matter.get("id") and (not cmte_app or not bcc_app):
+        lc_events = []
+        if matter.get("id"):
             try:
                 import lifecycle as _lc
-                events = _lc.get_timeline_for_matter(matter["id"])
-                for ev in events:
-                    bn = (ev.get("body_name") or "").lower()
-                    if not cmte_app and not cmte_date_from_lc and \
-                       "committee" in bn and "board of county" not in bn:
-                        cmte_date_from_lc = ev.get("event_date") or ""
-                        cmte_body_from_lc = ev.get("body_name") or ""
-                        cmte_item_from_lc = ev.get("agenda_item") or ""
-                    if not bcc_app and not bcc_date_from_lc and \
-                       "board of county commissioners" in bn:
-                        bcc_date_from_lc = ev.get("event_date") or ""
-                        bcc_item_from_lc = ev.get("agenda_item") or ""
+                lc_events = _lc.get_timeline_for_matter(matter["id"])
+                if not cmte_app or not bcc_app:
+                    for ev in lc_events:
+                        bn = (ev.get("body_name") or "").lower()
+                        if not cmte_app and not cmte_date_from_lc and \
+                           "committee" in bn and "board of county" not in bn:
+                            cmte_date_from_lc = ev.get("event_date") or ""
+                            cmte_body_from_lc = ev.get("body_name") or ""
+                            cmte_item_from_lc = ev.get("agenda_item") or ""
+                        if not bcc_app and not bcc_date_from_lc and \
+                           "board of county commissioners" in bn:
+                            bcc_date_from_lc = ev.get("event_date") or ""
+                            bcc_item_from_lc = ev.get("agenda_item") or ""
             except Exception:
                 pass
+
+        # ── Build journey: chronological list of stages this item passed through
+        journey_steps = []
+        all_sorted = sorted(prior, key=lambda x: x.get("meeting_date") or "")
+        for p in all_sorted:
+            md = p.get("meeting_date") or ""
+            short_date = md[5:] if md else ""   # "03-10" from "2026-03-10"
+            bn = (p.get("body_name") or "").lower()
+            if _is_bcc(p):
+                label = "BCC"
+            elif _is_cmte(p):
+                # Use short committee name
+                full_name = p.get("body_name") or ""
+                # Shorten "Housing Committee" → "Housing", etc.
+                short_name = full_name.replace(" Committee", "").replace("committee", "").strip()
+                if len(short_name) > 20:
+                    short_name = short_name[:18] + "…"
+                label = short_name or "Cmte"
+            else:
+                label = (p.get("body_name") or "Other")[:15]
+            is_current = (p["id"] == a["id"])
+            journey_steps.append({
+                "label": label,
+                "date": short_date,
+                "full_date": md,
+                "is_current": is_current,
+                "body_name": p.get("body_name") or "",
+                "stage": "bcc" if _is_bcc(p) else ("cmte" if _is_cmte(p) else "other"),
+            })
+
+        # Also add lifecycle-only events that predate our stored appearances
+        earliest_stored = all_sorted[0].get("meeting_date") if all_sorted else "9999"
+        for ev in lc_events:
+            ed = ev.get("event_date") or ""
+            if ed and ed < earliest_stored:
+                bn = (ev.get("body_name") or "").lower()
+                action = (ev.get("action") or "").lower()
+                if "committee" in bn and "board of county" not in bn:
+                    short_name = (ev.get("body_name") or "").replace(" Committee", "").strip()
+                    journey_steps.insert(0, {
+                        "label": short_name or "Cmte",
+                        "date": ed[5:] if ed else "",
+                        "full_date": ed,
+                        "is_current": False,
+                        "body_name": ev.get("body_name") or "",
+                        "stage": "cmte",
+                        "action": ev.get("action") or "",
+                        "from_legistar": True,
+                    })
+                elif "board of county commissioners" in bn:
+                    journey_steps.insert(0, {
+                        "label": "BCC",
+                        "date": ed[5:] if ed else "",
+                        "full_date": ed,
+                        "is_current": False,
+                        "body_name": ev.get("body_name") or "",
+                        "stage": "bcc",
+                        "action": ev.get("action") or "",
+                        "from_legistar": True,
+                    })
+
+        # Sort by full_date after inserting lifecycle events
+        journey_steps.sort(key=lambda x: x.get("full_date") or "")
+
+        # ── Derive "What's Next" from legislative status and lifecycle
+        leg_status = (matter.get("current_status") or "").lower()
+        control = (matter.get("control_body") or "").lower()
+        next_step = ""
+        next_step_type = ""  # "done", "bcc", "cmte", "pending"
+
+        # Terminal states
+        if any(t in leg_status for t in ["adopted", "approved", "passed"]) and \
+           "first reading" not in leg_status and "tentatively" not in leg_status:
+            next_step = "Adopted"
+            next_step_type = "done"
+        elif "failed" in leg_status or "withdrawn" in leg_status:
+            next_step = leg_status.title()
+            next_step_type = "done"
+        # Scheduled for public hearing → goes to BCC
+        elif "public hearing" in leg_status or "tentatively scheduled" in leg_status:
+            next_step = "BCC Public Hearing"
+            next_step_type = "bcc"
+        # Adopted on first reading → needs second reading / public hearing
+        elif "first reading" in leg_status:
+            next_step = "BCC 2nd Reading"
+            next_step_type = "bcc"
+        # Deferred → comes back to same body
+        elif "deferred" in leg_status or "continued" in leg_status:
+            last_body = journey_steps[-1]["label"] if journey_steps else "Committee"
+            next_step = f"Back to {last_body}"
+            next_step_type = "cmte" if "bcc" not in last_body.lower() else "bcc"
+        # At committee, favorably recommended → goes to BCC
+        elif any(t in leg_status for t in ["favorably", "recommended", "forwarded"]):
+            next_step = "BCC"
+            next_step_type = "bcc"
+        # Amended → still moving, check control body
+        elif "amended" in leg_status:
+            if "board" in control or "bcc" in control:
+                next_step = "BCC (Amended)"
+                next_step_type = "bcc"
+            elif "committee" in control:
+                next_step = "Committee (Amended)"
+                next_step_type = "cmte"
+            else:
+                # Check if last step was committee → likely goes to BCC
+                if journey_steps and journey_steps[-1].get("stage") == "cmte":
+                    next_step = "BCC"
+                    next_step_type = "bcc"
+                else:
+                    next_step = "Pending"
+                    next_step_type = "pending"
+        # Pending BCC assignment
+        elif "pending" in leg_status and "bcc" in leg_status:
+            next_step = "BCC Assignment"
+            next_step_type = "bcc"
+        elif "pending" in control:
+            next_step = control.replace("pending", "").strip().title() or "Pending"
+            next_step_type = "pending"
+        # Fallback: infer from current stage
+        elif cur_stage == "committee":
+            next_step = "BCC"
+            next_step_type = "bcc"
+        elif cur_stage == "bcc":
+            next_step = "Pending Final Action"
+            next_step_type = "pending"
+        else:
+            next_step = "—"
+            next_step_type = "pending"
 
         item = {
             **a,
@@ -183,7 +320,7 @@ def get_meeting_package(meeting_id: int) -> dict | None:
                 for p in prior_other
             ),
             "is_supplement": "supplement" in (a.get("agenda_stage") or "").lower(),
-            # Cross-stage tracking
+            # Cross-stage tracking (LATEST dates)
             "committee_appearance_date":   (cmte_app or {}).get("meeting_date", "") or cmte_date_from_lc,
             "committee_appearance_body":   (cmte_app or {}).get("body_name", "") or cmte_body_from_lc,
             "committee_item_number_x":     (cmte_app or {}).get("committee_item_number", "")
@@ -195,6 +332,12 @@ def get_meeting_package(meeting_id: int) -> dict | None:
                                             or bcc_item_from_lc,
             "committee_date_source":       "stored" if cmte_app else ("legistar" if cmte_date_from_lc else ""),
             "bcc_date_source":             "stored" if bcc_app else ("legistar" if bcc_date_from_lc else ""),
+            # NEW: journey + what's next
+            "cmte_appearance_count":  len(cmte_apps),
+            "bcc_appearance_count":   len(bcc_apps),
+            "journey":               journey_steps,
+            "next_step":             next_step,
+            "next_step_type":        next_step_type,
         }
         items.append(item)
 
