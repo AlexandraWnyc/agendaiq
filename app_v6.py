@@ -3114,8 +3114,8 @@ async function backfillTranscript() {
 
   // Quick confirm
   const go = confirm(
-    'Search YouTube for this meeting\\'s recording, download the transcript, ' +
-    'and append per-item discussion summaries to analyst notes?\\n\\n' +
+    'Search YouTube for this meeting\'s recording, download the transcript, ' +
+    'and append per-item discussion summaries to analyst notes?\n\n' +
     'This may take 1-2 minutes.');
   if (!go) { if (btn) btn.disabled = false; return; }
 
@@ -3144,10 +3144,10 @@ async function backfillTranscript() {
       // If low-confidence match, show candidates for manual selection
       if (d.candidates && d.candidates.length) {
         let opts = d.candidates.map((c, i) =>
-          `${i+1}. ${c.title} (score: ${(c.match_score*100).toFixed(0)}%)\\n   ${c.url}`
-        ).join('\\n');
+          `${i+1}. ${c.title} (score: ${(c.match_score*100).toFixed(0)}%)\n   ${c.url}`
+        ).join('\n');
         const pick = prompt(
-          'No confident auto-match found. Paste a YouTube URL or pick a number:\\n\\n' + opts);
+          'No confident auto-match found. Paste a YouTube URL or pick a number:\n\n' + opts);
         if (pick) {
           let url = pick.trim();
           // If they typed a number, grab the URL from candidates
