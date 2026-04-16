@@ -378,8 +378,8 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                 log.info(f"  NO leg history. page_text_len={len(page_text)}, "
                          f"keys={list(detail.keys())[:10]}")
 
-            # If get_item_detail didn't set detail_url (it usually doesn't;
-            # the URL it hit is the matter.asp URL itself), reconstruct it.
+            # Fallback: if get_item_detail somehow didn't set detail_url,
+            # reconstruct a direct matter.asp URL.
             if not detail_url:
                 yr = datetime.now().year
                 detail_url = (f"http://www.miamidade.gov/govaction/matter.asp"

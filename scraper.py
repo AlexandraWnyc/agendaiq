@@ -253,6 +253,8 @@ class MiamiDadeScraper:
                     log.debug(f"    matter.asp too short ({len(resp.text)} chars), trying next URL")
                     continue
                 log.debug(f"    matter.asp OK: {len(resp.text)} chars from {url}")
+                # Store the final matter.asp URL (not the bridge) as the detail link
+                item["detail_url"] = url
                 soup = BeautifulSoup(resp.text, "html.parser")
                 page_text = soup.get_text(separator="\n", strip=True)
                 log.debug(f"    page_text: {len(page_text)} chars")
