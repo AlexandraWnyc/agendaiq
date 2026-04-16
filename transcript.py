@@ -25,9 +25,8 @@ log = logging.getLogger("oca-agent")
 YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
 YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@miami-dadebcc6863"
 
-# Granicus webcasting pages for Miami-Dade County
-GRANICUS_BCC_URL = "https://www.miamidade.gov/global/webcasting/regular-and-zoning-meetings.page"
-GRANICUS_COMMITTEE_URL = "https://www.miamidade.gov/global/webcasting/bcc-committee-meetings.page"
+# Granicus streaming archive — single page lists ALL meetings (BCC + committees)
+GRANICUS_ARCHIVE_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=2"
 
 # Known committee name aliases — maps canonical DB names to patterns
 # that might appear in YouTube video titles.  The fuzzy matcher uses
@@ -96,20 +95,20 @@ for canonical, aliases in COMMITTEE_ALIASES.items():
 # ── Granicus MP3 + Whisper transcription ─────────────────────
 
 def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
-    """Scrape the Miami-Dade County webcasting page for an MP3 matching
+    """Scrape the Granicus streaming archive for an MP3 matching
     a committee name + date.
+
+    The archive page at miamidade.granicus.com has a table of recent meetings.
+    Each row has: Name | Date | Duration | Video | Documents | MP3 Audio | MP4 Video
+    Date cells contain a Unix timestamp prefix followed by human-readable date,
+    e.g. "1776236400Apr 15, 2026" or "1775545200Apr  7, 2026".
 
     Returns: {"mp3_url": str, "title": str, "page_url": str} or None
     """
     import requests
     from bs4 import BeautifulSoup
 
-    # Determine which page to scrape
-    body_lower = committee_name.lower()
-    if "board of county" in body_lower or "bcc" in body_lower or "zoning" in body_lower:
-        page_url = GRANICUS_BCC_URL
-    else:
-        page_url = GRANICUS_COMMITTEE_URL
+    page_url = GRANICUS_ARCHIVE_URL
 
     # Parse meeting date for matching
     try:
@@ -118,92 +117,76 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
         log.warning(f"  Invalid meeting date: {meeting_date}")
         return None
 
-    # Target date formats that might appear on the page
+    # Date patterns that appear in the Granicus date cells (after the Unix timestamp)
+    # Format is like "Apr 15, 2026" or "Apr  7, 2026" (extra space for single-digit days)
     date_patterns = [
-        target_dt.strftime("%b %d, %Y"),        # "Apr 15, 2026"
-        target_dt.strftime("%B %d, %Y"),         # "April 15, 2026"
-        target_dt.strftime("%b %d,  %Y"),        # "Apr 15,  2026" (extra space)
-        target_dt.strftime("%-m/%-d/%Y"),        # "4/15/2026"
-        target_dt.strftime("%m/%d/%Y"),           # "04/15/2026"
+        target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}",   # "Apr 7, 2026"
+        target_dt.strftime("%b %d, %Y"),                                     # "Apr 07, 2026"
+        target_dt.strftime("%b") + f"  {target_dt.day}, {target_dt.year}",  # "Apr  7, 2026"
+        target_dt.strftime("%B %d, %Y"),                                     # "April 15, 2026"
     ]
-    # Also match without leading zeros in day
-    date_patterns.append(target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}")
 
-    log.info(f"  Searching Granicus for {committee_name} on {meeting_date}")
+    log.info(f"  Searching Granicus archive for '{committee_name}' on {meeting_date}")
     log.info(f"  Page: {page_url}")
+    log.info(f"  Date patterns: {date_patterns}")
 
     try:
         resp = requests.get(page_url, timeout=30)
         resp.raise_for_status()
     except Exception as e:
-        log.warning(f"  Failed to fetch Granicus page: {e}")
+        log.warning(f"  Failed to fetch Granicus archive page: {e}")
         return None
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Find all links containing "MP3" text or .mp3 in href
-    mp3_links = soup.find_all("a", href=True)
-
-    # Strategy: find rows/sections matching our committee name AND date,
-    # then grab the MP3 link from that section.
-    # The page structure typically has table rows or divs with meeting info.
-
-    # First try: find all MP3 links and match by nearby text
+    # Find all "MP3 Audio" links (href contains .mp3)
     best_match = None
     best_score = 0
 
-    for link in mp3_links:
+    for link in soup.find_all("a", href=True):
         href = link.get("href", "")
-        link_text = link.get_text(strip=True).lower()
-
-        # Is this an MP3 link?
-        is_mp3 = ".mp3" in href.lower() or "mp3" in link_text
-
-        if not is_mp3:
+        if ".mp3" not in href.lower():
             continue
 
-        # Look at surrounding context (parent row or parent container)
-        context = ""
-        parent = link.parent
-        for _ in range(5):  # Walk up 5 levels
-            if parent is None:
-                break
-            context = parent.get_text(" ", strip=True)
-            if len(context) > 50:
-                break
-            parent = parent.parent
+        # Get the parent table row
+        row = link.find_parent("tr")
+        if not row:
+            continue
 
-        context_lower = context.lower()
+        cells = row.find_all("td")
+        if len(cells) < 2:
+            continue
 
-        # Check if date matches
-        date_match = any(dp.lower() in context_lower for dp in date_patterns)
+        # Cell 0 = meeting name, Cell 1 = date (with Unix timestamp prefix)
+        row_name = cells[0].get_text(strip=True)
+        row_date = cells[1].get_text(strip=True)
+
+        # Check date match — the date cell has format "1776236400Apr 15, 2026"
+        date_match = any(dp.lower() in row_date.lower() for dp in date_patterns)
         if not date_match:
             continue
 
         # Check committee name match
-        name_score = _committee_match_score(committee_name, context)
+        name_score = _committee_match_score(committee_name, row_name)
+        log.info(f"  Candidate: '{row_name}' date='{row_date}' name_score={name_score:.2f}")
+
         if name_score < 0.3:
             continue
 
-        total_score = name_score + (1.0 if date_match else 0)
+        total_score = name_score + 1.0  # +1 for date match
         if total_score > best_score:
             best_score = total_score
-            # Resolve relative URLs
-            if href.startswith("//"):
-                href = "https:" + href
-            elif href.startswith("/"):
-                href = "https://www.miamidade.gov" + href
             best_match = {
                 "mp3_url": href,
-                "title": context[:120],
+                "title": row_name,
                 "page_url": page_url,
                 "match_score": total_score,
             }
 
     if best_match:
-        log.info(f"  Found MP3: {best_match['mp3_url'][:80]}… (score={best_match['match_score']:.2f})")
+        log.info(f"  Found MP3: {best_match['mp3_url'][:80]}... (score={best_match['match_score']:.2f})")
     else:
-        log.info(f"  No MP3 found on Granicus for {committee_name} {meeting_date}")
+        log.info(f"  No MP3 found on Granicus for '{committee_name}' {meeting_date}")
 
     return best_match
 
