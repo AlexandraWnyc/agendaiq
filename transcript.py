@@ -353,29 +353,50 @@ def download_transcript(video_id: str, output_dir: Path = None) -> str:
     out_template = str(output_dir / "transcript")
     url = f"https://www.youtube.com/watch?v={video_id}"
 
-    try:
-        result = subprocess.run(
-            [
-                "yt-dlp",
-                "--write-auto-sub", "--sub-lang", "en",
+    # Try multiple strategies to get captions
+    strategies = [
+        # 1. Auto-generated English subs
+        ["--write-auto-sub", "--sub-lang", "en"],
+        # 2. Manual English subs
+        ["--write-sub", "--sub-lang", "en"],
+        # 3. Auto-generated with broader language match (en, en-US, en-orig, etc.)
+        ["--write-auto-sub", "--sub-lang", "en.*", "--sub-langs", "en.*"],
+        # 4. Any available subs
+        ["--write-sub", "--write-auto-sub", "--sub-lang", "en,en-US,en-orig,es"],
+    ]
+
+    for i, sub_args in enumerate(strategies):
+        # Clear any previous VTT files before each attempt
+        for old_vtt in output_dir.glob("*.vtt"):
+            old_vtt.unlink()
+
+        try:
+            cmd = ["yt-dlp"] + sub_args + [
                 "--skip-download",
                 "--sub-format", "vtt",
                 "-o", out_template,
                 url,
-            ],
-            capture_output=True, text=True, timeout=120,
-        )
-    except subprocess.TimeoutExpired:
-        log.warning(f"  Transcript download timed out for {video_id}")
-        return ""
-    except FileNotFoundError:
-        log.error("  yt-dlp not installed")
-        return ""
+            ]
+            log.info(f"  Transcript strategy {i+1}: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120,
+            )
+            vtt_files = list(output_dir.glob("*.vtt"))
+            if vtt_files:
+                log.info(f"  Strategy {i+1} found VTT: {vtt_files[0].name}")
+                break
+            log.info(f"  Strategy {i+1}: no VTT file produced. stderr: {result.stderr[:200]}")
+        except subprocess.TimeoutExpired:
+            log.warning(f"  Transcript download timed out (strategy {i+1})")
+            continue
+        except FileNotFoundError:
+            log.error("  yt-dlp not installed")
+            return ""
 
     # Find the VTT file
     vtt_files = list(output_dir.glob("*.vtt"))
     if not vtt_files:
-        log.warning(f"  No VTT file found for {video_id}")
+        log.warning(f"  No VTT file found for {video_id} after all strategies")
         return ""
 
     vtt_path = vtt_files[0]
