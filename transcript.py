@@ -14,7 +14,7 @@ Designed to run as a post-meeting backfill — agendas are scraped
 before the meeting; transcripts become available 1-2 days after.
 """
 
-import os, re, json, logging, subprocess, tempfile, time
+import os, re, json, logging, subprocess, tempfile, time, io
 from pathlib import Path
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
@@ -24,6 +24,10 @@ log = logging.getLogger("oca-agent")
 # ── Constants ────────────────────────────────────────────────
 YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
 YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@miami-dadebcc6863"
+
+# Granicus webcasting pages for Miami-Dade County
+GRANICUS_BCC_URL = "https://www.miamidade.gov/global/webcasting/regular-and-zoning-meetings.page"
+GRANICUS_COMMITTEE_URL = "https://www.miamidade.gov/global/webcasting/bcc-committee-meetings.page"
 
 # Known committee name aliases — maps canonical DB names to patterns
 # that might appear in YouTube video titles.  The fuzzy matcher uses
@@ -87,6 +91,291 @@ _ALIAS_FLAT = {}
 for canonical, aliases in COMMITTEE_ALIASES.items():
     for a in aliases:
         _ALIAS_FLAT[a.lower()] = canonical
+
+
+# ── Granicus MP3 + Whisper transcription ─────────────────────
+
+def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
+    """Scrape the Miami-Dade County webcasting page for an MP3 matching
+    a committee name + date.
+
+    Returns: {"mp3_url": str, "title": str, "page_url": str} or None
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    # Determine which page to scrape
+    body_lower = committee_name.lower()
+    if "board of county" in body_lower or "bcc" in body_lower or "zoning" in body_lower:
+        page_url = GRANICUS_BCC_URL
+    else:
+        page_url = GRANICUS_COMMITTEE_URL
+
+    # Parse meeting date for matching
+    try:
+        target_dt = datetime.strptime(meeting_date, "%Y-%m-%d")
+    except ValueError:
+        log.warning(f"  Invalid meeting date: {meeting_date}")
+        return None
+
+    # Target date formats that might appear on the page
+    date_patterns = [
+        target_dt.strftime("%b %d, %Y"),        # "Apr 15, 2026"
+        target_dt.strftime("%B %d, %Y"),         # "April 15, 2026"
+        target_dt.strftime("%b %d,  %Y"),        # "Apr 15,  2026" (extra space)
+        target_dt.strftime("%-m/%-d/%Y"),        # "4/15/2026"
+        target_dt.strftime("%m/%d/%Y"),           # "04/15/2026"
+    ]
+    # Also match without leading zeros in day
+    date_patterns.append(target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}")
+
+    log.info(f"  Searching Granicus for {committee_name} on {meeting_date}")
+    log.info(f"  Page: {page_url}")
+
+    try:
+        resp = requests.get(page_url, timeout=30)
+        resp.raise_for_status()
+    except Exception as e:
+        log.warning(f"  Failed to fetch Granicus page: {e}")
+        return None
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Find all links containing "MP3" text or .mp3 in href
+    mp3_links = soup.find_all("a", href=True)
+
+    # Strategy: find rows/sections matching our committee name AND date,
+    # then grab the MP3 link from that section.
+    # The page structure typically has table rows or divs with meeting info.
+
+    # First try: find all MP3 links and match by nearby text
+    best_match = None
+    best_score = 0
+
+    for link in mp3_links:
+        href = link.get("href", "")
+        link_text = link.get_text(strip=True).lower()
+
+        # Is this an MP3 link?
+        is_mp3 = ".mp3" in href.lower() or "mp3" in link_text
+
+        if not is_mp3:
+            continue
+
+        # Look at surrounding context (parent row or parent container)
+        context = ""
+        parent = link.parent
+        for _ in range(5):  # Walk up 5 levels
+            if parent is None:
+                break
+            context = parent.get_text(" ", strip=True)
+            if len(context) > 50:
+                break
+            parent = parent.parent
+
+        context_lower = context.lower()
+
+        # Check if date matches
+        date_match = any(dp.lower() in context_lower for dp in date_patterns)
+        if not date_match:
+            continue
+
+        # Check committee name match
+        name_score = _committee_match_score(committee_name, context)
+        if name_score < 0.3:
+            continue
+
+        total_score = name_score + (1.0 if date_match else 0)
+        if total_score > best_score:
+            best_score = total_score
+            # Resolve relative URLs
+            if href.startswith("//"):
+                href = "https:" + href
+            elif href.startswith("/"):
+                href = "https://www.miamidade.gov" + href
+            best_match = {
+                "mp3_url": href,
+                "title": context[:120],
+                "page_url": page_url,
+                "match_score": total_score,
+            }
+
+    if best_match:
+        log.info(f"  Found MP3: {best_match['mp3_url'][:80]}… (score={best_match['match_score']:.2f})")
+    else:
+        log.info(f"  No MP3 found on Granicus for {committee_name} {meeting_date}")
+
+    return best_match
+
+
+def download_mp3(mp3_url: str, output_dir: Path) -> Path | None:
+    """Download an MP3 file from Granicus or similar source.
+
+    Returns the local file path, or None on failure.
+    """
+    import requests
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    filename = "meeting_audio.mp3"
+    local_path = output_dir / filename
+
+    log.info(f"  Downloading MP3: {mp3_url[:80]}…")
+
+    try:
+        resp = requests.get(mp3_url, timeout=300, stream=True)
+        resp.raise_for_status()
+
+        total = int(resp.headers.get("content-length", 0))
+        downloaded = 0
+        with open(local_path, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=1024 * 256):
+                f.write(chunk)
+                downloaded += len(chunk)
+
+        size_mb = local_path.stat().st_size / (1024 * 1024)
+        log.info(f"  Downloaded {size_mb:.1f} MB to {local_path}")
+        return local_path
+
+    except Exception as e:
+        log.error(f"  MP3 download failed: {e}")
+        return None
+
+
+def transcribe_with_whisper(audio_path: Path, api_key: str = None) -> str:
+    """Transcribe an audio file using OpenAI Whisper API.
+
+    Handles files > 25MB by splitting into chunks.
+    Returns timestamped transcript string.
+    """
+    if not api_key:
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+    if not api_key:
+        log.error("  No OpenAI API key — set OPENAI_API_KEY env var")
+        return ""
+
+    import openai
+    client = openai.OpenAI(api_key=api_key)
+
+    file_size = audio_path.stat().st_size
+    max_size = 24 * 1024 * 1024  # 24MB to be safe (limit is 25MB)
+
+    if file_size <= max_size:
+        # Single file — straightforward
+        return _whisper_single(client, audio_path)
+    else:
+        # Split into chunks and transcribe each
+        return _whisper_chunked(client, audio_path, max_size)
+
+
+def _whisper_single(client, audio_path: Path) -> str:
+    """Transcribe a single audio file with Whisper."""
+    log.info(f"  Transcribing {audio_path.name} ({audio_path.stat().st_size / 1024 / 1024:.1f} MB)…")
+
+    try:
+        with open(audio_path, "rb") as f:
+            result = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                response_format="verbose_json",
+                timestamp_granularities=["segment"],
+            )
+
+        lines = []
+        if hasattr(result, 'segments') and result.segments:
+            for seg in result.segments:
+                ts = _seconds_to_timestamp(seg.get("start", seg.start if hasattr(seg, 'start') else 0))
+                text = seg.get("text", seg.text if hasattr(seg, 'text') else "").strip()
+                if text:
+                    lines.append(f"[{ts}] {text}")
+        elif hasattr(result, 'text') and result.text:
+            # Fallback: no segments, just full text
+            lines.append(f"[00:00:00] {result.text}")
+
+        transcript = "\n".join(lines)
+        log.info(f"  Whisper transcription: {len(lines)} segments, {len(transcript)} chars")
+        return transcript
+
+    except Exception as e:
+        log.error(f"  Whisper transcription failed: {e}")
+        return ""
+
+
+def _whisper_chunked(client, audio_path: Path, max_size: int) -> str:
+    """Split a large audio file into chunks and transcribe each."""
+    log.info(f"  Audio too large ({audio_path.stat().st_size / 1024 / 1024:.1f} MB), splitting…")
+
+    # Use ffmpeg to split into chunks
+    chunk_dir = audio_path.parent / "chunks"
+    chunk_dir.mkdir(exist_ok=True)
+
+    # Calculate chunk duration based on file size
+    file_size = audio_path.stat().st_size
+    # Estimate: 1 minute of MP3 ≈ 1MB at 128kbps
+    total_duration_est = file_size / (128 * 1024 / 8)  # seconds
+    chunk_duration = int(max_size / file_size * total_duration_est * 0.9)  # 90% of theoretical max
+    chunk_duration = max(300, min(chunk_duration, 1500))  # 5-25 minutes per chunk
+
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-i", str(audio_path),
+                "-f", "segment",
+                "-segment_time", str(chunk_duration),
+                "-c", "copy",
+                str(chunk_dir / "chunk_%03d.mp3"),
+            ],
+            capture_output=True, text=True, timeout=120,
+        )
+    except FileNotFoundError:
+        log.error("  ffmpeg not available — cannot split large audio files")
+        # Try to transcribe as-is (may fail if > 25MB)
+        return _whisper_single(client, audio_path)
+    except Exception as e:
+        log.error(f"  ffmpeg split failed: {e}")
+        return _whisper_single(client, audio_path)
+
+    chunks = sorted(chunk_dir.glob("chunk_*.mp3"))
+    if not chunks:
+        log.warning("  No chunks produced by ffmpeg")
+        return _whisper_single(client, audio_path)
+
+    log.info(f"  Split into {len(chunks)} chunks ({chunk_duration}s each)")
+
+    all_lines = []
+    time_offset = 0.0
+    for chunk_path in chunks:
+        log.info(f"    Transcribing chunk {chunk_path.name} (offset={time_offset:.0f}s)…")
+        try:
+            with open(chunk_path, "rb") as f:
+                result = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=f,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"],
+                )
+
+            if hasattr(result, 'segments') and result.segments:
+                for seg in result.segments:
+                    start = (seg.get("start", 0) if isinstance(seg, dict) else seg.start) + time_offset
+                    text = (seg.get("text", "") if isinstance(seg, dict) else seg.text).strip()
+                    if text:
+                        all_lines.append(f"[{_seconds_to_timestamp(start)}] {text}")
+            elif hasattr(result, 'text') and result.text:
+                all_lines.append(f"[{_seconds_to_timestamp(time_offset)}] {result.text}")
+
+            # Get chunk duration for next offset
+            if hasattr(result, 'duration') and result.duration:
+                time_offset += result.duration
+            else:
+                time_offset += chunk_duration
+
+        except Exception as e:
+            log.warning(f"    Chunk {chunk_path.name} failed: {e}")
+            time_offset += chunk_duration
+
+    transcript = "\n".join(all_lines)
+    log.info(f"  Full transcription: {len(all_lines)} segments, {len(transcript)} chars")
+    return transcript
 
 
 def _normalize(s: str) -> str:
@@ -895,51 +1184,69 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
             "items_updated": updated,
         }
 
-    # Step 1: Find the YouTube video
-    _emit(f"Searching YouTube for {body_name} {meeting_date}…",
-          phase="transcript", pct=10)
-
-    video_id = None
-    video_title = ""
-    final_url = video_url
-
-    if video_url:
-        m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', video_url)
-        if m:
-            video_id = m.group(1)
-        else:
-            video_id = video_url.split("/")[-1]
-        video_title = f"(manually provided: {video_url})"
-    else:
-        candidates = search_youtube_videos(body_name, meeting_date)
-        if not candidates:
-            return {"status": "error", "message": "No YouTube videos found matching this meeting",
-                    "search_query": f"{body_name} {meeting_date}"}
-
-        best = candidates[0]
-        if best["match_score"] < 0.4:
-            return {
-                "status": "error",
-                "message": "No confident match found. Best candidate below threshold.",
-                "candidates": candidates[:3],
-            }
-
-        video_id = best["video_id"]
-        video_title = best["title"]
-        final_url = best["url"]
-        log.info(f"  Best match: '{video_title}' (score={best['match_score']})")
-
-    _emit(f"Downloading transcript for: {video_title}…",
-          phase="transcript", pct=25)
-
-    # Step 2: Download transcript
     if output_dir is None:
         output_dir = Path(tempfile.mkdtemp())
-    transcript = download_transcript(video_id, output_dir)
+
+    transcript = None
+    video_id = None
+    video_title = ""
+    final_url = video_url or ""
+    source = "unknown"
+
+    # ── Strategy 1: Granicus MP3 → Whisper (preferred — no IP blocks)
+    if not video_url:
+        _emit(f"Searching county archives for {body_name} {meeting_date}…",
+              phase="transcript", pct=5)
+        try:
+            mp3_info = search_granicus_mp3(body_name, meeting_date)
+            if mp3_info:
+                _emit(f"Found recording — downloading MP3…",
+                      phase="transcript", pct=10)
+                mp3_path = download_mp3(mp3_info["mp3_url"], output_dir)
+                if mp3_path:
+                    _emit(f"Transcribing with Whisper ({mp3_path.stat().st_size / 1024 / 1024:.0f} MB)…",
+                          phase="transcript", pct=20)
+                    transcript = transcribe_with_whisper(mp3_path)
+                    if transcript:
+                        video_title = mp3_info.get("title", body_name)
+                        final_url = mp3_info.get("mp3_url", "")
+                        source = "granicus+whisper"
+                        log.info(f"  Granicus+Whisper success: {len(transcript)} chars")
+        except Exception as e:
+            log.warning(f"  Granicus+Whisper path failed: {e}")
+
+    # ── Strategy 2: YouTube captions (fallback — may fail from cloud IPs)
+    if not transcript:
+        _emit(f"Trying YouTube for {body_name} {meeting_date}…",
+              phase="transcript", pct=30)
+
+        if video_url:
+            m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', video_url)
+            if m:
+                video_id = m.group(1)
+            else:
+                video_id = video_url.split("/")[-1]
+            video_title = f"(manually provided: {video_url})"
+        else:
+            candidates = search_youtube_videos(body_name, meeting_date)
+            if candidates:
+                best = candidates[0]
+                if best["match_score"] >= 0.4:
+                    video_id = best["video_id"]
+                    video_title = best["title"]
+                    final_url = best["url"]
+
+        if video_id:
+            _emit(f"Downloading YouTube captions…",
+                  phase="transcript", pct=35)
+            transcript = download_transcript(video_id, output_dir)
+            if transcript:
+                source = "youtube"
+
     if not transcript:
         return {
             "status": "error",
-            "message": "No auto-generated captions available for this video",
+            "message": "Could not get transcript. YouTube captions blocked from cloud IP, and no Granicus MP3 found. Use 'Paste Transcript' instead.",
             "video_id": video_id,
             "video_title": video_title,
             "video_url": final_url,
