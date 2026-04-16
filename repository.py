@@ -120,8 +120,19 @@ def update_matter_ai_fields(matter_id: int, part1: str, watch_points: str):
 
 # ── Meetings ──────────────────────────────────────────────────
 
+def _normalize_date(d: str) -> str:
+    """Normalize any date string to ISO YYYY-MM-DD format."""
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%m/%d/%y"):
+        try:
+            return datetime.strptime(d.strip(), fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return d.strip()  # already ISO or unknown — return as-is
+
+
 def get_or_create_meeting(body_name: str, meeting_date: str, **kwargs) -> int:
     """Find an existing meeting row or create one. Returns meeting id."""
+    meeting_date = _normalize_date(meeting_date)
     with get_db() as conn:
         row = conn.execute(
             "SELECT id FROM meetings WHERE body_name=? AND meeting_date=?",

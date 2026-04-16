@@ -815,6 +815,22 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           <div class="howto-q">How do I use the AI Chat?</div>
           <div class="howto-a">Open any item drawer and click the <strong>AI Chat</strong> tab. Type a question and hit Send. The AI knows the item's context (title, file number, existing analysis, watch points). Toggle <em>Enable web search</em> to let the AI search the web for current information. Your chat is private — other users cannot see it. To save an AI response, click <strong>+ Add to Notes</strong> (appends to your Analyst Working Notes) or <strong>+ Add to Part 1</strong> (appends to the item's Agenda Debrief summary).</div>
         </div>
+        <div class="howto-item">
+          <div class="howto-q">How does notes carry-forward work?</div>
+          <div class="howto-a">When a matter moves from committee to BCC, the analyst working notes from the committee appearance are automatically carried forward into the BCC appearance's notes, prefixed with "[Carried from prior committee appearance]". Researcher/reviewer assignments and priority also carry forward. This ensures nothing is lost between stages.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">What is change detection (committee → BCC)?</div>
+          <div class="howto-a">When a matter reappears at BCC after committee, the AI automatically compares the committee PDF with the BCC PDF and identifies substantive changes — amended language, dollar amounts, new conditions, scope changes, or added/removed sections. These are added to the notes as "[Changes from committee to BCC version]" with specific change bullets. If the item is unchanged, it notes "No substantive changes detected."</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">How does the Lifecycle tab work?</div>
+          <div class="howto-a">The <strong>Lifecycle</strong> tab in the item drawer shows the full Legistar legislative history timeline — every action taken on the item from introduction through final disposition. This is parsed directly from the county's Legistar system and includes: acting body (committee or BCC), date, agenda item number, and action taken (e.g. "Forwarded to BCC with a favorable recommendation"). The timeline is refreshed when you run the Backfill.</div>
+        </div>
+        <div class="howto-item">
+          <div class="howto-q">What does the Backfill do exactly?</div>
+          <div class="howto-a">The Backfill (triggered from the yellow banner on the Meetings page) visits the Legistar matter page for every item in the database. For each item it: (1) navigates to the legislative item page via the county's two-step link process, (2) extracts all fields and legislative history, (3) parses history into structured timeline events, (4) creates stub committee appearances for items that went through committee before BCC, (5) updates the Legistar link and PDF URL on every appearance, and (6) downloads any missing PDFs. This populates the committee date/number columns and the Lifecycle tab.</div>
+        </div>
       </div>
 
       <!-- COLUMN GUIDE -->
@@ -1484,7 +1500,7 @@ async function loadDashboard() {
     `<tr class="clickable" onclick="openDrawer('${r.file_number}',${r.appearance_id})">
       <td><span class="file-link">${r.file_number}</span></td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.short_title||'')}</td>
-      <td style="white-space:nowrap">${r.meeting_date||''}</td>
+      <td style="white-space:nowrap">${fmtDate(r.meeting_date)}</td>
       <td style="font-size:.73rem">${esc(r.body_name||'')}</td>
       <td>${badge(r.workflow_status)}</td>
       <td style="font-size:.75rem">${esc(r.assigned_to||'—')}</td>
@@ -1695,7 +1711,7 @@ async function doSearch() {
     const title=r.short_title||r.appearance_title||'';
     return `<tr class="clickable" onclick="openDrawer('${esc(fn)}',${r.id||r.appearance_id||0})">
       <td><span class="file-link">${fn}</span></td>
-      <td style="white-space:nowrap">${r.meeting_date||''}</td>
+      <td style="white-space:nowrap">${fmtDate(r.meeting_date)}</td>
       <td style="font-size:.73rem">${esc(r.body_name||'')}</td>
       <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(title)}</td>
       <td style="font-size:.73rem">${esc(r.file_type||r.current_status||'')}</td>
@@ -2064,7 +2080,7 @@ function renderDrawerSummary(body, matter, app, saveBtn) {
         padding:.5rem .75rem;margin-bottom:.55rem;background:${isCur?'#f8fbff':'var(--gray-50)'};
         border-radius:0 6px 6px 0">
         <div style="font-size:.72rem;font-weight:600;color:var(--gray-600);text-transform:uppercase;letter-spacing:.4px;margin-bottom:.35rem">
-          ${esc(stageLabel)} · ${esc(p.meeting_date||'?')}
+          ${esc(stageLabel)} · ${esc(fmtDate(p.meeting_date)||'?')}
           ${isCur?'<span style="color:var(--blue);margin-left:.35rem">● current</span>':''}
         </div>
         ${analyst ? `
@@ -2568,7 +2584,7 @@ function renderDrawerApps(body, matter) {
         <div style="display:flex;align-items:center;gap:.6rem;cursor:pointer"
              onclick="${isCurrent?'':`switchToApp(${a.id})`}">
           <div style="min-width:90px">
-            <div style="font-weight:700;color:var(--gray-800);font-size:.85rem">${a.meeting_date||'?'}</div>
+            <div style="font-weight:700;color:var(--gray-800);font-size:.85rem">${fmtDate(a.meeting_date)||'?'}</div>
             <div style="font-size:.7rem;color:var(--gray-400)">${a.committee_item_number? 'Cmte #'+esc(a.committee_item_number):(a.bcc_item_number?'BCC #'+esc(a.bcc_item_number):'')}</div>
           </div>
           <div style="flex:1">
@@ -2589,7 +2605,7 @@ async function copyPriorNotes(priorAppId) {
   const prior = d.appearance || {};
   const bits = [];
   if ((prior.analyst_working_notes||'').trim())
-    bits.push(`[Copied from prior appearance ${prior.meeting_date||''} — ${prior.body_name||''}]\n${prior.analyst_working_notes}`);
+    bits.push(`[Copied from prior appearance ${fmtDate(prior.meeting_date)||''} — ${prior.body_name||''}]\n${prior.analyst_working_notes}`);
   if (!bits.length) { alert('Prior appearance has no analyst notes to copy.'); return; }
   if (!confirm('Append prior analyst notes to the current item?')) return;
   await fetch(`/api/appearance/${currentAppId}/notes`, {
@@ -2924,7 +2940,7 @@ async function loadSavedMeetings() {
       'Empty':'b-Archived'}[m.status] || 'b-New';
     return `<tr class="clickable" onclick="openMeeting(${m.id})">
       <td style="font-weight:600">${esc(m.body_name||'')}</td>
-      <td style="white-space:nowrap">${m.meeting_date||''}</td>
+      <td style="white-space:nowrap">${fmtDate(m.meeting_date)}</td>
       <td style="font-size:.75rem">${esc(m.meeting_type||'—')}</td>
       <td>${m.total}</td>
       <td>
@@ -2977,7 +2993,7 @@ function renderMeetingDetail(pkg) {
   const arts = pkg.artifacts || [];
 
   document.getElementById('md-title').textContent =
-    `${m.body_name} — ${m.meeting_date}`;
+    `${m.body_name} — ${fmtDate(m.meeting_date)}`;
 
   const statusColor = {
     'Draft':'b-New','In Progress':'b-InProgress',
@@ -2997,7 +3013,7 @@ function renderMeetingDetail(pkg) {
   document.getElementById('md-meta-body').innerHTML = `
     <div style="display:flex;gap:.85rem;flex-wrap:wrap;align-items:center;font-size:.82rem;color:var(--gray-600)">
       <div><strong>Body:</strong> ${esc(m.body_name||'')}</div>
-      <div><strong>Date:</strong> ${m.meeting_date||''}</div>
+      <div><strong>Date:</strong> ${fmtDate(m.meeting_date)}</div>
       ${m.meeting_type ? `<div><strong>Type:</strong> ${esc(m.meeting_type)}</div>`:''}
       ${m.agenda_status ? `<div><strong>Agenda:</strong> ${esc(m.agenda_status)}</div>`:''}
       ${m.last_exported_at ? `<div><strong>Last export:</strong> ${m.last_exported_at.slice(0,16).replace('T',' ')}</div>`:''}
@@ -3046,7 +3062,7 @@ function renderMeetingDetail(pkg) {
       <div style="font-size:1.4rem;margin-bottom:.3rem">📭</div>
       <div style="font-weight:600;color:var(--ink)">This meeting has no appearances stored yet.</div>
       <div style="font-size:.78rem;color:var(--gray-600);margin-top:.35rem">
-        Either scraping didn't save any items for <b>${esc(m.body_name||'')}</b> on <b>${esc(m.meeting_date||'')}</b>,
+        Either scraping didn't save any items for <b>${esc(m.body_name||'')}</b> on <b>${esc(fmtDate(m.meeting_date)||'')}</b>,
         or they were created as a stub from a cross-stage reference.
         Try running a fresh <b>Process</b> job on the Home tab for this body/date.
       </div>
@@ -3308,7 +3324,7 @@ async function loadMyItems() {
     return `<tr class="clickable" onclick="openDrawer('${esc(a.file_number)}',${a.id})">
       <td><span class="file-link">${a.file_number}</span></td>
       <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.short_title||'')}</td>
-      <td style="white-space:nowrap;font-size:.75rem">${a.meeting_date||''}</td>
+      <td style="white-space:nowrap;font-size:.75rem">${fmtDate(a.meeting_date)}</td>
       <td style="font-size:.72rem">${esc(a.body_name||'')}</td>
       <td>${badge(a.workflow_status)}</td>
       <td style="font-size:.78rem">${hasNotes}</td>
@@ -3358,6 +3374,13 @@ function renderProgressCell(it) {
 }
 function esc(s){
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtDate(d){
+  // Convert ISO 2026-04-13 → 4/13/2026 for display
+  if(!d) return '';
+  const m=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return d;
+  return parseInt(m[2])+'/'+parseInt(m[3])+'/'+m[1];
 }
 
 // Toast helper — used for backfill / export feedback
