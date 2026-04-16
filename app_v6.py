@@ -3205,13 +3205,12 @@ async function backfillTranscript() {
   // Show options: auto-fetch or paste
   panel.innerHTML = `<b>🎙 Transcript Backfill</b>
     <div style="margin-top:.5rem;display:flex;gap:.5rem;flex-wrap:wrap">
-      <button class="btn btn-p btn-sm" onclick="_txAutoFetch()">🔍 Auto-fetch from YouTube</button>
+      <button class="btn btn-p btn-sm" onclick="_txAutoFetch()">🔍 Auto-fetch Transcript</button>
       <button class="btn btn-o btn-sm" onclick="_txShowPaste()">📋 Paste Transcript</button>
     </div>
     <div style="font-size:.72rem;color:#64748b;margin-top:.3rem">
-      Auto-fetch searches YouTube and downloads captions automatically.<br>
-      If that fails (cloud IP blocked), paste the transcript manually — open the YouTube video,
-      click "…" → "Show transcript", copy all text, and paste it here.
+      Auto-fetch searches the county archives for the meeting MP3 and transcribes it with AI.<br>
+      Falls back to YouTube captions if no recording is found. You can also paste a transcript manually.
     </div>`;
 }
 
