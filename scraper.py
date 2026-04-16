@@ -218,12 +218,16 @@ class MiamiDadeScraper:
             )
             if m:
                 matter_url = m.group(1).rstrip("'\"\\")
+                # Force file=true — with file=false the page returns a
+                # stripped-down version without legislative history.
+                matter_url = re.sub(r'file=false', 'file=true', matter_url, flags=re.I)
                 log.info(f"    Bridge resolved: {matter_url[:120]}")
                 return [matter_url]
             # Also check for a direct link/redirect to matter.asp
             for link in BeautifulSoup(resp.text, "html.parser").find_all("a", href=True):
                 if "matter.asp" in link["href"].lower():
                     resolved = urljoin(bridge_url, link["href"])
+                    resolved = re.sub(r'file=false', 'file=true', resolved, flags=re.I)
                     log.info(f"    Bridge link found: {resolved[:120]}")
                     return [resolved]
             log.debug(f"    Bridge page had no matter.asp link ({len(resp.text)} chars)")
