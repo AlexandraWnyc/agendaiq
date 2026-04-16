@@ -259,35 +259,65 @@ class MiamiDadeScraper:
                 page_text = soup.get_text(separator="\n", strip=True)
                 log.info(f"    page_text: {len(page_text)} chars, first 200: {page_text[:200]}")
 
+                # Legistar matter pages often use frames/iframes.  The outer
+                # page has header fields but the legislative history lives in
+                # a child frame. Detect and fetch all frame/iframe src URLs,
+                # merging their text into page_text.
+                frame_soups = []
+                frames = soup.find_all(["frame", "iframe"])
+                if frames:
+                    log.info(f"    Found {len(frames)} frame(s) — fetching contents")
+                for fr in frames:
+                    fr_src = fr.get("src", "")
+                    if not fr_src:
+                        continue
+                    fr_url = urljoin(url, fr_src)
+                    try:
+                        fr_resp = self.session.get(fr_url, timeout=30)
+                        fr_resp.raise_for_status()
+                        fr_soup = BeautifulSoup(fr_resp.text, "html.parser")
+                        fr_text = fr_soup.get_text(separator="\n", strip=True)
+                        log.info(f"    frame {fr_url[:80]}: {len(fr_text)} chars")
+                        if fr_text:
+                            page_text = page_text + "\n" + fr_text
+                            frame_soups.append(fr_soup)
+                    except Exception as fe:
+                        log.warning(f"    frame fetch failed: {fe}")
+
+                # Search all soups (main page + any frames) for fields
+                all_soups = [soup] + frame_soups
+
                 # Approach A: label and value in same TD
                 fields_same_td = {}
-                for bold in soup.find_all(["b", "strong"]):
-                    ptd = bold.find_parent("td")
-                    if ptd:
-                        label = bold.get_text(strip=True).rstrip(":")
-                        full = ptd.get_text(strip=True)
-                        if ":" in full and label:
-                            val = full.split(":", 1)[1].strip()
-                            if val:
-                                fields_same_td[label] = val
+                for s in all_soups:
+                    for bold in s.find_all(["b", "strong"]):
+                        ptd = bold.find_parent("td")
+                        if ptd:
+                            label = bold.get_text(strip=True).rstrip(":")
+                            full = ptd.get_text(strip=True)
+                            if ":" in full and label:
+                                val = full.split(":", 1)[1].strip()
+                                if val:
+                                    fields_same_td[label] = val
 
                 # Approach B: label in one TD, value in next sibling TD
                 fields_sibling = {}
-                for bold in soup.find_all(["b", "strong"]):
-                    label = bold.get_text(strip=True).rstrip(":")
-                    if not label:
-                        continue
-                    ptd = bold.find_parent("td")
-                    if not ptd:
-                        continue
-                    td_text = ptd.get_text(strip=True)
-                    has_value = ":" in td_text and len(td_text.split(":", 1)[1].strip()) > 0
-                    if not has_value:
-                        next_td = ptd.find_next_sibling("td")
-                        if next_td:
-                            val = next_td.get_text(strip=True)
-                            if val:
-                                fields_sibling[label] = val
+                for s in all_soups:
+                    for bold in s.find_all(["b", "strong"]):
+                        label = bold.get_text(strip=True).rstrip(":")
+                        if not label:
+                            continue
+                        ptd = bold.find_parent("td")
+                        if not ptd:
+                            continue
+                        td_text = ptd.get_text(strip=True)
+                        has_value = ":" in td_text and len(td_text.split(":", 1)[1].strip()) > 0
+                        if not has_value:
+                            next_td = ptd.find_next_sibling("td")
+                            if next_td:
+                                val = next_td.get_text(strip=True)
+                                if val:
+                                    fields_sibling[label] = val
 
                 fields = {}
                 fields.update(fields_same_td)
@@ -355,9 +385,12 @@ class MiamiDadeScraper:
                 item["page_text"] = item["routing_info"]
 
                 if not item.get("pdf_url"):
-                    for lk in soup.find_all("a", href=True):
-                        if ".pdf" in lk["href"].lower():
-                            item["pdf_url"] = urljoin(url, lk["href"])
+                    for s in all_soups:
+                        for lk in s.find_all("a", href=True):
+                            if ".pdf" in lk["href"].lower():
+                                item["pdf_url"] = urljoin(url, lk["href"])
+                                break
+                        if item.get("pdf_url"):
                             break
 
                 log.info(f"    Routing: {item['short_title'][:60]} | Notes: {item.get('notes','')[:40]}")
