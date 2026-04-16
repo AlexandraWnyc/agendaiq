@@ -909,10 +909,12 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
             <button id="tm-single" class="on" onclick="setMode('single')">Single Date</button>
             <button id="tm-range" onclick="setMode('range')">From Date Onward</button>
           </div>
-          <div id="inp-single"><label>Meeting Date (M/D/YYYY)</label>
-            <input type="text" id="d-single" placeholder="4/15/2026"></div>
+          <div id="inp-single"><label>Meeting Date</label>
+            <input type="date" id="d-single">
+            <div style="font-size:.7rem;color:var(--gray-400);margin-top:.25rem">📅 Click to open the calendar — pick the exact meeting date.</div></div>
           <div id="inp-range" style="display:none"><label>From Date Onward</label>
-            <input type="text" id="d-from" placeholder="4/1/2026"></div>
+            <input type="date" id="d-from">
+            <div style="font-size:.7rem;color:var(--gray-400);margin-top:.25rem">📅 All meetings on or after this date will be analyzed.</div></div>
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.3rem;">
             <label style="margin:0">Committees</label>
             <button class="btn btn-o btn-xs" onclick="toggleAll()">All / None</button>
@@ -1452,6 +1454,12 @@ async function loadCmtes() {
   } catch(e) {
     document.getElementById('cmteg').innerHTML = '<span style="color:var(--red);font-size:.78rem">Could not load.</span>';
   }
+  // Default the date pickers to today (only if not already set)
+  const today = new Date().toISOString().slice(0,10);
+  const ds = document.getElementById('d-single');
+  const df = document.getElementById('d-from');
+  if(ds && !ds.value) ds.value = today;
+  if(df && !df.value) df.value = today;
 }
 
 function setMode(m) {
