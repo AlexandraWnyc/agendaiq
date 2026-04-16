@@ -250,14 +250,14 @@ class MiamiDadeScraper:
                 resp = self.session.get(url, timeout=30)
                 resp.raise_for_status()
                 if len(resp.text) < 1000:
-                    log.debug(f"    matter.asp too short ({len(resp.text)} chars), trying next URL")
+                    log.info(f"    matter.asp too short ({len(resp.text)} chars), trying next URL. Content: {resp.text[:200]}")
                     continue
-                log.debug(f"    matter.asp OK: {len(resp.text)} chars from {url}")
+                log.info(f"    matter.asp OK: {len(resp.text)} chars from {url}")
                 # Store the final matter.asp URL (not the bridge) as the detail link
                 item["detail_url"] = url
                 soup = BeautifulSoup(resp.text, "html.parser")
                 page_text = soup.get_text(separator="\n", strip=True)
-                log.debug(f"    page_text: {len(page_text)} chars")
+                log.info(f"    page_text: {len(page_text)} chars, first 200: {page_text[:200]}")
 
                 # Approach A: label and value in same TD
                 fields_same_td = {}
@@ -331,14 +331,20 @@ class MiamiDadeScraper:
                         end = lh_idx + 3000
                     leg_hist = page_text[lh_idx:end].strip()
                     routing.append("\n" + leg_hist)
-                    log.debug(f"    Leg history found at pos {lh_idx}, len={len(leg_hist)}")
+                    log.info(f"    Leg history FOUND at pos {lh_idx}, len={len(leg_hist)}, preview: {leg_hist[:150]}")
                 else:
-                    log.debug(f"    No 'Legislative History' in page_text (len={len(page_text)})")
+                    log.info(f"    NO 'legislative history' in page_text (len={len(page_text)})")
+                    log.info(f"    page_text last 300: ...{page_text[-300:]}")
                     # Try finding it in the raw HTML as well
                     raw_lower = resp.text.lower()
                     raw_idx = raw_lower.find("legislative history")
                     if raw_idx >= 0:
                         log.info(f"    Found 'legislative history' in raw HTML at pos {raw_idx} but NOT in parsed text!")
+                        # Extract a snippet around that position
+                        snippet = resp.text[max(0,raw_idx-50):raw_idx+200]
+                        log.info(f"    HTML snippet: {snippet}")
+                    else:
+                        log.info(f"    Not in raw HTML either. URL was: {url}")
                 item["legislative_history_raw"] = leg_hist
 
                 if "Legislative Text" in page_text:
