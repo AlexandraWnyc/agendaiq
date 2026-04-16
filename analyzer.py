@@ -353,3 +353,35 @@ class AgendaAnalyzer:
             msg, max_tokens=500, use_web_search=False, cache_system=False,
         )
         return clean_markdown(text), usage
+
+    # ── Public: committee→BCC change detection ──────────────
+    def detect_changes(self, item_title: str,
+                       committee_summary: str, committee_pdf_text: str,
+                       bcc_pdf_text: str) -> tuple[str, dict]:
+        """Compare a committee version of an item to its BCC version and
+        describe what changed. Returns (change_notes, usage).
+        Empty string + zero usage if inputs are insufficient."""
+        if not bcc_pdf_text or (not committee_summary and not committee_pdf_text):
+            return "", _zero_usage()
+        prior = committee_summary or ""
+        if committee_pdf_text:
+            prior += f"\n\n--- Committee PDF excerpt ---\n{committee_pdf_text[:5000]}"
+        msg = (
+            f"Compare the committee version and BCC version of this legislative item "
+            f"and identify what has changed. Focus on substantive changes: amended language, "
+            f"new conditions, dollar amounts, dates, sponsors, scope changes, added/removed "
+            f"sections. Ignore formatting or cosmetic differences.\n\n"
+            f"Item: {item_title}\n\n"
+            f"--- COMMITTEE VERSION ---\n{prior[:8000]}\n--- END ---\n\n"
+            f"--- BCC VERSION ---\n{bcc_pdf_text[:8000]}\n--- END ---\n\n"
+            f"If there are meaningful changes, list each one starting with '- CHANGED: '. "
+            f"If the item appears identical or is a supplement/new item with no prior, "
+            f"reply with 'No substantive changes detected.' "
+            f"Do NOT use any markdown formatting."
+        )
+        text, usage = self._call_api(
+            "You are a legislative analyst comparing two versions of the same item. "
+            "Be precise and factual. No markdown.",
+            msg, max_tokens=600, use_web_search=False, cache_system=False,
+        )
+        return clean_markdown(text), usage

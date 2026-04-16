@@ -323,6 +323,9 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
 
                 # ── Build prior context for carried-forward items ──
                 prior_context = ""
+                prior_pdf_text = ""
+                prior_summary = ""
+                prior_notes = ""
                 if is_new_appearance:
                     current_app = repo.get_appearance_by_id(appearance_id)
                     if current_app and current_app.get("prior_appearance_id"):
@@ -330,9 +333,23 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                             current_app["prior_appearance_id"]
                         )
                         if prior_app:
-                            prior_context = (
+                            prior_summary = (
                                 prior_app.get("ai_summary_for_appearance", "") or ""
                             )
+                            prior_context = prior_summary
+                            prior_notes = (
+                                prior_app.get("analyst_working_notes", "") or ""
+                            )
+                            # Try to get the prior committee PDF text for
+                            # change detection
+                            prior_pdf_path = prior_app.get("item_pdf_local_path", "")
+                            if prior_pdf_path and Path(prior_pdf_path).exists():
+                                try:
+                                    prior_pdf_text = extract_pdf_text(Path(prior_pdf_path))
+                                    if prior_pdf_text == IMAGE_ONLY_SENTINEL:
+                                        prior_pdf_text = ""
+                                except Exception:
+                                    prior_pdf_text = ""
 
                 # ── AI Analysis ───────────────────────────────────
                 cn = item.get("committee_item_number", "")
@@ -436,11 +453,71 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 # ── Extract watch points ──────────────────────────
                 part1_clean, watch = extract_watch_points(part1)
 
+                # ── Change detection (committee → BCC) ───────────
+                # If this item appeared at a prior stage (committee),
+                # compare the two versions and note what changed.
+                change_notes = ""
+                change_usage = {"input_tokens": 0, "output_tokens": 0,
+                                "cache_read_input_tokens": 0,
+                                "cache_creation_input_tokens": 0}
+                if prior_context and (prior_pdf_text or prior_summary) and pdf_text:
+                    _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) "
+                          "— detecting changes from committee version…",
+                          phase="analyzing", pct=item_pct + 70)
+                    try:
+                        change_notes, change_usage = analyzer.detect_changes(
+                            item.get("short_title", item.get("title", "")),
+                            prior_summary, prior_pdf_text, pdf_text,
+                        )
+                        if change_notes:
+                            log.info(f"    Changes detected: {change_notes[:100]}")
+                        time.sleep(20)
+                    except Exception as _ce:
+                        log.warning(f"    Change detection failed: {_ce}")
+
+                # ── Build carried-forward notes ──────────────────
+                # Combine prior notes + change detection into the
+                # analyst working notes for this appearance.
+                carried_notes_parts = []
+                if prior_notes:
+                    carried_notes_parts.append(
+                        f"[Carried from prior committee appearance]\n{prior_notes}"
+                    )
+                if change_notes and "no substantive changes" not in change_notes.lower():
+                    carried_notes_parts.append(
+                        f"[Changes from committee to BCC version]\n{change_notes}"
+                    )
+                if carried_notes_parts:
+                    combined_notes = "\n\n".join(carried_notes_parts)
+                    try:
+                        from db import get_db as _gdb
+                        with _gdb() as _c:
+                            existing_notes = _c.execute(
+                                "SELECT analyst_working_notes FROM appearances WHERE id=?",
+                                (appearance_id,)
+                            ).fetchone()
+                            old = (existing_notes["analyst_working_notes"] or "") if existing_notes else ""
+                            if old:
+                                combined_notes = old + "\n\n" + combined_notes
+                            _c.execute(
+                                "UPDATE appearances SET analyst_working_notes=?, updated_at=? WHERE id=?",
+                                (combined_notes, now_iso(), appearance_id)
+                            )
+                        log.info(f"    Carried forward notes + changes for File# {file_num}")
+                    except Exception as _ne:
+                        log.warning(f"    Notes carry-forward failed: {_ne}")
+
                 # ── Persist AI results (with hash + token counts) ──
                 _usage = (analysis_meta or {}).get("usage") or {}
-                _tokens_in = (_usage.get("input_tokens") or 0) + (leg_usage.get("input_tokens") or 0)
-                _tokens_out = (_usage.get("output_tokens") or 0) + (leg_usage.get("output_tokens") or 0)
-                _tokens_cached = (_usage.get("cache_read_input_tokens") or 0) + (leg_usage.get("cache_read_input_tokens") or 0)
+                _tokens_in = ((_usage.get("input_tokens") or 0) +
+                              (leg_usage.get("input_tokens") or 0) +
+                              (change_usage.get("input_tokens") or 0))
+                _tokens_out = ((_usage.get("output_tokens") or 0) +
+                               (leg_usage.get("output_tokens") or 0) +
+                               (change_usage.get("output_tokens") or 0))
+                _tokens_cached = ((_usage.get("cache_read_input_tokens") or 0) +
+                                  (leg_usage.get("cache_read_input_tokens") or 0) +
+                                  (change_usage.get("cache_read_input_tokens") or 0))
                 _hash = (analysis_meta or {}).get("input_hash")
 
                 repo.update_appearance_ai(
