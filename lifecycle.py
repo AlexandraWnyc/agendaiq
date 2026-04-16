@@ -180,8 +180,11 @@ def parse_legislative_history(raw: str) -> list[dict]:
 
         # If the previous date's tail (agenda item + action) bled into the
         # current row's body, split on the last newline / "REPORT:" marker.
+        # When the segment ends with \n (common in line-separated layouts),
+        # rsplit gives an empty last element — fall back to the prior line.
         if "\n" in body_segment:
-            body_segment = body_segment.rsplit("\n", 1)[-1]
+            parts = body_segment.rstrip("\n").rsplit("\n", 1)
+            body_segment = parts[-1] if parts else body_segment
         body = _clean_body(body_segment)
 
         # Accept any segment whose ending contains a body fragment. Some rows
@@ -207,14 +210,14 @@ def parse_legislative_history(raw: str) -> list[dict]:
         # Tail after the date: agenda item + action + notes, up to next date.
         tail_end = date_matches[i + 1].start() if i + 1 < len(date_matches) else len(text)
         tail = text[dm.end():tail_end]
-        tail = tail.strip(" \t-–·•|:,\n")
+        tail = tail.strip(" \t\n-–·•|:,")
 
         # Agenda item: short alphanumeric token at the start of tail.
         agenda_item = ""
         m = _AGENDA_ITEM_RE.match(tail)
         if m:
             agenda_item = m.group(1)
-            tail = tail[m.end():].lstrip(" \t-–·•|:,")
+            tail = tail[m.end():].lstrip(" \t\n-–·•|:,")
 
         # Action: prefer an ACTION_HINT match at the start; otherwise first
         # ~120 chars until a newline or REPORT:
