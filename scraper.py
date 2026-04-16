@@ -201,17 +201,50 @@ class MiamiDadeScraper:
         log.debug(f"  Parsed {len(items)} items from committee agenda")
         return items
 
-    def get_item_detail(self, item):
-        """Fetch matter.asp for routing info (v5 dual-approach parsing preserved)."""
-        mid = item.get("matter_id")
-        if not mid:
-            return item
+    def _resolve_matter_url(self, mid):
+        """Two-step Legistar navigation: hit searchforpdf.asp bridge page first,
+        then extract the real matter.asp URL from the JavaScript link on that page.
+        Falls back to direct matter.asp URLs if the bridge page doesn't work."""
+        bridge_url = (f"{BASE_URL}legistarfiles/SourceCode/searchforpdf.asp"
+                      f"?documenttype=matter&documentKey={mid}")
+        try:
+            log.debug(f"    Hitting bridge page: {bridge_url}")
+            resp = self.session.get(bridge_url, timeout=30)
+            resp.raise_for_status()
+            # Look for javascript:ReportWindow('http://...matter.asp?...')
+            m = re.search(
+                r"""ReportWindow\s*\(\s*['"]([^'"]*matter\.asp[^'"]*)['"]\s*\)""",
+                resp.text, re.I
+            )
+            if m:
+                matter_url = m.group(1).rstrip("'\"\\")
+                log.info(f"    Bridge resolved: {matter_url[:120]}")
+                return [matter_url]
+            # Also check for a direct link/redirect to matter.asp
+            for link in BeautifulSoup(resp.text, "html.parser").find_all("a", href=True):
+                if "matter.asp" in link["href"].lower():
+                    resolved = urljoin(bridge_url, link["href"])
+                    log.info(f"    Bridge link found: {resolved[:120]}")
+                    return [resolved]
+            log.debug(f"    Bridge page had no matter.asp link ({len(resp.text)} chars)")
+        except Exception as e:
+            log.warning(f"    Bridge page failed: {e}")
+
+        # Fallback: direct matter.asp URLs
         yr = datetime.now().year
-        urls = [
+        return [
             f"http://www.miamidade.gov/govaction/matter.asp?matter={mid}&file=true&fileAnalysis=false&yearFolder=Y{yr}",
             f"http://www.miamidade.gov/govaction/matter.asp?matter={mid}&file=true&fileAnalysis=false&yearFolder=Y{yr-1}",
             f"http://www.miamidade.gov/govaction/matter.asp?matter={mid}&file=true",
         ]
+
+    def get_item_detail(self, item):
+        """Fetch matter.asp for routing info (v5 dual-approach parsing preserved).
+        Uses two-step navigation: bridge page (searchforpdf.asp) → matter.asp."""
+        mid = item.get("matter_id")
+        if not mid:
+            return item
+        urls = self._resolve_matter_url(mid)
         for url in urls:
             try:
                 resp = self.session.get(url, timeout=30)
