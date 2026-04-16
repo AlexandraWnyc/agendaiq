@@ -337,7 +337,10 @@ def search_youtube_videos(committee_name: str, meeting_date: str,
 
 
 def download_transcript(video_id: str, output_dir: Path = None) -> str:
-    """Download auto-generated English captions for a YouTube video.
+    """Download captions for a YouTube video.
+
+    Uses youtube-transcript-api (lightweight HTTP, no JS runtime needed)
+    with yt-dlp as a fallback.
 
     Returns the transcript as a single string with timestamps, e.g.:
       [00:00:05] Good morning everyone welcome to the meeting
@@ -350,57 +353,98 @@ def download_transcript(video_id: str, output_dir: Path = None) -> str:
         output_dir = Path(tempfile.mkdtemp())
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # ── Strategy 1: youtube-transcript-api (preferred — no JS runtime needed)
+    try:
+        from youtube_transcript_api import YouTubeTranscriptApi
+        ytt_api = YouTubeTranscriptApi()
+        log.info(f"  Fetching transcript via youtube-transcript-api for {video_id}")
+
+        # Try to get English transcript (auto-generated or manual)
+        transcript = None
+        try:
+            transcript = ytt_api.fetch(video_id, languages=["en"])
+        except Exception:
+            pass
+
+        if not transcript:
+            # Try listing available transcripts and pick any English variant
+            try:
+                transcript_list = ytt_api.list(video_id)
+                # Try to find any English transcript
+                for t in transcript_list:
+                    lang = (t.language_code or "").lower()
+                    if lang.startswith("en"):
+                        transcript = t.fetch()
+                        break
+                # If no English, try translating the first available to English
+                if not transcript:
+                    for t in transcript_list:
+                        if t.is_translatable:
+                            transcript = t.translate("en").fetch()
+                            break
+            except Exception as e:
+                log.info(f"  youtube-transcript-api list/translate failed: {e}")
+
+        if transcript and hasattr(transcript, 'snippets') and transcript.snippets:
+            lines = []
+            for snippet in transcript.snippets:
+                ts = _seconds_to_timestamp(snippet.start)
+                text = snippet.text.replace("\n", " ").strip()
+                if text:
+                    lines.append(f"[{ts}] {text}")
+            result_text = "\n".join(lines)
+            if result_text:
+                log.info(f"  youtube-transcript-api: got {len(lines)} lines")
+                return result_text
+
+        log.info(f"  youtube-transcript-api: no transcript content returned")
+
+    except ImportError:
+        log.info("  youtube-transcript-api not installed, falling back to yt-dlp")
+    except Exception as e:
+        log.warning(f"  youtube-transcript-api failed: {e}")
+
+    # ── Strategy 2: yt-dlp fallback
     out_template = str(output_dir / "transcript")
     url = f"https://www.youtube.com/watch?v={video_id}"
 
-    # Try multiple strategies to get captions
-    strategies = [
-        # 1. Auto-generated English subs
+    yt_strategies = [
         ["--write-auto-sub", "--sub-lang", "en"],
-        # 2. Manual English subs
         ["--write-sub", "--sub-lang", "en"],
-        # 3. Auto-generated with broader language match (en, en-US, en-orig, etc.)
-        ["--write-auto-sub", "--sub-lang", "en.*", "--sub-langs", "en.*"],
-        # 4. Any available subs
         ["--write-sub", "--write-auto-sub", "--sub-lang", "en,en-US,en-orig,es"],
     ]
 
-    for i, sub_args in enumerate(strategies):
-        # Clear any previous VTT files before each attempt
+    for i, sub_args in enumerate(yt_strategies):
         for old_vtt in output_dir.glob("*.vtt"):
             old_vtt.unlink()
-
         try:
             cmd = ["yt-dlp"] + sub_args + [
-                "--skip-download",
-                "--sub-format", "vtt",
-                "-o", out_template,
-                url,
+                "--skip-download", "--sub-format", "vtt",
+                "-o", out_template, url,
             ]
-            log.info(f"  Transcript strategy {i+1}: {' '.join(cmd)}")
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=120,
-            )
+            log.info(f"  yt-dlp strategy {i+1}: {' '.join(cmd)}")
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
             vtt_files = list(output_dir.glob("*.vtt"))
             if vtt_files:
-                log.info(f"  Strategy {i+1} found VTT: {vtt_files[0].name}")
-                break
-            log.info(f"  Strategy {i+1}: no VTT file produced. stderr: {result.stderr[:200]}")
+                log.info(f"  yt-dlp strategy {i+1} found VTT: {vtt_files[0].name}")
+                return _parse_vtt(vtt_files[0].read_text(encoding="utf-8", errors="replace"))
+            log.info(f"  yt-dlp strategy {i+1}: no VTT. stderr: {proc.stderr[:300]}")
         except subprocess.TimeoutExpired:
-            log.warning(f"  Transcript download timed out (strategy {i+1})")
-            continue
+            log.warning(f"  yt-dlp timed out (strategy {i+1})")
         except FileNotFoundError:
             log.error("  yt-dlp not installed")
-            return ""
+            break
 
-    # Find the VTT file
-    vtt_files = list(output_dir.glob("*.vtt"))
-    if not vtt_files:
-        log.warning(f"  No VTT file found for {video_id} after all strategies")
-        return ""
+    log.warning(f"  No transcript found for {video_id} after all strategies")
+    return ""
 
-    vtt_path = vtt_files[0]
-    return _parse_vtt(vtt_path.read_text(encoding="utf-8", errors="replace"))
+
+def _seconds_to_timestamp(seconds: float) -> str:
+    """Convert seconds to HH:MM:SS format."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
 
 
 def _parse_vtt(vtt_text: str) -> str:
