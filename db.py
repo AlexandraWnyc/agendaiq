@@ -60,6 +60,10 @@ def _normalize_meeting_dates(conn):
     duplicate meetings that only differ by date format."""
     import re
     from datetime import datetime as dt
+
+    # Tables that have a foreign key referencing appearances(id)
+    FK_TABLES = ["workflow_history", "artifacts", "chat_messages"]
+
     rows = conn.execute("SELECT id, body_name, meeting_date FROM meetings").fetchall()
     for r in rows:
         md = r["meeting_date"]
@@ -85,18 +89,42 @@ def _normalize_meeting_dates(conn):
                     (oa["matter_id"], dup["id"])
                 ).fetchone()
                 if already:
-                    # Duplicate appearance — delete the one from the old meeting
+                    # Reassign child records to the surviving appearance, then delete
+                    for tbl in FK_TABLES:
+                        try:
+                            conn.execute(
+                                f"UPDATE {tbl} SET appearance_id=? WHERE appearance_id=?",
+                                (already["id"], oa["id"])
+                            )
+                        except Exception:
+                            pass
+                    # Also reassign prior_appearance_id references in other appearances
+                    try:
+                        conn.execute(
+                            "UPDATE appearances SET prior_appearance_id=? WHERE prior_appearance_id=?",
+                            (already["id"], oa["id"])
+                        )
+                    except Exception:
+                        pass
                     conn.execute("DELETE FROM appearances WHERE id=?", (oa["id"],))
                 else:
                     conn.execute(
                         "UPDATE appearances SET meeting_id=? WHERE id=?",
                         (dup["id"], oa["id"])
                     )
+            # Also reassign any artifacts linked at meeting level
+            try:
+                conn.execute(
+                    "UPDATE artifacts SET meeting_id=? WHERE meeting_id=?",
+                    (dup["id"], r["id"])
+                )
+            except Exception:
+                pass
             conn.execute("DELETE FROM meetings WHERE id=?", (r["id"],))
-            log.info(f"  Merged meeting {r['id']} ({md}) → {dup['id']} ({iso})")
+            log.info(f"  Merged meeting {r['id']} ({md}) -> {dup['id']} ({iso})")
         else:
             conn.execute(
                 "UPDATE meetings SET meeting_date=? WHERE id=?",
                 (iso, r["id"])
             )
-            log.info(f"  Normalized meeting {r['id']} date: {md} → {iso}")
+            log.info(f"  Normalized meeting {r['id']} date: {md} -> {iso}")
