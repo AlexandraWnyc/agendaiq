@@ -272,6 +272,22 @@ MIGRATION_STATEMENTS = [
     # (e.g. "3C", "10A2"). Lets us link committee history rows back to
     # specific agenda item numbers when creating cross-stage stubs.
     "ALTER TABLE matter_timeline ADD COLUMN agenda_item TEXT",
+
+    # ── AI analysis cache / cost tracking ────────────────────
+    # analysis_input_hash:  deterministic SHA-256 of (model + system_prompt +
+    #                       user_message) so we can short-circuit the API
+    #                       call when the same inputs have already been
+    #                       analyzed for ANY appearance.
+    # analysis_tokens_in/out: tokens reported by the Anthropic response for
+    #                       the last successful analyze call on this row.
+    # analysis_cached_tokens: prompt-cache read hits (10% price on Haiku).
+    # analysis_at:          ISO timestamp of the last successful analyze.
+    "ALTER TABLE appearances ADD COLUMN analysis_input_hash TEXT",
+    "ALTER TABLE appearances ADD COLUMN analysis_tokens_in  INTEGER",
+    "ALTER TABLE appearances ADD COLUMN analysis_tokens_out INTEGER",
+    "ALTER TABLE appearances ADD COLUMN analysis_cached_tokens INTEGER",
+    "ALTER TABLE appearances ADD COLUMN analysis_at TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_app_analysis_hash ON appearances(analysis_input_hash)",
 ]
 
 # Meeting package status values

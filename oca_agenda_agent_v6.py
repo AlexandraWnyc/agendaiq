@@ -33,7 +33,7 @@ import db as database
 from db import init_db
 from utils import parse_date_arg, load_api_key, now_iso, safe_filename, extract_watch_points
 from scraper import MiamiDadeScraper, extract_pdf_text, IMAGE_ONLY_SENTINEL
-from analyzer import AgendaAnalyzer
+from analyzer import AgendaAnalyzer, compute_input_hash, SOP_PROMPT, MODEL as ANALYZER_MODEL
 import repository as repo
 import workflow as wf
 import search as srch
@@ -319,8 +319,17 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                     part1 = manual_msg
                     part2 = manual_msg
                     full  = manual_msg
+                    analysis_meta = None
+                    leg_summary = ""
+                    leg_usage = {"input_tokens": 0, "output_tokens": 0,
+                                 "cache_read_input_tokens": 0,
+                                 "cache_creation_input_tokens": 0}
                 else:
-                    part1, part2, full = analyzer.analyze_item(
+                    # ── Content-hash cache lookup ────────────────
+                    # Compose what we would send, hash it, and see if any
+                    # prior appearance already has an analysis for these
+                    # exact inputs. If so, reuse it — zero tokens spent.
+                    _user_msg, _trim_meta = analyzer.build_user_message(
                         display,
                         item.get("short_title", item.get("title", "")),
                         pdf_text,
@@ -328,25 +337,87 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                         item.get("page_text", ""),
                         prior_context=prior_context,
                     )
-                    time.sleep(20)
+                    input_hash = compute_input_hash(ANALYZER_MODEL, SOP_PROMPT, _user_msg)
+                    cached = repo.find_cached_analysis(input_hash)
+                    if cached:
+                        log.info(f"    HIT cache (from appearance "
+                                 f"{cached['source_appearance_id']}) — skipping API call")
+                        part1 = cached["part1"]
+                        part2 = cached["part2"]
+                        full  = (part1 + "\n\n" + part2).strip()
+                        analysis_meta = {
+                            "input_hash": input_hash,
+                            "usage": {"input_tokens": 0, "output_tokens": 0,
+                                      "cache_read_input_tokens": 0,
+                                      "cache_creation_input_tokens": 0},
+                            "cache_source": "db",
+                            **_trim_meta,
+                        }
+                        # Reuse leg summary too if the prior item had one
+                        leg_summary = cached.get("leg_summary", "") or ""
+                        leg_usage = {"input_tokens": 0, "output_tokens": 0,
+                                     "cache_read_input_tokens": 0,
+                                     "cache_creation_input_tokens": 0}
+                    else:
+                        part1, part2, full, analysis_meta = analyzer.analyze_item(
+                            display,
+                            item.get("short_title", item.get("title", "")),
+                            pdf_text,
+                            cname,
+                            item.get("page_text", ""),
+                            prior_context=prior_context,
+                        )
+                        time.sleep(20)
 
-                # ── Leg history summary ───────────────────────────
-                leg_summary = ""
-                raw_hist = item.get("legislative_history_raw", "")
-                if raw_hist and len(raw_hist) > 50:
-                    leg_summary = analyzer.summarize_leg_history(
-                        raw_hist, item.get("short_title", "")
-                    )
-                    time.sleep(20)
+                        # ── Leg history summary ───────────────────
+                        leg_summary = ""
+                        leg_usage = {"input_tokens": 0, "output_tokens": 0,
+                                     "cache_read_input_tokens": 0,
+                                     "cache_creation_input_tokens": 0}
+                        raw_hist = item.get("legislative_history_raw", "")
+                        if raw_hist and len(raw_hist) > 50:
+                            leg_summary, leg_usage = analyzer.summarize_leg_history(
+                                raw_hist, item.get("short_title", "")
+                            )
+                            time.sleep(20)
 
                 # ── Extract watch points ──────────────────────────
                 part1_clean, watch = extract_watch_points(part1)
 
-                # ── Persist AI results ────────────────────────────
+                # ── Persist AI results (with hash + token counts) ──
+                _usage = (analysis_meta or {}).get("usage") or {}
+                _tokens_in = (_usage.get("input_tokens") or 0) + (leg_usage.get("input_tokens") or 0)
+                _tokens_out = (_usage.get("output_tokens") or 0) + (leg_usage.get("output_tokens") or 0)
+                _tokens_cached = (_usage.get("cache_read_input_tokens") or 0) + (leg_usage.get("cache_read_input_tokens") or 0)
+                _hash = (analysis_meta or {}).get("input_hash")
+
                 repo.update_appearance_ai(
-                    appearance_id, part1_clean, part2, watch, leg_summary
+                    appearance_id, part1_clean, part2, watch, leg_summary,
+                    input_hash=_hash,
+                    tokens_in=_tokens_in, tokens_out=_tokens_out,
+                    cached_tokens=_tokens_cached,
                 )
                 repo.update_matter_ai_fields(matter_id, part1_clean, watch)
+
+                # ── Append to token-usage CSV ─────────────────────
+                try:
+                    _log_token_usage(output_dir, {
+                        "timestamp":   now_iso(),
+                        "committee":   cname,
+                        "meeting_date": adate,
+                        "file_number": file_num,
+                        "item":        display,
+                        "title":       (item.get("short_title") or item.get("title") or "")[:120],
+                        "cache_source": (analysis_meta or {}).get("cache_source", "api"),
+                        "pdf_trim":    (analysis_meta or {}).get("pdf_trim_strategy", ""),
+                        "pdf_chars_in":   (analysis_meta or {}).get("pdf_chars_in", 0),
+                        "pdf_chars_sent": (analysis_meta or {}).get("pdf_chars_sent", 0),
+                        "tokens_in":   _tokens_in,
+                        "tokens_out":  _tokens_out,
+                        "tokens_cached": _tokens_cached,
+                    })
+                except Exception as _e:
+                    log.debug(f"  token log write skipped: {_e}")
 
                 processed_appearances.append(appearance_id)
                 total_items += 1
@@ -388,6 +459,28 @@ def _log_updates(output_dir: Path, committee_name: str, items: list, date: str):
             ttl = item.get("short_title", item.get("title", ""))[:80]
             f.write(f"  {cn} (File# {mid}): {ttl}\n")
         f.write(f"{'='*60}\n")
+
+
+# Per-item token-usage log. Each row records what went to Claude (or was
+# served from our DB cache). Open this file in Excel to audit cost drivers:
+#   - cache_source='db' means we paid $0 for that item
+#   - tokens_in * $1/M + tokens_out * $5/M = approximate Haiku spend
+import csv as _csv
+_TOKEN_LOG_FIELDS = [
+    "timestamp", "committee", "meeting_date", "file_number", "item", "title",
+    "cache_source", "pdf_trim", "pdf_chars_in", "pdf_chars_sent",
+    "tokens_in", "tokens_out", "tokens_cached",
+]
+
+def _log_token_usage(output_dir: Path, row: dict):
+    """Append one per-item row to token_log.csv under the output dir."""
+    path = output_dir / "token_log.csv"
+    write_header = not path.exists()
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = _csv.DictWriter(f, fieldnames=_TOKEN_LOG_FIELDS, extrasaction="ignore")
+        if write_header:
+            w.writeheader()
+        w.writerow(row)
 
 
 # ─────────────────────────────────────────────────────────────

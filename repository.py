@@ -280,19 +280,82 @@ def create_or_update_appearance(matter_id: int, meeting_id: int,
 
 
 def update_appearance_ai(appearance_id: int, part1: str, part2: str,
-                          watch_points: str, leg_summary: str):
-    """Save AI analysis results to an appearance row."""
+                          watch_points: str, leg_summary: str,
+                          input_hash: str | None = None,
+                          tokens_in: int | None = None,
+                          tokens_out: int | None = None,
+                          cached_tokens: int | None = None):
+    """Save AI analysis results to an appearance row.
+
+    If input_hash is provided, it is stored alongside the token counts so
+    subsequent runs can skip re-calling Claude when the same prompt is
+    assembled for a different appearance (e.g., the same item carried
+    across stages).
+    """
+    ts = now_iso()
     with get_db() as conn:
-        conn.execute(
-            """UPDATE appearances SET
-               ai_summary_for_appearance   = ?,
-               watch_points_for_appearance = ?,
-               leg_history_summary         = ?,
-               finalized_brief             = ?,
-               updated_at                  = ?
-               WHERE id = ?""",
-            (part1, watch_points, leg_summary, part2, now_iso(), appearance_id)
-        )
+        if input_hash is not None:
+            conn.execute(
+                """UPDATE appearances SET
+                   ai_summary_for_appearance   = ?,
+                   watch_points_for_appearance = ?,
+                   leg_history_summary         = ?,
+                   finalized_brief             = ?,
+                   analysis_input_hash         = ?,
+                   analysis_tokens_in          = ?,
+                   analysis_tokens_out         = ?,
+                   analysis_cached_tokens      = ?,
+                   analysis_at                 = ?,
+                   updated_at                  = ?
+                   WHERE id = ?""",
+                (part1, watch_points, leg_summary, part2,
+                 input_hash, tokens_in or 0, tokens_out or 0, cached_tokens or 0,
+                 ts, ts, appearance_id)
+            )
+        else:
+            conn.execute(
+                """UPDATE appearances SET
+                   ai_summary_for_appearance   = ?,
+                   watch_points_for_appearance = ?,
+                   leg_history_summary         = ?,
+                   finalized_brief             = ?,
+                   updated_at                  = ?
+                   WHERE id = ?""",
+                (part1, watch_points, leg_summary, part2, ts, appearance_id)
+            )
+
+
+def find_cached_analysis(input_hash: str) -> dict | None:
+    """If any appearance has already been analyzed with this exact input
+    hash, return the stored AI fields so the pipeline can reuse them and
+    skip the Claude API call entirely.
+
+    Returns a dict with ai_summary, part2 (finalized_brief), watch_points,
+    leg_history_summary, plus the source appearance_id — or None if no match.
+    """
+    if not input_hash:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT id, ai_summary_for_appearance, watch_points_for_appearance,
+                      leg_history_summary, finalized_brief
+               FROM appearances
+               WHERE analysis_input_hash = ?
+                 AND ai_summary_for_appearance IS NOT NULL
+                 AND LENGTH(ai_summary_for_appearance) > 50
+               ORDER BY id DESC
+               LIMIT 1""",
+            (input_hash,)
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "source_appearance_id": row["id"],
+            "part1":        row["ai_summary_for_appearance"] or "",
+            "part2":        row["finalized_brief"]             or "",
+            "watch_points": row["watch_points_for_appearance"] or "",
+            "leg_summary":  row["leg_history_summary"]         or "",
+        }
 
 
 def get_all_appearances_for_matter(matter_id: int) -> list[dict]:
