@@ -173,6 +173,29 @@ def get_meeting_package(meeting_id: int) -> dict | None:
         # ── Build journey: chronological list of stages this item passed through
         journey_steps = []
         all_sorted = sorted(prior, key=lambda x: x.get("meeting_date") or "")
+
+        # ── Smart current/prior tagging based on dates ──
+        # Rules:
+        # - An appearance becomes "prior" one day after its meeting date
+        # - The next appearance after that becomes "current"
+        # - If no future appearance exists, the last one stays "current"
+        from datetime import date, timedelta
+        today_str = date.today().isoformat()
+        yesterday_str = (date.today() - timedelta(days=1)).isoformat()
+
+        # Find the "current" appearance: first one whose meeting_date > yesterday
+        # (i.e., meeting hasn't passed yet, or just happened today).
+        # If all are past, the last one is current.
+        current_app_id = None
+        for p in all_sorted:
+            md = p.get("meeting_date") or ""
+            if md > yesterday_str:  # meeting date is today or future
+                current_app_id = p["id"]
+                break
+        if current_app_id is None and all_sorted:
+            # All meetings are past — last one stays current
+            current_app_id = all_sorted[-1]["id"]
+
         for p in all_sorted:
             md = p.get("meeting_date") or ""
             short_date = md[5:] if md else ""   # "03-10" from "2026-03-10"
@@ -189,12 +212,14 @@ def get_meeting_package(meeting_id: int) -> dict | None:
                 label = short_name or "Cmte"
             else:
                 label = (p.get("body_name") or "Other")[:15]
-            is_current = (p["id"] == a["id"])
+            is_current = (p["id"] == current_app_id)
+            is_past = md and md <= yesterday_str and not is_current
             journey_steps.append({
                 "label": label,
                 "date": short_date,
                 "full_date": md,
                 "is_current": is_current,
+                "is_past": is_past,
                 "body_name": p.get("body_name") or "",
                 "stage": "bcc" if _is_bcc(p) else ("cmte" if _is_cmte(p) else "other"),
             })

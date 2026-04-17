@@ -2129,7 +2129,7 @@ function drTab(tab, el) {
   if(tab==='deep')    renderDrawerDeepResearch(body,appData);
   if(tab==='chat')    renderDrawerChat(body,appData);
   if(tab==='history') renderDrawerHistory(body,appData);
-  if(tab==='lifecycle')   renderDrawerLifecycle(body,appData);
+  if(tab==='lifecycle')   renderDrawerLifecycle(body,appData,matter);
 }
 
 function renderDrawerOverview(body, matter, app, saveBtn) {
@@ -2608,7 +2608,7 @@ async function reanalyzeMeetingItems() {
   }
 }
 
-async function renderDrawerLifecycle(body, appData) {
+async function renderDrawerLifecycle(body, appData, matter) {
   if(!appData?.id){ body.innerHTML='<p style="color:var(--gray-400)">No appearance.</p>'; return; }
   body.innerHTML='<p style="color:var(--gray-400);font-size:.85rem">Loading lifecycle…</p>';
   try{
@@ -2631,6 +2631,50 @@ async function renderDrawerLifecycle(body, appData) {
       return;
     }
 
+    // ── Next Steps computation ──
+    const legStatus = (matter?.current_status || '').toLowerCase();
+    const control = (matter?.control_body || '').toLowerCase();
+    let nextStep = '', nextStepType = 'pending';
+
+    if (/adopted|approved|passed/.test(legStatus) && !/first reading|tentatively/.test(legStatus)) {
+      nextStep = 'Adopted'; nextStepType = 'done';
+    } else if (/failed|withdrawn/.test(legStatus)) {
+      nextStep = (matter?.current_status||'').replace(/^\w/, c=>c.toUpperCase()); nextStepType = 'done';
+    } else if (/public hearing|tentatively scheduled/.test(legStatus)) {
+      nextStep = 'BCC Public Hearing'; nextStepType = 'bcc';
+    } else if (/first reading/.test(legStatus)) {
+      nextStep = 'BCC 2nd Reading'; nextStepType = 'bcc';
+    } else if (/deferred|continued/.test(legStatus)) {
+      const lastBody = allApps.length ? (allApps[allApps.length-1].body_name||'Committee') : 'Committee';
+      nextStep = 'Back to ' + lastBody; nextStepType = /bcc|board/i.test(lastBody) ? 'bcc' : 'cmte';
+    } else if (/favorably|recommended|forwarded/.test(legStatus)) {
+      nextStep = 'BCC'; nextStepType = 'bcc';
+    } else if (/amended/.test(legStatus)) {
+      nextStep = /board|bcc/.test(control) ? 'BCC (Amended)' : 'Committee (Amended)';
+      nextStepType = /board|bcc/.test(control) ? 'bcc' : 'cmte';
+    } else if (allApps.length) {
+      const lastBn = (allApps[allApps.length-1].body_name||'').toLowerCase();
+      if (/committee/.test(lastBn) && !/board of county/.test(lastBn)) {
+        nextStep = 'BCC'; nextStepType = 'bcc';
+      } else {
+        nextStep = 'Pending Final Action'; nextStepType = 'pending';
+      }
+    }
+
+    const nsColors = {done:'#059669', bcc:'#2563eb', cmte:'#7c3aed', pending:'#d97706'};
+    const nsBg     = {done:'#f0fdf4', bcc:'#eff6ff', cmte:'#f5f3ff', pending:'#fffbeb'};
+    const nsIcons  = {done:'✓', bcc:'→ BCC', cmte:'→ Committee', pending:'⏳'};
+    const nextStepHtml = nextStep ? `
+      <div style="background:${nsBg[nextStepType]||'#f1f5f9'};border:2px solid ${nsColors[nextStepType]||'#94a3b8'};
+        border-radius:10px;padding:.65rem .85rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.6rem">
+        <div style="font-size:1.1rem">${nsIcons[nextStepType]||'→'}</div>
+        <div>
+          <div style="font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.5px;font-weight:600">NEXT STEPS</div>
+          <div style="font-size:.9rem;font-weight:700;color:${nsColors[nextStepType]||'#475569'}">${esc(nextStep)}</div>
+          ${matter?.current_status ? `<div style="font-size:.72rem;color:#64748b;margin-top:.15rem">Leg Status: ${esc(matter.current_status)}</div>` : ''}
+        </div>
+      </div>` : '';
+
     // Build change detection map between consecutive appearances
     const changeMap = {};
     for (let i = 1; i < allApps.length; i++) {
@@ -2647,11 +2691,23 @@ async function renderDrawerLifecycle(body, appData) {
       }
     }
 
+    // Compute which appearance is "current" by date logic
+    const _lcToday = new Date().toISOString().slice(0,10);
+    const _lcYesterday = new Date(Date.now() - 86400000).toISOString().slice(0,10);
+    const ourEvents = events.filter(e => e.source === 'agendaiq').sort((a,b) => (a.event_date||'').localeCompare(b.event_date||''));
+    let _lcCurrentAppId = null;
+    for (const oe of ourEvents) {
+      if ((oe.event_date||'') > _lcYesterday) { _lcCurrentAppId = oe.appearance_id; break; }
+    }
+    if (!_lcCurrentAppId && ourEvents.length) _lcCurrentAppId = ourEvents[ourEvents.length-1].appearance_id;
+
     const rows = events.map(e=>{
       const isOurs = e.source==='agendaiq';
       const color  = isOurs ? '#2563eb' : '#64748b';
       const icon   = isOurs ? '📌' : '•';
-      const isCurrent = e.appearance_id === appData.id;
+      const isCurrent = isOurs && e.appearance_id === _lcCurrentAppId;
+      const isPast = isOurs && (e.event_date||'') <= _lcYesterday && !isCurrent;
+      const isFuture = isOurs && (e.event_date||'') > _lcToday && !isCurrent;
       const meta = [];
       if(e.committee_item_number) meta.push(`Cmte #${esc(e.committee_item_number)}`);
       if(e.bcc_item_number)       meta.push(`BCC #${esc(e.bcc_item_number)}`);
@@ -2689,6 +2745,8 @@ async function renderDrawerLifecycle(body, appData) {
             <b>${esc(e.body_name||'')}</b>
             ${e.body_name && e.action ? ' — ' : ''}${esc(e.action||'')}
             ${isCurrent ? ' <span style="font-size:.68rem;color:#2563eb;font-weight:600">● CURRENT</span>' : ''}
+            ${isPast ? ' <span style="font-size:.65rem;color:#94a3b8;font-weight:500">PRIOR</span>' : ''}
+            ${isFuture ? ' <span style="font-size:.65rem;color:#7c3aed;font-weight:500">▶ UPCOMING</span>' : ''}
           </div>
           ${meta.length?`<div style="font-size:.72rem;color:#64748b;margin-top:.15rem">${meta.join(' · ')}</div>`:''}
           ${changeHtml}
@@ -2704,6 +2762,7 @@ async function renderDrawerLifecycle(body, appData) {
       </div>`;
     }).join('');
     body.innerHTML = `
+      ${nextStepHtml}
       <div style="font-size:.78rem;color:#64748b;margin-bottom:.5rem">
         Full lifecycle for this matter — <span style="color:#2563eb">📌 blue pins</span> are our agenda appearances,
         <span style="color:#64748b">• gray dots</span> are from Legistar legislative history.
@@ -3083,7 +3142,7 @@ function renderDrawerNotes(body, app) {
       <textarea id="edit-working-notes"
         style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem${!analystCanEdit?';background:#f8fafc;cursor:default':''}"
         ${!analystCanEdit ? 'readonly' : ''}
-        placeholder="Write your debrief analysis, observations, and recommendations here..."></textarea>
+        placeholder="Write your debrief analysis, observations, and recommendations here...">${esc(wn)}</textarea>
       ${analystCanEdit ? `
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Draft</button>
@@ -3346,15 +3405,12 @@ function _appendChatBubble(container, msg) {
   let html = esc(msg.content);
   if(msg.role === 'assistant') {
     const appendedNotes = msg.appended_to === 'notes';
-    const appendedPart1 = msg.appended_to === 'part1';
     const appendedDeep = msg.appended_to === 'deep_research';
     html += `<div class="chat-actions">
       <button onclick="appendChatToTarget(${msg.id},'notes',this)" ${appendedNotes?'class="appended" disabled':''}>
-        ${appendedNotes ? '✓ Added to Notes' : '+ Agenda Debrief'}</button>
+        ${appendedNotes ? '✓ Added to Analyst Notes' : '+ Analyst Notes'}</button>
       <button onclick="appendChatToTarget(${msg.id},'deep_research',this)" ${appendedDeep?'class="appended" disabled':''}>
         ${appendedDeep ? '✓ Saved to Deep Research' : '+ Deep Research'}</button>
-      <button onclick="appendChatToTarget(${msg.id},'part1',this)" ${appendedPart1?'class="appended" disabled':''}>
-        ${appendedPart1 ? '✓ Added to Part 1' : '+ Part 1 Summary'}</button>
     </div>`;
   }
   div.innerHTML = html;
@@ -3418,7 +3474,7 @@ async function appendChatToTarget(msgId, target, btnEl) {
     });
     const d = await r.json();
     if(d.ok) {
-      const labels = {notes:'✓ Added to Notes', part1:'✓ Added to Part 1', deep_research:'✓ Saved to Deep Research'};
+      const labels = {notes:'✓ Added to Analyst Notes', deep_research:'✓ Saved to Deep Research'};
       btnEl.textContent = labels[target] || '✓ Added';
       btnEl.classList.add('appended');
       btnEl.disabled = true;
@@ -4563,12 +4619,17 @@ function _renderItemsGrid() {
     const bccCount  = it.bcc_appearance_count || 0;
     const cmteBadge = cmteCount > 1 ? `<span style="font-size:.55rem;background:#bbf7d0;color:#166534;padding:0 3px;border-radius:3px;margin-left:2px" title="${cmteCount} committee appearances">×${cmteCount}</span>` : '';
     const bccBadge  = bccCount > 1 ? `<span style="font-size:.55rem;background:#bfdbfe;color:#1e40af;padding:0 3px;border-radius:3px;margin-left:2px" title="${bccCount} BCC appearances">×${bccCount}</span>` : '';
-    const cdSrc = it.committee_date_source === 'legistar'
-      ? `<span style="font-style:italic;color:#94a3b8" title="From Legistar legislative history">${cd}</span>`
-      : (cd ? cd + cmteBadge : '—');
-    const bdSrc = it.bcc_date_source === 'legistar'
-      ? `<span style="font-style:italic;color:#94a3b8" title="From Legistar legislative history">${bd}</span>`
-      : (bd ? bd + bccBadge : '—');
+    // Date formatting: past dates muted, future dates bold blue with ▶ indicator
+    const _today = new Date().toISOString().slice(0,10);
+    const _fmtDate = (d, badge, src) => {
+      if (!d) return '—';
+      if (src === 'legistar') return `<span style="font-style:italic;color:#94a3b8" title="From Legistar legislative history">${d}</span>`;
+      const isPast = d <= _today;
+      if (isPast) return `<span style="color:#64748b" title="Past: ${d}">${d}</span>${badge}`;
+      return `<span style="color:#2563eb;font-weight:600" title="Upcoming: ${d}">▶ ${d}</span>${badge}`;
+    };
+    const cdSrc = _fmtDate(cd, cmteBadge, it.committee_date_source);
+    const bdSrc = _fmtDate(bd, bccBadge, it.bcc_date_source);
 
     // Inline Links column: ↗ Legistar item page, 📄 Item PDF (local or remote).
     const linkBits = [];
@@ -4748,13 +4809,26 @@ function renderJourneyCell(it) {
   if (!steps.length) return '<span style="color:var(--gray-400);font-size:.7rem">—</span>';
   return `<div style="display:flex;align-items:center;gap:0;font-size:.65rem;line-height:1;flex-wrap:nowrap;overflow:hidden">` +
     steps.map((s, i) => {
-      const colors = s.stage === 'bcc'
-        ? {bg: s.is_current ? '#2563eb' : '#93c5fd', fg: s.is_current ? '#fff' : '#1e3a5f'}
-        : {bg: s.is_current ? '#16a34a' : '#bbf7d0', fg: s.is_current ? '#fff' : '#14532d'};
+      let colors;
+      if (s.is_current) {
+        // Current appearance: bold, highlighted
+        colors = s.stage === 'bcc'
+          ? {bg: '#2563eb', fg: '#fff'}
+          : {bg: '#16a34a', fg: '#fff'};
+      } else if (s.is_past) {
+        // Past appearance: muted
+        colors = {bg: '#e2e8f0', fg: '#64748b'};
+      } else {
+        // Future appearance: outlined, bright
+        colors = s.stage === 'bcc'
+          ? {bg: '#dbeafe', fg: '#1e40af'}
+          : {bg: '#dcfce7', fg: '#166534'};
+      }
       const fromLeg = s.from_legistar ? 'border:1px dashed #94a3b8;' : '';
       const arrow = i < steps.length - 1
         ? '<span style="color:#94a3b8;font-size:.6rem;margin:0 1px">→</span>' : '';
-      const title = `${s.body_name || s.label} ${s.full_date || ''}${s.action ? ' — ' + s.action : ''}${s.from_legistar ? ' (from Legistar)' : ''}`;
+      const statusTag = s.is_current ? ' ● CURRENT' : (s.is_past ? ' (prior)' : ' (upcoming)');
+      const title = `${s.body_name || s.label} ${s.full_date || ''}${statusTag}${s.action ? ' — ' + s.action : ''}${s.from_legistar ? ' (from Legistar)' : ''}`;
       return `<span title="${esc(title)}" style="display:inline-flex;align-items:center;padding:1px 4px;border-radius:3px;background:${colors.bg};color:${colors.fg};white-space:nowrap;font-weight:${s.is_current?700:500};${fromLeg}">${esc(s.label)} ${esc(s.date)}</span>${arrow}`;
     }).join('') + '</div>';
 }
