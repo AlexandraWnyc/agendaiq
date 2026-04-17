@@ -782,7 +782,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         </div>
         <div class="howto-item">
           <div class="howto-q">How do I see notes from a prior meeting on the same item?</div>
-          <div class="howto-a">Open the item drawer. The <strong>Part 1 · Debrief</strong> tab has a <em>Research Notes</em> section at the bottom listing every note from every appearance — Committee, BCC, and everything in between — each stamped with stage, date, and author. For more detail, the <strong>Appearances</strong> tab shows the full case history. Items with prior notes have a <strong>✓</strong> in the <em>Prior Notes</em> column of the grid.</div>
+          <div class="howto-a">Open the item drawer. The <strong>Part 1 · Debrief</strong> tab has a <em>Meeting Notes</em> section at the bottom listing every note from every appearance — Committee, BCC, and everything in between — each stamped with stage, date, and author. For more detail, the <strong>Appearances</strong> tab shows the full case history. Items with prior notes have a <strong>✓</strong> in the <em>Prior Notes</em> column of the grid.</div>
         </div>
         <div class="howto-item">
           <div class="howto-q">How do I assign items to a researcher?</div>
@@ -794,7 +794,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         </div>
         <div class="howto-item">
           <div class="howto-q">How do I export the final deliverable?</div>
-          <div class="howto-a">In the item drawer, click <strong>↓ Export Files</strong>. This produces the Part 1 Agenda Debrief as a Word document, including Agenda Debrief, Watchpoints, Legislative History, and timestamped Research Notes. Deep Research Notes are <em>not</em> included — those stay internal.</div>
+          <div class="howto-a">In the item drawer, click <strong>↓ Export Files</strong>. This produces the Part 1 Agenda Debrief as a Word document, including Agenda Debrief, Watchpoints, Legislative History, and timestamped Meeting Notes. Deep Research Notes are <em>not</em> included — those stay internal.</div>
         </div>
         <div class="howto-item">
           <div class="howto-q">What's the difference between Notes and Deep Research?</div>
@@ -881,7 +881,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 
       <!-- ITEM TABS -->
       <div class="hpane" id="hpane-tabs" style="display:none">
-        <div class="tabdef"><b>Part 1 · Debrief</b> — The deliverable. Contains Agenda Debrief, Watch Points, Legislative Status (live), Legislative History, and all Research Notes stamped with author and date. <strong>This is what gets exported.</strong></div>
+        <div class="tabdef"><b>Part 1 · Debrief</b> — The deliverable. Contains Agenda Debrief, Watch Points, Legislative Status (live), Legislative History, and all Meeting Notes stamped with author and date. <strong>This is what gets exported.</strong></div>
         <div class="tabdef"><b>Notes</b> — Where you add new research: Analyst Working Notes and Reviewer Notes. Each Append Note action timestamps automatically. Feeds Part 1.</div>
         <div class="tabdef"><b>Deep Research</b> — Reference-only background material. Never exported. Use for citations, prior memos, context a researcher may want to come back to.</div>
         <div class="tabdef"><b>History</b> — Audit trail of who changed what on this appearance (status changes, assignment changes, notes added, AI runs, exports).</div>
@@ -1358,7 +1358,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="dr-meta" id="dr-meta"></div>
   </div>
   <div class="dr-tabs">
-    <button class="dtab on" onclick="drTab('summary',this)" title="Part 1 Deliverable: Debrief + Watchpoints + Leg History + Research Notes">Part 1 · Debrief</button>
+    <button class="dtab on" onclick="drTab('summary',this)" title="Part 1 Deliverable: Debrief + Watchpoints + Leg History + Meeting Notes">Part 1 · Debrief</button>
     <button class="dtab" onclick="drTab('notes',this)">Notes</button>
     <button class="dtab" onclick="drTab('deep',this)" title="Reference only — not exported">Deep Research</button>
     <button class="dtab" onclick="drTab('chat',this)" title="Private AI chat about this item">AI Chat</button>
@@ -2195,7 +2195,7 @@ function renderDrawerSummary(body, matter, app, saveBtn) {
     p.id !== (app?.id) && ((p.analyst_working_notes||'').trim() || (p.reviewer_notes||'').trim())
   );
 
-  // Build Research Notes section: each entry shows stage + meeting date +
+  // Build Meeting Notes section: each entry shows stage + meeting date +
   // who/when it was updated, then the note body. Finalized_brief is NOT
   // included here — that's Deep Research (reference only).
   const researchNotesHtml = allApps.map(p => {
@@ -2236,12 +2236,12 @@ function renderDrawerSummary(body, matter, app, saveBtn) {
   body.innerHTML = `
     <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
       padding:.55rem .85rem;margin-bottom:.75rem;font-size:.74rem;color:#1e3a8a">
-      <strong>Part 1 — Deliverable.</strong> This is what gets exported: Agenda Debrief, Watch Points, Legislative History, and Research Notes from every stage.
+      <strong>Part 1 — Deliverable.</strong> This is what gets exported: Agenda Debrief, Watch Points, Legislative History, and Meeting Notes from every stage.
     </div>
     ${priorWithNotes.length ? `
       <div class="cf-banner" style="background:#dbeafe;border-color:#93c5fd;color:#1e40af;cursor:pointer"
         onclick="drTab('appearances',document.querySelectorAll('.dtab')[4])">
-        ⓘ Prior research exists — ${priorWithNotes.length} earlier appearance${priorWithNotes.length>1?'s':''} with notes. Scroll down to Research Notes or open the Appearances tab.
+        ⓘ Prior notes exist — ${priorWithNotes.length} earlier appearance${priorWithNotes.length>1?'s':''} with notes. Scroll down to Meeting Notes or open the Appearances tab.
       </div>` : ''}
     ${changeDetectionHtml}
     <div class="ds">
@@ -2265,7 +2265,7 @@ function renderDrawerSummary(body, matter, app, saveBtn) {
       <div class="editable-field" style="cursor:default">${esc(matter.legislative_notes)}</div></div>` : ''}
     <div class="ds">
       <div class="ds-title">
-        <span>RESEARCH NOTES</span>
+        <span>MEETING NOTES</span>
         <span style="font-size:.68rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
           across all appearances · add new in Notes tab
         </span>
@@ -2510,7 +2510,7 @@ function renderDrawerDeepResearch(body, app) {
     </div>` : ''}
     <div class="ds">
       <div class="ds-title">
-        <span>DEEP RESEARCH NOTES</span>
+        <span>DEEP MEETING NOTES</span>
         ${whenF ? `<span style="font-size:.68rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
           last updated${whoF?` by ${esc(whoF)}`:''} · ${esc(fmt(whenF))}</span>`:''}
       </div>
@@ -3313,19 +3313,29 @@ async function _txSubmitPaste() {
 }
 
 function _txStartPolling(panel, btn) {
+  let _txPollCount = 0;
   _txPollTimer = setInterval(async () => {
+    _txPollCount++;
     try {
       const pr = await fetch('/api/backfill/transcript/progress');
       const pd = await pr.json();
+      if (pd.done) {
+        clearInterval(_txPollTimer); _txPollTimer = null;
+        _handleTranscriptResult(pd.result, panel, btn);
+        return;
+      }
       if (pd.phase === 'transcript') {
         panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
           `<div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">` +
           `<div style="width:${pd.pct||0}%;height:100%;background:#6366f1;transition:width .3s"></div></div>` +
           `<span style="color:#4338ca">${esc(pd.msg || 'Working…')}</span>`;
       }
-      if (pd.done) {
+      // Safety: if running > 15 min with no completion, stop polling
+      if (_txPollCount > 750) {
         clearInterval(_txPollTimer); _txPollTimer = null;
-        _handleTranscriptResult(pd.result, panel, btn);
+        panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
+          '<span style="color:#b45309">⚠ Taking longer than expected. Refresh the page and check item notes — they may already be saved.</span>';
+        if (btn) btn.disabled = false;
       }
     } catch(_) {}
   }, 1200);
@@ -3976,7 +3986,7 @@ def api_appearance(app_id):
     a["meeting_date"] = mt.get("meeting_date", "")
     a["body_name"]    = mt.get("body_name", "")
     # Attach all appearances for this matter so the Summary tab can render
-    # Research Notes across every stage with timestamps.
+    # Meeting Notes across every stage with timestamps.
     if m.get("id"):
         from repository import get_all_appearances_for_matter as _gaam
         apps = _gaam(m["id"]) or []
