@@ -5857,7 +5857,7 @@ def api_chat_send(appearance_id):
     if not user_msg:
         return jsonify({"error": "Empty message"}), 400
 
-    # Fetch item context for the AI
+    # Single DB query: fetch item context + history together
     with get_db() as conn:
         app_row = conn.execute(
             """SELECT a.*, m.short_title, m.full_title, m.file_number as matter_file_number
@@ -5866,55 +5866,44 @@ def api_chat_send(appearance_id):
                WHERE a.id=?""",
             (appearance_id,)
         ).fetchone()
-    if not app_row:
-        return jsonify({"error": "Appearance not found"}), 404
-    app_row = dict(app_row)
+        if not app_row:
+            return jsonify({"error": "Appearance not found"}), 404
+        app_row = dict(app_row)
 
-    # Build conversation history (last 20 messages for context window)
-    with get_db() as conn:
         history = conn.execute(
             """SELECT role, content FROM chat_messages
                WHERE appearance_id=? AND username=?
                ORDER BY created_at ASC""",
             (appearance_id, user)
         ).fetchall()
-    history = [dict(r) for r in history][-20:]
+        history = [dict(r) for r in history][-20:]
 
-    # System prompt with item context
+        # Save user message immediately (same transaction)
+        conn.execute(
+            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at) VALUES (?,?,?,?,?,?)",
+            (appearance_id, user, "user", user_msg, 0, now_iso())
+        )
+
+    # Build system prompt (keep it lean for speed)
     title = app_row.get("appearance_title") or app_row.get("short_title") or app_row.get("full_title") or ""
     file_num = app_row.get("matter_file_number") or app_row.get("file_number") or ""
     ai_summary = app_row.get("ai_summary_for_appearance") or ""
-    watch_pts = app_row.get("watch_points_for_appearance") or ""
     leg_hist = app_row.get("leg_history_summary") or ""
 
     sys_prompt = (
         "You are a research assistant for the Office of the Commission Auditor (OCA) at Miami-Dade County. "
         "You are helping a researcher analyze a specific agenda item. Be concise, factual, and professional. "
         "Do NOT use markdown formatting. Use plain text only. For bullets, use dashes.\n\n"
-        f"ITEM CONTEXT:\n"
-        f"File Number: {file_num}\n"
-        f"Title: {title}\n"
+        f"ITEM: {file_num} — {title}\n"
     )
     if ai_summary:
-        sys_prompt += f"\nEXISTING AI ANALYSIS:\n{ai_summary[:2000]}\n"
-    if watch_pts:
-        sys_prompt += f"\nWATCH POINTS:\n{watch_pts[:500]}\n"
+        sys_prompt += f"\nANALYSIS:\n{ai_summary[:1500]}\n"
     if leg_hist:
         sys_prompt += f"\nLEGISLATIVE HISTORY:\n{leg_hist[:500]}\n"
 
     # Build messages array
-    messages = []
-    for h in history:
-        messages.append({"role": h["role"], "content": h["content"]})
+    messages = [{"role": h["role"], "content": h["content"]} for h in history]
     messages.append({"role": "user", "content": user_msg})
-
-    # Save user message to DB
-    now = now_iso()
-    with get_db() as conn:
-        conn.execute(
-            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at) VALUES (?,?,?,?,?,?)",
-            (appearance_id, user, "user", user_msg, 0, now)
-        )
 
     # Call Claude
     try:
