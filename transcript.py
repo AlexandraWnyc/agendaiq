@@ -25,8 +25,10 @@ log = logging.getLogger("oca-agent")
 YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
 YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@miami-dadebcc6863"
 
-# Granicus streaming archive — single page lists ALL meetings (BCC + committees)
+# Granicus streaming archive
 GRANICUS_ARCHIVE_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=2"
+GRANICUS_SEARCH_URL = "https://miamidade.granicus.com/ViewSearchResults.php"
+GRANICUS_RSS_URL = "https://miamidade.granicus.com/ViewPublisherRSS.php?view_id=2"
 
 # Known committee name aliases — maps canonical DB names to patterns
 # that might appear in YouTube video titles.  The fuzzy matcher uses
@@ -95,100 +97,143 @@ for canonical, aliases in COMMITTEE_ALIASES.items():
 # ── Granicus MP3 + Whisper transcription ─────────────────────
 
 def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
-    """Scrape the Granicus streaming archive for an MP3 matching
-    a committee name + date.
+    """Search Granicus streaming archive for an MP3 matching committee + date.
 
-    The archive page at miamidade.granicus.com has a table of recent meetings.
-    Each row has: Name | Date | Duration | Video | Documents | MP3 Audio | MP4 Video
-    Date cells contain a Unix timestamp prefix followed by human-readable date,
-    e.g. "1776236400Apr 15, 2026" or "1775545200Apr  7, 2026".
+    Strategy 1: Search endpoint (returns ALL results, covers full archive)
+    Strategy 2: HTML scraper on main page (last ~10 meetings)
 
     Returns: {"mp3_url": str, "title": str, "page_url": str} or None
     """
     import requests
     from bs4 import BeautifulSoup
 
-    page_url = GRANICUS_ARCHIVE_URL
-
-    # Parse meeting date for matching
     try:
         target_dt = datetime.strptime(meeting_date, "%Y-%m-%d")
     except ValueError:
         log.warning(f"  Invalid meeting date: {meeting_date}")
         return None
 
-    # Date patterns that appear in the Granicus date cells (after the Unix timestamp)
-    # Format is like "Apr 15, 2026" or "Apr  7, 2026" (extra space for single-digit days)
     date_patterns = [
-        target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}",   # "Apr 7, 2026"
-        target_dt.strftime("%b %d, %Y"),                                     # "Apr 07, 2026"
-        target_dt.strftime("%b") + f"  {target_dt.day}, {target_dt.year}",  # "Apr  7, 2026"
-        target_dt.strftime("%B %d, %Y"),                                     # "April 15, 2026"
+        target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}",
+        target_dt.strftime("%b %d, %Y"),
+        target_dt.strftime("%b") + f"  {target_dt.day}, {target_dt.year}",
+        target_dt.strftime("%B %d, %Y"),
+        f"{target_dt.month}/{target_dt.day}/{target_dt.year}",
     ]
 
-    log.info(f"  Searching Granicus archive for '{committee_name}' on {meeting_date}")
-    log.info(f"  Page: {page_url}")
-    log.info(f"  Date patterns: {date_patterns}")
+    log.info(f"  Searching Granicus for '{committee_name}' on {meeting_date}")
 
+    # ── Strategy 1: Granicus keyword search (covers entire archive) ──
+    # Extract first keyword from committee name for broad search
+    search_words = [w for w in committee_name.split()
+                    if w.lower() not in ('of', 'and', 'the', 'for', 'in', 'committee',
+                                         'cmte', 'ad', 'hoc', 'miami-dade')]
+    search_term = search_words[0] if search_words else committee_name.split()[0]
+
+    for strategy_name, fetch_url in [
+        ("search", f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={search_term}"),
+        ("main_page", GRANICUS_ARCHIVE_URL),
+    ]:
+        log.info(f"  Granicus {strategy_name}: {fetch_url[:100]}")
+        try:
+            resp = requests.get(fetch_url, timeout=30, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            })
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"  Granicus {strategy_name} fetch failed: {e}")
+            continue
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        best_match = None
+        best_score = 0
+        candidates_checked = 0
+
+        # Find all MP3 links
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if ".mp3" not in href.lower():
+                continue
+
+            row = link.find_parent("tr")
+            if not row:
+                continue
+
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+
+            row_name = cells[0].get_text(strip=True)
+            row_date_text = cells[1].get_text(strip=True)
+
+            # Date match — check all patterns
+            date_match = any(dp.lower() in row_date_text.lower() for dp in date_patterns)
+            if not date_match:
+                continue
+
+            candidates_checked += 1
+            name_score = _committee_match_score(committee_name, row_name)
+            log.info(f"  Candidate: '{row_name}' date='{row_date_text}' score={name_score:.2f}")
+
+            if name_score < 0.25:  # lowered threshold
+                continue
+
+            total_score = name_score + 1.0
+            if total_score > best_score:
+                best_score = total_score
+                best_match = {
+                    "mp3_url": href if href.startswith("http") else f"https://miamidade.granicus.com/{href}",
+                    "title": row_name,
+                    "page_url": fetch_url,
+                    "match_score": total_score,
+                }
+
+        log.info(f"  Granicus {strategy_name}: {candidates_checked} date-matched rows checked")
+
+        if best_match:
+            log.info(f"  Found MP3: {best_match['mp3_url'][:80]}... (score={best_match['match_score']:.2f})")
+            return best_match
+
+    # ── Strategy 3: Try searching for the meeting date directly ──
+    date_search = target_dt.strftime("%m/%d/%Y")
     try:
-        resp = requests.get(page_url, timeout=30)
+        log.info(f"  Granicus date search: {date_search}")
+        resp = requests.get(
+            f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={date_search}",
+            timeout=30,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
         resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if ".mp3" not in href.lower():
+                continue
+            row = link.find_parent("tr")
+            if not row:
+                continue
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            row_name = cells[0].get_text(strip=True)
+            name_score = _committee_match_score(committee_name, row_name)
+            log.info(f"  Date-search candidate: '{row_name}' score={name_score:.2f}")
+            if name_score >= 0.25:
+                mp3_url = href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
+                log.info(f"  Found MP3 via date search: {mp3_url[:80]}")
+                return {
+                    "mp3_url": mp3_url,
+                    "title": row_name,
+                    "page_url": f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={date_search}",
+                    "match_score": name_score + 1.0,
+                }
     except Exception as e:
-        log.warning(f"  Failed to fetch Granicus archive page: {e}")
-        return None
+        log.warning(f"  Granicus date search failed: {e}")
 
-    soup = BeautifulSoup(resp.text, "html.parser")
-
-    # Find all "MP3 Audio" links (href contains .mp3)
-    best_match = None
-    best_score = 0
-
-    for link in soup.find_all("a", href=True):
-        href = link.get("href", "")
-        if ".mp3" not in href.lower():
-            continue
-
-        # Get the parent table row
-        row = link.find_parent("tr")
-        if not row:
-            continue
-
-        cells = row.find_all("td")
-        if len(cells) < 2:
-            continue
-
-        # Cell 0 = meeting name, Cell 1 = date (with Unix timestamp prefix)
-        row_name = cells[0].get_text(strip=True)
-        row_date = cells[1].get_text(strip=True)
-
-        # Check date match — the date cell has format "1776236400Apr 15, 2026"
-        date_match = any(dp.lower() in row_date.lower() for dp in date_patterns)
-        if not date_match:
-            continue
-
-        # Check committee name match
-        name_score = _committee_match_score(committee_name, row_name)
-        log.info(f"  Candidate: '{row_name}' date='{row_date}' name_score={name_score:.2f}")
-
-        if name_score < 0.3:
-            continue
-
-        total_score = name_score + 1.0  # +1 for date match
-        if total_score > best_score:
-            best_score = total_score
-            best_match = {
-                "mp3_url": href,
-                "title": row_name,
-                "page_url": page_url,
-                "match_score": total_score,
-            }
-
-    if best_match:
-        log.info(f"  Found MP3: {best_match['mp3_url'][:80]}... (score={best_match['match_score']:.2f})")
-    else:
-        log.info(f"  No MP3 found on Granicus for '{committee_name}' {meeting_date}")
-
-    return best_match
+    log.info(f"  No MP3 found on Granicus for '{committee_name}' {meeting_date}")
+    return None
 
 
 def download_mp3(mp3_url: str, output_dir: Path) -> Path | None:
