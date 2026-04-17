@@ -465,3 +465,25 @@ def get_meetings_by_date(meeting_date: str) -> list[dict]:
             (meeting_date,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+def get_recent_meeting_ids_for_date_range(date_str: str,
+                                           selected_bodies: list[str] | None = None) -> list[int]:
+    """Return meeting IDs matching a date (or nearby dates) and optionally
+    filtered by body names. Used to find meetings that were just processed
+    so we can auto-trigger transcript backfill."""
+    with get_db() as conn:
+        if selected_bodies:
+            placeholders = ",".join("?" for _ in selected_bodies)
+            rows = conn.execute(
+                f"""SELECT id FROM meetings
+                    WHERE meeting_date >= ? AND body_name IN ({placeholders})
+                    ORDER BY meeting_date ASC""",
+                (date_str, *selected_bodies)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id FROM meetings WHERE meeting_date >= ? ORDER BY meeting_date ASC",
+                (date_str,)
+            ).fetchall()
+        return [r["id"] for r in rows]

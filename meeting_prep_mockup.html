@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AgendaIQ v6 — Meeting Prep View (Mockup)</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #f0f2f5;
+    color: #1a1a2e;
+  }
+
+  /* ── Top Bar ── */
+  .topbar {
+    background: linear-gradient(135deg, #1B3A5C 0%, #2a5a8c 100%);
+    color: white;
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+  .topbar-left { display: flex; align-items: center; gap: 16px; }
+  .topbar-logo {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+  .topbar-logo span { color: #5cb8ff; }
+  .topbar-breadcrumb {
+    font-size: 13px;
+    opacity: 0.7;
+    margin-left: 8px;
+  }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+  }
+  .btn-primary {
+    background: #5cb8ff;
+    color: #0a2540;
+  }
+  .btn-primary:hover { background: #7ec8ff; }
+  .btn-outline {
+    background: transparent;
+    color: white;
+    border: 1.5px solid rgba(255,255,255,0.4);
+  }
+  .btn-outline:hover { border-color: white; background: rgba(255,255,255,0.1); }
+  .btn-success {
+    background: #10b981;
+    color: white;
+  }
+  .btn-success:hover { background: #059669; }
+
+  /* ── Meeting Header ── */
+  .meeting-header {
+    background: white;
+    padding: 24px 32px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .meeting-info { display: flex; align-items: center; gap: 20px; }
+  .meeting-nav {
+    display: flex;
+    gap: 4px;
+  }
+  .meeting-nav button {
+    width: 32px;
+    height: 32px;
+    border: 1px solid #d1d5db;
+    background: white;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    color: #6b7280;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .meeting-nav button:hover { background: #f3f4f6; }
+  .meeting-date {
+    font-size: 26px;
+    font-weight: 700;
+    color: #1B3A5C;
+  }
+  .meeting-subtitle {
+    font-size: 13px;
+    color: #6b7280;
+    margin-top: 2px;
+  }
+  .meeting-stats {
+    display: flex;
+    gap: 24px;
+  }
+  .stat {
+    text-align: center;
+  }
+  .stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: #1B3A5C;
+  }
+  .stat-label {
+    font-size: 11px;
+    color: #9ca3af;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── Filter Bar ── */
+  .filter-bar {
+    background: white;
+    padding: 12px 32px;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .filter-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: #6b7280;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .filter-chip {
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1.5px solid #e2e8f0;
+    background: white;
+    color: #4b5563;
+    transition: all 0.2s;
+  }
+  .filter-chip:hover { border-color: #93c5fd; background: #eff6ff; }
+  .filter-chip.active { border-color: #3b82f6; background: #dbeafe; color: #1e40af; }
+  .filter-divider {
+    width: 1px;
+    height: 24px;
+    background: #e2e8f0;
+  }
+  .search-box {
+    margin-left: auto;
+    padding: 6px 12px 6px 32px;
+    border: 1.5px solid #e2e8f0;
+    border-radius: 6px;
+    font-size: 13px;
+    width: 220px;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='%239ca3af' viewBox='0 0 16 16'%3E%3Cpath d='M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85zm-5.44.856a5 5 0 1 1 0-10 5 5 0 0 1 0 10z'/%3E%3C/svg%3E") no-repeat 10px center;
+    outline: none;
+  }
+  .search-box:focus { border-color: #3b82f6; }
+
+  /* ── Table ── */
+  .table-container {
+    padding: 20px 32px 40px;
+  }
+  table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.04);
+  }
+  thead th {
+    background: #1B3A5C;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    padding: 12px 16px;
+    text-align: left;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  thead th:first-child { padding-left: 20px; }
+
+  tbody tr {
+    border-bottom: 1px solid #f1f5f9;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  tbody tr:hover { background: #f8fafc; }
+  tbody tr.expanded { background: #f0f7ff; }
+  tbody tr:last-child { border-bottom: none; }
+
+  td {
+    padding: 14px 16px;
+    font-size: 13px;
+    vertical-align: top;
+    border-bottom: 1px solid #f1f5f9;
+  }
+  td:first-child { padding-left: 20px; }
+
+  /* Risk badges */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .badge-high { background: #fee2e2; color: #991b1b; }
+  .badge-medium { background: #fef3c7; color: #92400e; }
+  .badge-low { background: #d1fae5; color: #065f46; }
+  .badge-info { background: #e0e7ff; color: #3730a3; }
+  .badge-watch { background: #fce7f3; color: #9d174d; }
+
+  /* Researcher chip */
+  .researcher {
+    display: inline-block;
+    padding: 3px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    background: #e0e7ff;
+    color: #3730a3;
+  }
+  .researcher.unassigned {
+    background: #f3f4f6;
+    color: #9ca3af;
+  }
+
+  /* Agenda position */
+  .agenda-pos {
+    font-weight: 700;
+    color: #1B3A5C;
+    font-size: 14px;
+  }
+
+  /* Item number */
+  .item-num {
+    font-family: 'Courier New', monospace;
+    font-weight: 600;
+    color: #4b5563;
+    font-size: 13px;
+  }
+
+  /* Body text */
+  .body-text {
+    font-size: 12px;
+    line-height: 1.5;
+    color: #374151;
+    max-width: 340px;
+  }
+
+  /* Status indicator */
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .status-complete { background: #10b981; }
+  .status-partial { background: #f59e0b; }
+  .status-none { background: #d1d5db; }
+
+  /* Notes preview */
+  .notes-preview {
+    font-size: 12px;
+    color: #6b7280;
+    line-height: 1.5;
+    max-width: 420px;
+  }
+  .notes-preview strong {
+    color: #1B3A5C;
+  }
+
+  /* Expand arrow */
+  .expand-arrow {
+    display: inline-block;
+    transition: transform 0.2s;
+    color: #9ca3af;
+    font-size: 12px;
+    margin-right: 4px;
+  }
+  .expanded .expand-arrow { transform: rotate(90deg); }
+
+  /* ── Expanded Detail Row ── */
+  .detail-row td {
+    padding: 0;
+    border-bottom: 2px solid #dbeafe;
+  }
+  .detail-content {
+    padding: 20px 24px 24px;
+    background: linear-gradient(180deg, #f0f7ff 0%, #fafbff 100%);
+  }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .detail-section {
+    background: white;
+    border-radius: 8px;
+    padding: 16px 20px;
+    border: 1px solid #e2e8f0;
+  }
+  .detail-section.full-width {
+    grid-column: 1 / -1;
+  }
+  .detail-section h4 {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.7px;
+    color: #1B3A5C;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #dbeafe;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .detail-text {
+    font-size: 13px;
+    line-height: 1.7;
+    color: #374151;
+  }
+  .detail-text strong { color: #1B3A5C; }
+  .detail-text .label {
+    font-weight: 700;
+    color: #1B3A5C;
+    display: block;
+    margin-top: 8px;
+    margin-bottom: 2px;
+  }
+  .detail-text .label:first-child { margin-top: 0; }
+  .detail-text .highlight {
+    background: #fef3c7;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-weight: 600;
+  }
+  .detail-text .fiscal {
+    background: #dcfce7;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-weight: 600;
+    color: #166534;
+  }
+  .detail-text ul {
+    margin: 4px 0 4px 18px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+  .source-tag {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .source-ai { background: #ede9fe; color: #5b21b6; }
+  .source-analyst { background: #fce7f3; color: #9d174d; }
+  .source-chat { background: #d1fae5; color: #065f46; }
+  .source-transcript { background: #fed7aa; color: #9a3412; }
+
+  /* Action buttons in detail */
+  .detail-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+  }
+  .btn-sm {
+    padding: 6px 12px;
+    font-size: 11px;
+    border-radius: 5px;
+    font-weight: 600;
+    border: 1px solid #d1d5db;
+    background: white;
+    color: #4b5563;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .btn-sm:hover { background: #f9fafb; border-color: #9ca3af; }
+
+  /* ── Final Analysis Banner ── */
+  .final-analysis-banner {
+    background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+    color: white;
+    padding: 16px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 3px solid #047857;
+  }
+  .fab-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .fab-icon {
+    width: 36px;
+    height: 36px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+  .fab-text h3 { font-size: 14px; font-weight: 700; }
+  .fab-text p { font-size: 12px; opacity: 0.85; margin-top: 1px; }
+  .btn-compile {
+    background: white;
+    color: #059669;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: all 0.2s;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  }
+  .btn-compile:hover { transform: translateY(-1px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }
+
+  /* ── Progress bar in compile ── */
+  .progress-mini {
+    height: 3px;
+    background: rgba(255,255,255,0.3);
+    border-radius: 2px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+  .progress-mini-fill {
+    height: 100%;
+    background: white;
+    border-radius: 2px;
+    width: 70%;
+  }
+
+  /* Tooltip */
+  .tooltip-wrap {
+    position: relative;
+  }
+  .tooltip-wrap:hover::after {
+    content: attr(data-tip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1f2937;
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: nowrap;
+    z-index: 100;
+    margin-bottom: 4px;
+  }
+
+  /* ── Watch item row highlight ── */
+  tr.watch-item {
+    border-left: 4px solid #ec4899;
+  }
+  tr.watch-item td:first-child {
+    padding-left: 16px;
+  }
+
+  /* Print styles */
+  @media print {
+    .topbar, .filter-bar, .detail-actions, .btn, .final-analysis-banner { display: none; }
+    table { box-shadow: none; }
+    .detail-content { background: white; }
+    body { background: white; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-logo">Agenda<span>IQ</span> <span style="font-size:12px;opacity:0.5;font-weight:400">v6</span></div>
+    <span class="topbar-breadcrumb">/ Meeting Prep</span>
+  </div>
+  <div class="topbar-right">
+    <button class="btn btn-outline">📋 Export Excel</button>
+    <button class="btn btn-outline">📄 Export PDF</button>
+    <button class="btn btn-primary">🖨️ Print View</button>
+  </div>
+</div>
+
+<!-- Meeting Header -->
+<div class="meeting-header">
+  <div class="meeting-info">
+    <div class="meeting-nav">
+      <button>‹</button>
+      <button>›</button>
+    </div>
+    <div>
+      <div class="meeting-date">BCC Meeting — April 21, 2026</div>
+      <div class="meeting-subtitle">Board of County Commissioners · Full Board · 9:30 AM · Commission Chambers</div>
+    </div>
+  </div>
+  <div class="meeting-stats">
+    <div class="stat">
+      <div class="stat-value">22</div>
+      <div class="stat-label">Items</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" style="color:#ef4444">4</div>
+      <div class="stat-label">Watch</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" style="color:#10b981">18</div>
+      <div class="stat-label">Analyzed</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value" style="color:#f59e0b">3</div>
+      <div class="stat-label">Pending</div>
+    </div>
+  </div>
+</div>
+
+<!-- Final Analysis Banner -->
+<div class="final-analysis-banner">
+  <div class="fab-left">
+    <div class="fab-icon">🧠</div>
+    <div class="fab-text">
+      <h3>Final Analysis Ready</h3>
+      <p>18 of 22 items have complete research. Compile all sources into polished briefing.</p>
+      <div class="progress-mini"><div class="progress-mini-fill" style="width:82%"></div></div>
+    </div>
+  </div>
+  <button class="btn-compile">✨ Compile Final Analysis</button>
+</div>
+
+<!-- Filter Bar -->
+<div class="filter-bar">
+  <span class="filter-label">Filter:</span>
+  <span class="filter-chip active">All Items</span>
+  <span class="filter-chip">👁️ Watch Only</span>
+  <span class="filter-chip">🔴 High Risk</span>
+  <span class="filter-chip">💰 Fiscal Impact</span>
+  <div class="filter-divider"></div>
+  <span class="filter-label">Researcher:</span>
+  <span class="filter-chip">Alex B.</span>
+  <span class="filter-chip">Maria S.</span>
+  <span class="filter-chip">James T.</span>
+  <span class="filter-chip">Unassigned</span>
+  <input type="text" class="search-box" placeholder="Search items...">
+</div>
+
+<!-- Table -->
+<div class="table-container">
+<table>
+  <thead>
+    <tr>
+      <th style="width:40px"></th>
+      <th style="width:80px">Risk</th>
+      <th style="width:90px">Researcher</th>
+      <th style="width:55px">Pos.</th>
+      <th style="width:70px">Item</th>
+      <th style="width:340px">Body</th>
+      <th style="width:80px">Analysis</th>
+      <th>Notes / Final Analysis</th>
+    </tr>
+  </thead>
+  <tbody>
+
+    <!-- Row 1: Ceremonial - Collapsed -->
+    <tr>
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-info">INFO</span></td>
+      <td><span class="researcher unassigned">—</span></td>
+      <td class="agenda-pos">1D1</td>
+      <td class="item-num">260407</td>
+      <td class="body-text">SPECIAL PRESENTATION IN RECOGNITION OF THE 2026 "EVERY DROP COUNTS" CHILDREN'S WATER CONSERVATION POSTER CONTEST WINNERS</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview"><strong>Ceremonial/Informational.</strong> No fiscal impact. No action required.</td>
+    </tr>
+
+    <!-- Row 2: Ceremonial - Collapsed -->
+    <tr>
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-info">INFO</span></td>
+      <td><span class="researcher unassigned">—</span></td>
+      <td class="agenda-pos">1D2</td>
+      <td class="item-num">260618</td>
+      <td class="body-text">PRESENTATION OF A PROCLAMATION RECOGNIZING THE 30-YEAR MILESTONE AND IMPACT OF CHABAD OF KENDALL & PINECREST</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview"><strong>Ceremonial/Informational.</strong> No fiscal impact. No action required.</td>
+    </tr>
+
+    <!-- Row 3: Commission Auditor Work Plan - Collapsed -->
+    <tr>
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-low">LOW</span></td>
+      <td><span class="researcher">Alex B.</span></td>
+      <td class="agenda-pos">1I1</td>
+      <td class="item-num">260656</td>
+      <td class="body-text">COMMISSION AUDITOR'S WORK PLAN: FY 2024-25 UPDATE AND FY 2025-26 (Commission Auditor)</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview"><strong>📌 OCA Internal.</strong> Our own work plan update. FY 2024-25 progress report and FY 2025-26 priorities. Standard annual submission.</td>
+    </tr>
+
+    <!-- Row 4: Aviation - EXPANDED (example of full final analysis) -->
+    <tr class="expanded watch-item">
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-medium">MED</span></td>
+      <td><span class="researcher">Alex B.</span></td>
+      <td class="agenda-pos">2B1</td>
+      <td class="item-num">260249</td>
+      <td class="body-text">MIAMI-DADE AVIATION DEPARTMENT: AVIATION CAPITAL PROGRAM REPORT — MARCH 2026 (Mayor)</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview">
+        <strong>👁️ WATCH ITEM</strong> · Capital program report with <strong>$4.2B</strong> in active projects...
+        <span style="color:#3b82f6;font-size:11px;margin-left:4px">▾ expanded below</span>
+      </td>
+    </tr>
+    <tr class="detail-row">
+      <td colspan="8">
+        <div class="detail-content">
+          <div class="detail-grid">
+            <!-- Executive Summary -->
+            <div class="detail-section full-width">
+              <h4>📋 Executive Summary</h4>
+              <div class="detail-text">
+                This item transmits the Miami-Dade Aviation Department's Aviation Capital Program Report for March 2026. The report provides updates on <span class="highlight">$4.2 billion</span> in ongoing capital improvement projects and infrastructure investments at Miami International Airport (MIA) and the County's general aviation airports. This is an <strong>informational item</strong> submitted pursuant to Ordinance No. 19-122 requiring periodic updates to the Board on MDAD capital improvement projects.
+              </div>
+            </div>
+
+            <!-- Fiscal Impact -->
+            <div class="detail-section">
+              <h4>💰 Fiscal Impact</h4>
+              <div class="detail-text">
+                <span class="label">Total Active Program Value:</span>
+                <span class="fiscal">$4.2 billion</span> across 47 active projects
+
+                <span class="label">Funding Sources:</span>
+                <ul>
+                  <li>Airport Revenue Bonds — $2.1B (50%)</li>
+                  <li>Federal AIP/BIL Grants — $890M (21%)</li>
+                  <li>PFC Revenue — $680M (16%)</li>
+                  <li>FDOT Grants — $320M (8%)</li>
+                  <li>Other Sources — $210M (5%)</li>
+                </ul>
+
+                <span class="label">Budget Status:</span>
+                No new appropriation requested. Informational only — does not approve new funding.
+                <span class="source-tag source-ai">AI DEBRIEF</span>
+              </div>
+            </div>
+
+            <!-- Key Findings -->
+            <div class="detail-section">
+              <h4>🔍 Key Findings</h4>
+              <div class="detail-text">
+                <span class="label">Active Concerns:</span>
+                <ul>
+                  <li><strong>South Terminal Phase 2</strong> — 3 months behind schedule, contractor dispute pending resolution <span class="source-tag source-chat">CHAT</span></li>
+                  <li><strong>Concourse E expansion</strong> — $45M change order under review <span class="source-tag source-analyst">ANALYST</span></li>
+                  <li>FAA grant reimbursement backlog of $67M across 5 projects <span class="source-tag source-ai">AI DEBRIEF</span></li>
+                </ul>
+
+                <span class="label">Positive Developments:</span>
+                <ul>
+                  <li>Central Terminal renovation Phase 1 completed on time and under budget</li>
+                  <li>New international arrivals facility 92% complete</li>
+                  <li>MIA passenger traffic up 8.3% YOY supporting revenue projections</li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Legislative History -->
+            <div class="detail-section">
+              <h4>📜 Legislative History <span class="source-tag source-ai">AI</span></h4>
+              <div class="detail-text">
+                <ul>
+                  <li><strong>Ordinance 19-122</strong> — Requires quarterly capital program reports to the Board</li>
+                  <li><strong>R-456-23</strong> — Authorized South Terminal Phase 2 ($1.2B)</li>
+                  <li><strong>R-891-24</strong> — Approved Concourse E expansion program ($340M)</li>
+                  <li>Prior reports: Jan 2026 (no issues flagged), Nov 2025 (South Terminal delay first reported)</li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Analyst Notes & Chat Insights -->
+            <div class="detail-section">
+              <h4>📝 Analyst Research <span class="source-tag source-analyst">ANALYST</span> <span class="source-tag source-chat">CHAT</span></h4>
+              <div class="detail-text">
+                <span class="label">Analyst Notes (Alex B.):</span>
+                Watch the Concourse E change order — $45M is significant and wasn't in the original authorization. Need to verify if this requires a separate Board approval or falls within the CM's delegated authority.
+
+                <span class="label">AI Chat Findings:</span>
+                <ul>
+                  <li>Confirmed via chat: South Terminal contractor (Moss Construction) filed delay claim citing supply chain issues with steel deliveries</li>
+                  <li>FAA reimbursement delays are nationwide — not specific to Miami-Dade</li>
+                  <li>Passenger traffic data cross-referenced with FDOT aviation statistics — numbers align</li>
+                </ul>
+              </div>
+            </div>
+
+            <!-- Watch Points -->
+            <div class="detail-section">
+              <h4>👁️ Watch Points</h4>
+              <div class="detail-text" style="color:#991b1b">
+                <ul>
+                  <li><strong>Concourse E $45M change order</strong> — verify Board approval threshold</li>
+                  <li><strong>South Terminal schedule slippage</strong> — now 3 months; escalating?</li>
+                  <li><strong>$67M FAA reimbursement backlog</strong> — cash flow implications</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="detail-actions">
+            <button class="btn-sm">💬 Open AI Chat</button>
+            <button class="btn-sm">📄 View PDF</button>
+            <button class="btn-sm">📝 Edit Notes</button>
+            <button class="btn-sm">🔄 Re-analyze</button>
+            <button class="btn-sm" style="margin-left:auto;border-color:#10b981;color:#059669;font-weight:700">✅ Mark Review Complete</button>
+          </div>
+        </div>
+      </td>
+    </tr>
+
+    <!-- Row 5: FEMA - Watch Item, Collapsed -->
+    <tr class="watch-item">
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-high">HIGH</span></td>
+      <td><span class="researcher">Maria S.</span></td>
+      <td class="agenda-pos">2B2</td>
+      <td class="item-num">260503</td>
+      <td class="body-text">STATUS REPORT ON FEMA REIMBURSEMENTS FOR HURRICANE IRMA — DIRECTIVE NO. 222706 (Mayor)</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview">
+        <strong>👁️ WATCH</strong> · <strong>$280M</strong> disaster expenses; <span class="fiscal">$243.5M collected</span> (91% of $268.4M anticipated). 8 projects closed out, 3 in FEMA review. Directive #222706 <strong style="color:#ef4444">not found in Directives DB</strong>...
+      </td>
+    </tr>
+
+    <!-- Row 6: Zoning -->
+    <tr>
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-medium">MED</span></td>
+      <td><span class="researcher">James T.</span></td>
+      <td class="agenda-pos">3A1</td>
+      <td class="item-num">260712</td>
+      <td class="body-text">ORDINANCE RELATING TO ZONING; AMENDING SECTION 33-284.99.34 OF THE CODE; REVISING THE DOWNTOWN KENDALL URBAN CENTER DISTRICT</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview"><strong>Zoning Amendment.</strong> Increases max building height from 20 to 28 stories in DK Urban Center. Fiscal impact: <strong>+$2.4M projected tax revenue</strong> from increased development density...</td>
+    </tr>
+
+    <!-- Row 7: Transit -->
+    <tr class="watch-item">
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-high">HIGH</span></td>
+      <td><span class="researcher">Alex B.</span></td>
+      <td class="agenda-pos">4C1</td>
+      <td class="item-num">260834</td>
+      <td class="body-text">RESOLUTION APPROVING AWARD OF CONTRACT FOR METRORAIL VEHICLE REHABILITATION PROGRAM — $187.5M (Transit)</td>
+      <td><span class="status-dot status-partial"></span>Partial</td>
+      <td class="notes-preview"><strong>👁️ WATCH · 💰 HIGH FISCAL</strong> · <span class="fiscal">$187.5M contract</span> for Metrorail vehicle rehab. Sole-source justification needs review. 12 of 136 vehicles currently out of service...</td>
+    </tr>
+
+    <!-- Row 8: Parks -->
+    <tr>
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-low">LOW</span></td>
+      <td><span class="researcher">Maria S.</span></td>
+      <td class="agenda-pos">5A1</td>
+      <td class="item-num">260901</td>
+      <td class="body-text">RESOLUTION AUTHORIZING LEASE AGREEMENT WITH MIAMI-DADE YOUTH FAIR FOR USE OF TAMIAMI PARK FACILITIES</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview"><strong>Lease Renewal.</strong> Standard 5-year renewal, $420K annual revenue to County. Terms consistent with prior agreement. No significant changes identified.</td>
+    </tr>
+
+    <!-- Row 9: Water & Sewer -->
+    <tr>
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-medium">MED</span></td>
+      <td><span class="researcher unassigned">—</span></td>
+      <td class="agenda-pos">6B1</td>
+      <td class="item-num">260955</td>
+      <td class="body-text">RESOLUTION APPROVING SUPPLEMENTAL AGREEMENT WITH CDM SMITH FOR WASTEWATER SYSTEM MASTER PLAN UPDATE — $3.2M</td>
+      <td><span class="status-dot status-none"></span>Pending</td>
+      <td class="notes-preview" style="color:#9ca3af"><em>⏳ Awaiting analysis — AI processing queued</em></td>
+    </tr>
+
+    <!-- Row 10: Personnel -->
+    <tr>
+      <td><span class="expand-arrow">▶</span></td>
+      <td><span class="badge badge-info">INFO</span></td>
+      <td><span class="researcher unassigned">—</span></td>
+      <td class="agenda-pos">7A1</td>
+      <td class="item-num">261002</td>
+      <td class="body-text">RESOLUTION APPROVING PERSONNEL CHANGES IN VARIOUS COUNTY DEPARTMENTS AS LISTED IN EXHIBIT A</td>
+      <td><span class="status-dot status-complete"></span>Done</td>
+      <td class="notes-preview"><strong>Routine Personnel.</strong> 14 new hires, 8 promotions, 3 reclassifications across 6 departments. Total payroll impact: +$1.1M annually. All within budgeted positions.</td>
+    </tr>
+
+  </tbody>
+</table>
+</div>
+
+<!-- Bottom Legend -->
+<div style="padding: 0 32px 40px; display:flex; gap:32px; flex-wrap:wrap;">
+  <div style="font-size:11px; color:#6b7280;">
+    <strong style="color:#374151">Risk Levels:</strong>&nbsp;
+    <span class="badge badge-high">HIGH</span>&nbsp;
+    <span class="badge badge-medium">MED</span>&nbsp;
+    <span class="badge badge-low">LOW</span>&nbsp;
+    <span class="badge badge-info">INFO</span>
+  </div>
+  <div style="font-size:11px; color:#6b7280;">
+    <strong style="color:#374151">Sources:</strong>&nbsp;
+    <span class="source-tag source-ai">AI DEBRIEF</span>&nbsp;
+    <span class="source-tag source-analyst">ANALYST</span>&nbsp;
+    <span class="source-tag source-chat">CHAT</span>&nbsp;
+    <span class="source-tag source-transcript">TRANSCRIPT</span>
+  </div>
+  <div style="font-size:11px; color:#6b7280;">
+    <strong style="color:#374151">Analysis Status:</strong>&nbsp;
+    <span class="status-dot status-complete" style="vertical-align:middle"></span> Complete&nbsp;&nbsp;
+    <span class="status-dot status-partial" style="vertical-align:middle"></span> Partial&nbsp;&nbsp;
+    <span class="status-dot status-none" style="vertical-align:middle"></span> Pending
+  </div>
+</div>
+
+</body>
+</html>

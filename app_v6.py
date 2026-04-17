@@ -709,6 +709,39 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 .app-notes-section{margin-top:.5rem}
 .app-notes-section textarea{width:100%;min-height:60px;border:1px solid var(--gray-200);border-radius:6px;padding:.4rem .55rem;font-size:.78rem;font-family:inherit;resize:vertical;line-height:1.5}
 .app-notes-section label{font-size:.68rem;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:.2rem;margin-top:.4rem}
+
+/* ── Meeting Prep Styles ── */
+#pg-meeting-prep .mp-filter.on{background:var(--blue-lt);border-color:var(--blue);color:var(--blue)}
+.mp-risk{display:inline-block;padding:2px 7px;border-radius:4px;font-size:.65rem;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#fff}
+.mp-risk-HIGH{background:#dc2626}.mp-risk-MEDIUM{background:#d97706}.mp-risk-LOW{background:#16a34a}.mp-risk-INFO{background:#6366f1}
+.mp-researcher{display:inline-block;padding:2px 8px;border-radius:10px;font-size:.7rem;font-weight:600;background:#e0e7ff;color:#3730a3}
+.mp-researcher.mp-none{background:var(--gray-100);color:var(--gray-400)}
+.mp-notes-preview{font-size:.78rem;color:var(--gray-600);line-height:1.55;max-width:400px}
+.mp-notes-preview strong{color:var(--gray-800)}
+.mp-watch-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.65rem;font-weight:700;background:#fce7f3;color:#9d174d;margin-right:4px}
+.mp-source-tag{display:inline-block;padding:1px 5px;border-radius:3px;font-size:.6rem;font-weight:700;letter-spacing:.2px;margin-left:3px}
+.mp-src-ai{background:#ede9fe;color:#5b21b6}.mp-src-analyst{background:#fce7f3;color:#9d174d}
+.mp-src-chat{background:#d1fae5;color:#065f46}.mp-src-leg{background:#fed7aa;color:#9a3412}
+#mp-table th{background:var(--blue);color:#fff;font-size:.68rem;text-transform:uppercase;letter-spacing:.5px;padding:.55rem .6rem;position:sticky;top:0;z-index:5;white-space:nowrap;user-select:none}
+#mp-table td{padding:.6rem;vertical-align:top;font-size:.8rem;border-bottom:1px solid var(--gray-100)}
+#mp-table tr.mp-watch{border-left:4px solid #ec4899}
+#mp-table tr.mp-watch td:first-child{padding-left:calc(.6rem - 4px)}
+#mp-table tbody tr{cursor:pointer;transition:background .15s}
+#mp-table tbody tr:hover{background:var(--gray-50)}
+#mp-table tbody tr.mp-expanded{background:#f0f7ff}
+/* Detail expansion */
+.mp-detail{background:linear-gradient(180deg,#f0f7ff 0%,#fafbff 100%);padding:1rem 1.2rem}
+.mp-detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem}
+.mp-detail-section{background:#fff;border-radius:8px;padding:.75rem 1rem;border:1px solid var(--gray-200)}
+.mp-detail-section.mp-full{grid-column:1/-1}
+.mp-detail-section h4{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--blue);margin-bottom:.5rem;padding-bottom:.4rem;border-bottom:2px solid var(--blue-lt)}
+.mp-detail-text{font-size:.78rem;line-height:1.65;color:var(--gray-600);white-space:pre-wrap}
+.mp-detail-text strong{color:var(--gray-800)}
+.mp-detail-actions{display:flex;gap:.4rem;margin-top:.75rem;padding-top:.6rem;border-top:1px solid var(--gray-200)}
+.mp-stat{text-align:center}
+.mp-stat-val{font-size:1.3rem;font-weight:700;color:var(--blue)}
+.mp-stat-label{font-size:.65rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.4px}
+.mp-sort-icon{font-size:.7rem;opacity:.5}
 </style>
 </head>
 <body>
@@ -1385,6 +1418,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           title="Re-run AI analysis on all items in this meeting">
           🤖 Re-analyze All Items
         </button>
+        <button class="btn btn-p btn-sm" onclick="openMeetingPrep(currentMeetingId)"
+          style="background:#059669;border-color:#059669;font-weight:700"
+          title="Open the Meeting Prep view — comprehensive table for Director briefing">
+          📊 Meeting Prep
+        </button>
       </div>
     </div>
     <div id="md-operation-progress" style="display:none;margin:0 1rem .5rem;padding:.5rem .75rem;border-radius:.5rem;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem"></div>
@@ -1493,6 +1531,68 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 <!-- ═══════════════════════════ HELP PAGE ═══════════════════════════ -->
 <div class="pg" id="pg-help">
   <div id="help-page-content"></div>
+</div>
+
+<!-- ═══════════════════════════ MEETING PREP ═══════════════════════════ -->
+<div class="pg" id="pg-meeting-prep">
+  <div id="mp-container">
+    <!-- Header -->
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.85rem">
+      <button class="btn btn-o btn-sm" onclick="showPg('meeting-detail')">← Back to Meeting</button>
+      <div id="mp-title" style="font-size:1.15rem;font-weight:700;color:var(--gray-800);flex:1"></div>
+    </div>
+
+    <!-- Stats bar -->
+    <div class="card" style="margin-bottom:.85rem;padding:.85rem 1.1rem">
+      <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
+        <div id="mp-stats" style="display:flex;gap:1.5rem;flex:1"></div>
+        <div style="display:flex;gap:.4rem;align-items:center">
+          <button class="btn btn-o btn-sm" onclick="exportMeetingPrepExcel()">📋 Export Excel</button>
+          <button class="btn btn-p btn-sm" id="mp-compile-btn" onclick="compileFinalAnalysis()"
+            style="background:#059669;border-color:#059669">✨ Compile Final Analysis</button>
+        </div>
+      </div>
+      <div id="mp-compile-status" style="display:none;margin-top:.6rem;font-size:.78rem;color:var(--gray-600)"></div>
+    </div>
+
+    <!-- Filter / Search bar -->
+    <div class="card" style="margin-bottom:.85rem;padding:.65rem 1rem">
+      <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
+        <span style="font-size:.72rem;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Filter:</span>
+        <button class="btn btn-o btn-xs mp-filter on" data-filter="all" onclick="mpFilter(this,'all')">All</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="watch" onclick="mpFilter(this,'watch')">👁️ Watch</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="HIGH" onclick="mpFilter(this,'HIGH')">🔴 High Risk</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="fiscal" onclick="mpFilter(this,'fiscal')">💰 Fiscal</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="pending" onclick="mpFilter(this,'pending')">⏳ Pending</button>
+        <div style="margin-left:auto">
+          <input type="text" id="mp-search" placeholder="Search items… (title, item #, file #)"
+            oninput="mpSearchItems()"
+            style="padding:.35rem .7rem;border:1px solid var(--gray-200);border-radius:6px;font-size:.78rem;width:240px;outline:none">
+        </div>
+      </div>
+    </div>
+
+    <!-- Items table -->
+    <div class="card" style="overflow:visible">
+      <div class="tbl-wrap" style="overflow-x:auto">
+        <table id="mp-table">
+          <thead><tr>
+            <th style="width:30px"></th>
+            <th style="width:60px;cursor:pointer" onclick="mpSort('risk')">Risk <span class="mp-sort-icon">⇅</span></th>
+            <th style="width:90px;cursor:pointer" onclick="mpSort('researcher')">Researcher <span class="mp-sort-icon">⇅</span></th>
+            <th style="width:55px;cursor:pointer" onclick="mpSort('position')">Pos. <span class="mp-sort-icon">⇅</span></th>
+            <th style="width:65px">Item #</th>
+            <th style="cursor:pointer" onclick="mpSort('title')">Body</th>
+            <th style="width:70px">Status</th>
+            <th style="width:300px">Notes / Final Analysis</th>
+          </tr></thead>
+          <tbody id="mp-tbody">
+            <tr><td colspan="8" style="padding:1.5rem;color:var(--gray-400);text-align:center">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ═══════════════════════════ MATTER DETAIL DRAWER ═══════════════════════════ -->
@@ -1658,6 +1758,7 @@ function showPg(name) {
   if (name==='meetings')  loadSavedMeetings();
   if (name==='myitems')   { initMyItemsFilters(); loadMyItems(); }
   if (name==='help')      loadHelpPage();
+  if (name==='meeting-prep' && currentMeetingId) loadMeetingPrep(currentMeetingId);
 }
 
 // ════════════════════════════════════════════════════════════
@@ -4721,10 +4822,15 @@ function renderMeetingDetail(pkg) {
     </div>`;
   }).join('') : '<p style="color:var(--gray-400);font-size:.82rem">No exports yet. Click Regenerate Draft to create them.</p>';
 
-  // Cache items for filtering
+  // Cache items for filtering — sort by agenda position (natural order)
+  items.sort((a, b) => {
+    const pa = naturalSortKey(a.bcc_item_number || a.committee_item_number || a.raw_agenda_item_number || 'ZZZ').join('|');
+    const pb = naturalSortKey(b.bcc_item_number || b.committee_item_number || b.raw_agenda_item_number || 'ZZZ').join('|');
+    return pa < pb ? -1 : pa > pb ? 1 : 0;
+  });
   _mdItems = items;
   _mdMeeting = m;
-  console.log(`[meeting ${m.id}] API returned ${items.length} items; first keys:`,
+  console.log(`[meeting ${m.id}] API returned ${items.length} items (sorted); first keys:`,
     items[0] ? Object.keys(items[0]).slice(0,12) : '(none)');
 
   // If the API truly returned zero items, tell the user plainly — otherwise
@@ -4794,7 +4900,12 @@ function _renderItemsGrid() {
 
   const filtered = _mdItems.filter(it => {
     if (q && !((it.file_number||'').toLowerCase().includes(q) ||
-               (it.short_title||it.appearance_title||'').toLowerCase().includes(q))) return false;
+               (it.short_title||it.appearance_title||'').toLowerCase().includes(q) ||
+               (it.bcc_item_number||'').toLowerCase().includes(q) ||
+               (it.committee_item_number||'').toLowerCase().includes(q) ||
+               (it.raw_agenda_item_number||'').toLowerCase().includes(q) ||
+               (it.sponsor||'').toLowerCase().includes(q) ||
+               (it.assigned_to||'').toLowerCase().includes(q))) return false;
     if (ls && it.current_status !== ls) return false;
     if (ft && it.file_type !== ft) return false;
     if (sp && it.sponsor !== sp) return false;
@@ -5106,6 +5217,424 @@ function emptyState(icon, title, hint, ctaHtml){
     <div class="hint">${hint||''}</div>
     ${ctaHtml?`<div class="cta">${ctaHtml}</div>`:''}
   </div>`;
+}
+
+// ════════════════════════════════════════════════════════════
+// Meeting Prep View
+// ════════════════════════════════════════════════════════════
+
+let mpData = null;         // Full meeting prep data
+let mpItems = [];          // Current filtered/sorted items
+let mpSortCol = 'position';
+let mpSortAsc = true;
+let mpExpandedId = null;   // Currently expanded item ID
+let mpCurrentFilter = 'all';
+
+function openMeetingPrep(meetingId) {
+  if (!meetingId) return;
+  currentMeetingId = meetingId;
+  showPg('meeting-prep');
+  document.getElementById('mp-title').textContent = 'Loading…';
+  document.getElementById('mp-tbody').innerHTML = '<tr><td colspan="8" style="padding:1.5rem;color:var(--gray-400);text-align:center">Loading…</td></tr>';
+  loadMeetingPrep(meetingId);
+}
+
+async function loadMeetingPrep(meetingId) {
+  try {
+    const r = await fetch(`/api/meeting-prep/${meetingId}`);
+    if (!r.ok) throw new Error('Failed to load');
+    mpData = await r.json();
+    mpItems = [...mpData.items];
+    mpSortCol = 'position';
+    mpSortAsc = true;
+    mpCurrentFilter = 'all';
+    mpExpandedId = null;
+
+    // Reset filter buttons
+    document.querySelectorAll('.mp-filter').forEach(b => b.classList.remove('on'));
+    document.querySelector('.mp-filter[data-filter="all"]').classList.add('on');
+    document.getElementById('mp-search').value = '';
+
+    renderMeetingPrepHeader();
+    renderMeetingPrepTable();
+  } catch(e) {
+    document.getElementById('mp-title').textContent = 'Error loading meeting prep';
+    console.error(e);
+  }
+}
+
+function renderMeetingPrepHeader() {
+  const m = mpData.meeting;
+  const s = mpData.stats;
+  document.getElementById('mp-title').textContent =
+    `${m.body_name || 'Meeting'} — ${fmtDate(m.meeting_date)} — Meeting Prep`;
+
+  document.getElementById('mp-stats').innerHTML = `
+    <div class="mp-stat"><div class="mp-stat-val">${s.total}</div><div class="mp-stat-label">Items</div></div>
+    <div class="mp-stat"><div class="mp-stat-val" style="color:#ef4444">${s.watch_count}</div><div class="mp-stat-label">Watch</div></div>
+    <div class="mp-stat"><div class="mp-stat-val" style="color:#10b981">${s.analyzed}</div><div class="mp-stat-label">Analyzed</div></div>
+    <div class="mp-stat"><div class="mp-stat-val" style="color:#f59e0b">${s.pending}</div><div class="mp-stat-label">Pending</div></div>
+    <div class="mp-stat"><div class="mp-stat-val" style="color:#6366f1">${s.with_notes}</div><div class="mp-stat-label">With Notes</div></div>
+  `;
+}
+
+function getAgendaPos(item) {
+  return item.bcc_item_number || item.committee_item_number || item.raw_agenda_item_number || '';
+}
+
+function naturalSortKey(str) {
+  const parts = (str || 'ZZZ').match(/(\d+|[A-Za-z]+)/g) || ['ZZZ'];
+  return parts.map(p => /^\d+$/.test(p) ? p.padStart(10,'0') : p.toUpperCase());
+}
+
+function mpSort(col) {
+  if (mpSortCol === col) { mpSortAsc = !mpSortAsc; }
+  else { mpSortCol = col; mpSortAsc = true; }
+  renderMeetingPrepTable();
+}
+
+function mpFilter(btn, filter) {
+  mpCurrentFilter = filter;
+  document.querySelectorAll('.mp-filter').forEach(b => b.classList.remove('on'));
+  btn.classList.add('on');
+  mpExpandedId = null;
+  renderMeetingPrepTable();
+}
+
+function mpSearchItems() {
+  mpExpandedId = null;
+  renderMeetingPrepTable();
+}
+
+function getFilteredItems() {
+  let items = [...mpData.items];
+  const search = (document.getElementById('mp-search').value || '').trim().toLowerCase();
+
+  // Apply filter
+  if (mpCurrentFilter === 'watch') {
+    items = items.filter(i => (i.sources && i.sources.watch_points));
+  } else if (mpCurrentFilter === 'HIGH') {
+    items = items.filter(i => i.risk_level === 'HIGH');
+  } else if (mpCurrentFilter === 'fiscal') {
+    const fiscalRe = /\$|million|billion|fiscal|budget|fund|appropriat/i;
+    items = items.filter(i => {
+      const text = (i.ai_summary_for_appearance||'') + (i.appearance_title||'') + (i.watch_points_for_appearance||'');
+      return fiscalRe.test(text);
+    });
+  } else if (mpCurrentFilter === 'pending') {
+    items = items.filter(i => !i.sources || !i.sources.ai_debrief);
+  }
+
+  // Apply search — search across multiple fields including BCC numbers
+  if (search) {
+    items = items.filter(i => {
+      const searchable = [
+        i.file_number, i.appearance_title, i.short_title, i.full_title,
+        i.bcc_item_number, i.committee_item_number, i.raw_agenda_item_number,
+        i.assigned_to, i.sponsor, i.department,
+        i.ai_summary_for_appearance, i.watch_points_for_appearance,
+        i.analyst_working_notes
+      ].filter(Boolean).join(' ').toLowerCase();
+      return searchable.includes(search);
+    });
+  }
+
+  // Sort
+  items.sort((a, b) => {
+    let va, vb;
+    switch(mpSortCol) {
+      case 'risk':
+        const riskOrder = {HIGH:0,MEDIUM:1,LOW:2,INFO:3};
+        va = riskOrder[a.risk_level] ?? 4;
+        vb = riskOrder[b.risk_level] ?? 4;
+        break;
+      case 'researcher':
+        va = (a.assigned_to||'zzz').toLowerCase();
+        vb = (b.assigned_to||'zzz').toLowerCase();
+        break;
+      case 'position':
+        va = naturalSortKey(getAgendaPos(a)).join('|');
+        vb = naturalSortKey(getAgendaPos(b)).join('|');
+        break;
+      case 'title':
+        va = (a.appearance_title||'').toLowerCase();
+        vb = (b.appearance_title||'').toLowerCase();
+        break;
+      default:
+        va = naturalSortKey(getAgendaPos(a)).join('|');
+        vb = naturalSortKey(getAgendaPos(b)).join('|');
+    }
+    if (va < vb) return mpSortAsc ? -1 : 1;
+    if (va > vb) return mpSortAsc ? 1 : -1;
+    return 0;
+  });
+
+  return items;
+}
+
+function renderMeetingPrepTable() {
+  const items = getFilteredItems();
+  mpItems = items;
+  const tbody = document.getElementById('mp-tbody');
+
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="padding:1.5rem;color:var(--gray-400);text-align:center">No items match your filter</td></tr>';
+    return;
+  }
+
+  let html = '';
+  for (const item of items) {
+    const pos = getAgendaPos(item);
+    const risk = item.risk_level || 'LOW';
+    const researcher = item.assigned_to || '';
+    const hasWatch = item.sources && item.sources.watch_points;
+    const isExpanded = mpExpandedId === item.id;
+    const rowClass = `${hasWatch ? 'mp-watch' : ''} ${isExpanded ? 'mp-expanded' : ''}`;
+
+    // Build notes preview
+    let notesPreview = '';
+    const brief = (item.finalized_brief || '').trim();
+    const summary = (item.ai_summary_for_appearance || '').trim();
+    const notes = (item.analyst_working_notes || '').trim();
+    const wp = (item.watch_points_for_appearance || '').trim();
+
+    if (hasWatch) notesPreview += '<span class="mp-watch-badge">👁️ WATCH</span> ';
+
+    if (brief) {
+      // Show first ~200 chars of final analysis
+      notesPreview += '<strong>Final Analysis:</strong> ' + esc(brief.slice(0, 250));
+      if (brief.length > 250) notesPreview += '…';
+    } else if (summary) {
+      // Extract first meaningful line from AI summary
+      const firstLine = summary.split('\n').find(l => l.trim() && !l.startsWith('ITEM') && !l.startsWith('---')) || summary;
+      notesPreview += esc(firstLine.slice(0, 250));
+      if (firstLine.length > 250) notesPreview += '…';
+    } else {
+      notesPreview += '<em style="color:var(--gray-400)">⏳ Awaiting analysis</em>';
+    }
+
+    // Source tags
+    let srcTags = '';
+    if (item.sources) {
+      if (item.sources.ai_debrief) srcTags += '<span class="mp-source-tag mp-src-ai">AI</span>';
+      if (item.sources.analyst_notes) srcTags += '<span class="mp-source-tag mp-src-analyst">NOTES</span>';
+      if (item.sources.chat) srcTags += '<span class="mp-source-tag mp-src-chat">CHAT</span>';
+      if (item.sources.leg_history) srcTags += '<span class="mp-source-tag mp-src-leg">LEG</span>';
+    }
+
+    const status = item.workflow_status || 'New';
+    const statusBadge = `<span class="badge b-${status.replace(/\s/g,'')}" style="font-size:.65rem;padding:.15rem .4rem">${esc(status)}</span>`;
+
+    html += `<tr class="${rowClass}" onclick="mpToggleExpand(${item.id})">
+      <td style="text-align:center"><span style="font-size:.7rem;color:var(--gray-400);transition:transform .2s;display:inline-block;${isExpanded?'transform:rotate(90deg)':''}">▶</span></td>
+      <td><span class="mp-risk mp-risk-${risk}">${risk}</span></td>
+      <td><span class="mp-researcher ${researcher?'':'mp-none'}">${esc(researcher||'—')}</span></td>
+      <td style="font-weight:700;color:var(--blue);font-size:.85rem">${esc(pos)}</td>
+      <td style="font-family:monospace;font-size:.75rem;color:var(--gray-600)">${esc(item.file_number||'')}</td>
+      <td style="font-size:.78rem;line-height:1.45;max-width:300px">${esc(item.appearance_title||item.short_title||'')}</td>
+      <td>${statusBadge}</td>
+      <td class="mp-notes-preview">${notesPreview}${srcTags?'<div style="margin-top:3px">'+srcTags+'</div>':''}</td>
+    </tr>`;
+
+    // Expanded detail row
+    if (isExpanded) {
+      html += `<tr class="mp-detail-row"><td colspan="8" style="padding:0;border-bottom:2px solid var(--blue-lt)">
+        ${renderMpDetail(item)}
+      </td></tr>`;
+    }
+  }
+
+  tbody.innerHTML = html;
+}
+
+function mpToggleExpand(itemId) {
+  mpExpandedId = mpExpandedId === itemId ? null : itemId;
+  renderMeetingPrepTable();
+}
+
+function renderMpDetail(item) {
+  const summary = (item.ai_summary_for_appearance || '').trim();
+  const brief = (item.finalized_brief || '').trim();
+  const wp = (item.watch_points_for_appearance || '').trim();
+  const analystNotes = (item.analyst_working_notes || '').trim();
+  const reviewerNotes = (item.reviewer_notes || '').trim();
+  const legHist = (item.leg_history_summary || '').trim();
+
+  let sections = '';
+
+  // Executive Summary / Final Analysis (full width)
+  if (brief) {
+    sections += `<div class="mp-detail-section mp-full">
+      <h4>📋 Final Analysis <span class="mp-source-tag mp-src-ai">COMPILED</span></h4>
+      <div class="mp-detail-text">${esc(brief)}</div>
+    </div>`;
+  }
+
+  // AI Debrief
+  if (summary) {
+    sections += `<div class="mp-detail-section ${brief ? '' : 'mp-full'}">
+      <h4>🤖 AI Debrief <span class="mp-source-tag mp-src-ai">AI</span></h4>
+      <div class="mp-detail-text">${esc(summary)}</div>
+    </div>`;
+  }
+
+  // Watch Points
+  if (wp) {
+    sections += `<div class="mp-detail-section">
+      <h4>👁️ Watch Points</h4>
+      <div class="mp-detail-text" style="color:#991b1b">${esc(wp)}</div>
+    </div>`;
+  }
+
+  // Analyst Notes
+  if (analystNotes) {
+    sections += `<div class="mp-detail-section">
+      <h4>📝 Analyst Notes <span class="mp-source-tag mp-src-analyst">ANALYST</span></h4>
+      <div class="mp-detail-text">${esc(analystNotes)}</div>
+    </div>`;
+  }
+
+  // Reviewer Notes
+  if (reviewerNotes) {
+    sections += `<div class="mp-detail-section">
+      <h4>✅ Reviewer Notes</h4>
+      <div class="mp-detail-text">${esc(reviewerNotes)}</div>
+    </div>`;
+  }
+
+  // Legislative History
+  if (legHist) {
+    sections += `<div class="mp-detail-section">
+      <h4>📜 Legislative History <span class="mp-source-tag mp-src-leg">LEG</span></h4>
+      <div class="mp-detail-text">${esc(legHist)}</div>
+    </div>`;
+  }
+
+  // Chat indicator
+  if (item.chat_message_count > 0) {
+    sections += `<div class="mp-detail-section">
+      <h4>💬 AI Chat <span class="mp-source-tag mp-src-chat">CHAT</span></h4>
+      <div class="mp-detail-text">${item.chat_message_count} messages in chat history. Open the item drawer to view full conversation.</div>
+    </div>`;
+  }
+
+  if (!sections) {
+    sections = '<div class="mp-detail-section mp-full"><h4>No analysis available yet</h4><div class="mp-detail-text">This item has not been analyzed. Run AI analysis from the meeting detail view or click Re-analyze below.</div></div>';
+  }
+
+  return `<div class="mp-detail">
+    <div class="mp-detail-grid">${sections}</div>
+    <div class="mp-detail-actions">
+      <button class="btn btn-o btn-xs" onclick="event.stopPropagation();openDrawerFromPrep(${item.id})">📄 Open Full Item</button>
+      <button class="btn btn-o btn-xs" onclick="event.stopPropagation();compileSingleItem(${item.id})">✨ Compile Final Analysis</button>
+      <button class="btn btn-o btn-xs" onclick="event.stopPropagation();reanalyzeSingleFromPrep(${item.id})">🔄 Re-analyze</button>
+    </div>
+  </div>`;
+}
+
+function openDrawerFromPrep(appId) {
+  // Find the item in our data to get the file number
+  const item = mpData ? mpData.items.find(i => i.id === appId) : null;
+  const fileNum = item ? (item.file_number || '') : '';
+  openDrawer(fileNum, appId);
+}
+
+async function reanalyzeSingleFromPrep(appId) {
+  if (!confirm('Re-run AI analysis on this item?')) return;
+  try {
+    const r = await fetch(`/api/appearance/${appId}/reanalyze`, {method:'POST'});
+    if (r.ok) {
+      alert('Re-analysis started. Refresh in a few seconds to see updated results.');
+      setTimeout(() => loadMeetingPrep(currentMeetingId), 5000);
+    }
+  } catch(e) {
+    alert('Failed to start re-analysis: ' + e.message);
+  }
+}
+
+async function compileSingleItem(appId) {
+  if (!confirm('Compile Final Analysis for this item? This will synthesize all available sources into a comprehensive briefing.')) return;
+  const statusEl = document.getElementById('mp-compile-status');
+  statusEl.style.display = '';
+  statusEl.textContent = '⏳ Compiling Final Analysis for this item…';
+
+  try {
+    const r = await fetch(`/api/meeting-prep/${currentMeetingId}/compile`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({appearance_id: appId})
+    });
+    const data = await r.json();
+    if (data.ok) {
+      statusEl.innerHTML = '✅ Compilation started. Refreshing in a few seconds…';
+      setTimeout(() => {
+        loadMeetingPrep(currentMeetingId);
+        statusEl.style.display = 'none';
+      }, 8000);
+    } else {
+      statusEl.textContent = '❌ ' + (data.error || 'Failed');
+    }
+  } catch(e) {
+    statusEl.textContent = '❌ Error: ' + e.message;
+  }
+}
+
+async function compileFinalAnalysis() {
+  const total = mpData ? mpData.stats.total : 0;
+  if (!confirm(`Compile Final Analysis for ALL ${total} items in this meeting? This will synthesize every available source for each item into a comprehensive briefing.\n\nThis may take 1-2 minutes.`)) return;
+
+  const statusEl = document.getElementById('mp-compile-status');
+  statusEl.style.display = '';
+  statusEl.innerHTML = `⏳ Compiling Final Analysis for ${total} items… This may take a minute.`;
+
+  try {
+    const r = await fetch(`/api/meeting-prep/${currentMeetingId}/compile`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({})
+    });
+    const data = await r.json();
+    if (data.ok) {
+      statusEl.innerHTML = `✅ Compilation started for ${data.count} items. Auto-refreshing…`;
+      // Poll for completion
+      let refreshCount = 0;
+      const poller = setInterval(async () => {
+        refreshCount++;
+        await loadMeetingPrep(currentMeetingId);
+        const compiled = mpData.items.filter(i => (i.finalized_brief||'').trim()).length;
+        statusEl.innerHTML = `✅ Progress: ${compiled}/${total} items compiled…`;
+        if (compiled >= total || refreshCount >= 30) {
+          clearInterval(poller);
+          statusEl.innerHTML = `✅ Final Analysis complete! ${compiled}/${total} items compiled.`;
+          setTimeout(() => { statusEl.style.display = 'none'; }, 5000);
+        }
+      }, 5000);
+    } else {
+      statusEl.textContent = '❌ ' + (data.error || 'Failed');
+    }
+  } catch(e) {
+    statusEl.textContent = '❌ Error: ' + e.message;
+  }
+}
+
+async function exportMeetingPrepExcel() {
+  try {
+    const r = await fetch(`/api/meeting-prep/${currentMeetingId}/export-excel`, {method:'POST'});
+    if (!r.ok) throw new Error('Export failed');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const cd = r.headers.get('content-disposition') || '';
+    const match = cd.match(/filename=(.+)/);
+    a.download = match ? match[1] : 'MeetingPrep.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert('Excel export failed: ' + e.message);
+  }
 }
 </script>
 </body>
@@ -6348,6 +6877,39 @@ def api_run():
                                       sorted(output_dir.glob("*Part2*.docx"))]
             JOBS[job_id].update({"status": "complete", "files": files})
             _broadcast({"type": "complete", "results": results, "files": files})
+
+            # ── Auto-trigger transcript backfill for processed meetings ──
+            # After all items are analyzed, try to find and attach meeting
+            # transcripts (Granicus/YouTube). Runs in the same thread since
+            # the analysis is already done. Non-fatal if it fails.
+            try:
+                import transcript as _tx
+                from repository import get_recent_meeting_ids_for_date_range
+
+                # Find meeting IDs that were just processed
+                meeting_ids = get_recent_meeting_ids_for_date_range(
+                    parsed.strftime("%Y-%m-%d"),
+                    selected_bodies=[k for k in matched.keys()] if matched else None
+                )
+
+                for mid in meeting_ids:
+                    try:
+                        cb(f"Auto-backfilling transcript for meeting {mid}…",
+                           phase="transcript", pct=92)
+                        _tx.backfill_transcript(
+                            meeting_id=mid,
+                            output_dir=output_dir,
+                            emit=lambda msg, **kw: cb(f"[Transcript] {msg}",
+                                                       phase="transcript", pct=95),
+                        )
+                    except Exception as tx_err:
+                        app.logger.warning(
+                            f"Auto transcript backfill skipped for meeting {mid}: {tx_err}")
+                        cb(f"Transcript backfill skipped for meeting {mid}: {tx_err}",
+                           phase="transcript", pct=95)
+            except Exception as tx_outer:
+                app.logger.info(f"Auto transcript backfill not available: {tx_outer}")
+
         except Exception as exc:
             JOBS[job_id]["status"] = "error"
             _broadcast({"type": "error", "message": str(exc)})
@@ -6746,6 +7308,550 @@ def api_maintenance_sample_data():
         sample["error"] = str(e)
 
     return jsonify(sample)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Meeting Prep — API endpoints
+# ═══════════════════════════════════════════════════════════════
+
+@app.route("/api/meeting-prep/<int:meeting_id>")
+def api_meeting_prep(meeting_id):
+    """Return all data needed for the Meeting Prep view.
+    Includes items sorted by agenda position, with chat message counts,
+    analysis status, risk level assessment, and source availability flags."""
+    import meeting_service
+    from repository import get_meeting_by_id
+
+    m = get_meeting_by_id(meeting_id)
+    if not m:
+        return jsonify({"error": "not found"}), 404
+
+    pkg = meeting_service.get_meeting_package(meeting_id)
+    if not pkg:
+        return jsonify({"error": "not found"}), 404
+
+    items = pkg.get("items", [])
+
+    # Enrich items with chat counts and risk classification
+    with get_db() as conn:
+        for item in items:
+            aid = item["id"]
+            # Count chat messages per item (across all users)
+            chat_row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM chat_messages WHERE appearance_id=?",
+                (aid,)
+            ).fetchone()
+            item["chat_message_count"] = chat_row["cnt"] if chat_row else 0
+
+            # Classify risk level based on content analysis
+            item["risk_level"] = _classify_risk(item)
+
+            # Source availability flags
+            item["sources"] = {
+                "ai_debrief": bool((item.get("ai_summary_for_appearance") or "").strip()),
+                "analyst_notes": bool((item.get("analyst_working_notes") or "").strip()),
+                "reviewer_notes": bool((item.get("reviewer_notes") or "").strip()),
+                "watch_points": bool((item.get("watch_points_for_appearance") or "").strip()),
+                "leg_history": bool((item.get("leg_history_summary") or "").strip()),
+                "chat": item["chat_message_count"] > 0,
+                "pdf": bool((item.get("item_pdf_local_path") or "").strip()),
+                "final_analysis": bool((item.get("finalized_brief") or "").strip()),
+                "deep_research": bool((item.get("finalized_brief") or "").strip()),
+            }
+
+    # Sort items by agenda position (natural sort: 1A1, 1B1, 2B1, etc.)
+    def _agenda_sort_key(item):
+        pos = (item.get("bcc_item_number") or item.get("committee_item_number")
+               or item.get("raw_agenda_item_number") or "ZZZ")
+        # Natural sort: extract leading digits, then alpha, then trailing digits
+        import re as _re
+        parts = _re.findall(r'(\d+|[A-Za-z]+)', pos)
+        key = []
+        for p in parts:
+            if p.isdigit():
+                key.append((0, int(p), p))
+            else:
+                key.append((1, 0, p.upper()))
+        return key
+
+    items.sort(key=_agenda_sort_key)
+
+    # Compute stats
+    total = len(items)
+    analyzed = sum(1 for i in items if i["sources"]["ai_debrief"])
+    with_notes = sum(1 for i in items if i["sources"]["analyst_notes"])
+    watch_count = sum(1 for i in items if i["sources"]["watch_points"])
+    pending = total - analyzed
+
+    return jsonify({
+        "meeting": dict(m),
+        "items": items,
+        "stats": {
+            "total": total,
+            "analyzed": analyzed,
+            "with_notes": with_notes,
+            "watch_count": watch_count,
+            "pending": pending,
+        },
+        "status": pkg.get("status", {}),
+    })
+
+
+def _classify_risk(item):
+    """Classify an item's risk level based on content indicators."""
+    summary = (item.get("ai_summary_for_appearance") or "").lower()
+    title = (item.get("appearance_title") or "").lower()
+    watch = (item.get("watch_points_for_appearance") or "").lower()
+    notes = (item.get("analyst_working_notes") or "").lower()
+    combined = f"{title} {summary} {watch} {notes}"
+
+    # HIGH: large fiscal impact, contract awards, bond issuances, zoning changes
+    high_signals = [
+        "million", "billion", "$", "contract award", "bond", "appropriat",
+        "tax increase", "rate increase", "eminent domain", "sole source",
+        "no-bid", "override", "veto"
+    ]
+    # MEDIUM: moderate fiscal, policy changes, ordinance amendments
+    med_signals = [
+        "ordinance", "resolution approving", "amend", "lease", "grant",
+        "interlocal", "procurement", "change order", "supplement"
+    ]
+    # Ceremonial/Informational keywords
+    info_signals = [
+        "proclamation", "recognition", "presentation of", "commend",
+        "ceremonial", "honorary", "certificate", "poster contest"
+    ]
+
+    # Check informational first
+    if any(s in combined for s in info_signals):
+        return "INFO"
+
+    # Check watch points — having them suggests elevated importance
+    has_watch = bool(watch.strip())
+
+    if any(s in combined for s in high_signals):
+        return "HIGH"
+    if any(s in combined for s in med_signals) or has_watch:
+        return "MEDIUM"
+    return "LOW"
+
+
+@app.route("/api/meeting-prep/<int:meeting_id>/compile", methods=["POST"])
+def api_compile_final_analysis(meeting_id):
+    """Compile a Final Analysis for one or all items in a meeting.
+    Gathers all available sources and produces a comprehensive synthesis."""
+    import httpx
+    from anthropic import Anthropic
+    from repository import get_meeting_by_id
+
+    data = request.get_json(force=True) or {}
+    appearance_id = data.get("appearance_id")  # None = compile all
+
+    m = get_meeting_by_id(meeting_id)
+    if not m:
+        return jsonify({"error": "Meeting not found"}), 404
+
+    with get_db() as conn:
+        if appearance_id:
+            rows = conn.execute(
+                """SELECT a.*, m2.short_title, m2.full_title, m2.sponsor, m2.department
+                   FROM appearances a JOIN matters m2 ON m2.id=a.matter_id
+                   WHERE a.id=? AND a.meeting_id=?""",
+                (appearance_id, meeting_id)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT a.*, m2.short_title, m2.full_title, m2.sponsor, m2.department
+                   FROM appearances a JOIN matters m2 ON m2.id=a.matter_id
+                   WHERE a.meeting_id=?""",
+                (meeting_id,)
+            ).fetchall()
+
+    if not rows:
+        return jsonify({"error": "No items found"}), 404
+
+    items_to_compile = [dict(r) for r in rows]
+
+    # Start compilation in background thread
+    def _run_compilation():
+        try:
+            api_key = load_api_key()
+            client = Anthropic(api_key=api_key, http_client=httpx.Client(verify=False))
+
+            for item in items_to_compile:
+                _compile_single_item(client, item, m)
+        except Exception as e:
+            app.logger.error(f"Final analysis compilation failed: {e}")
+
+    import threading
+    threading.Thread(target=_run_compilation, daemon=True).start()
+
+    return jsonify({
+        "ok": True,
+        "message": f"Compiling final analysis for {len(items_to_compile)} item(s)…",
+        "count": len(items_to_compile),
+    })
+
+
+def _compile_single_item(client, item, meeting):
+    """Compile all sources for a single item into a Final Analysis."""
+    aid = item["id"]
+
+    # Gather ALL sources
+    title = item.get("appearance_title") or item.get("short_title") or ""
+    file_num = item.get("file_number") or ""
+    sponsor = item.get("sponsor") or item.get("department") or ""
+    ai_summary = item.get("ai_summary_for_appearance") or ""
+    watch_points = item.get("watch_points_for_appearance") or ""
+    analyst_notes = item.get("analyst_working_notes") or ""
+    reviewer_notes = item.get("reviewer_notes") or ""
+    leg_history = item.get("leg_history_summary") or ""
+    existing_brief = item.get("finalized_brief") or ""
+
+    # Get chat history (all users, all messages)
+    chat_text = ""
+    with get_db() as conn:
+        chat_rows = conn.execute(
+            """SELECT role, content, created_at FROM chat_messages
+               WHERE appearance_id=? ORDER BY created_at ASC""",
+            (aid,)
+        ).fetchall()
+        if chat_rows:
+            chat_exchanges = []
+            for cr in chat_rows:
+                prefix = "ANALYST" if cr["role"] == "user" else "AI"
+                chat_exchanges.append(f"{prefix}: {cr['content'][:500]}")
+            chat_text = "\n".join(chat_exchanges[-20:])  # Last 20 messages
+
+    # Load PDF text
+    pdf_text = ""
+    pdf_path = item.get("item_pdf_local_path") or ""
+    if pdf_path and Path(pdf_path).exists():
+        try:
+            from scraper import extract_pdf_text, IMAGE_ONLY_SENTINEL
+            raw = extract_pdf_text(Path(pdf_path))
+            if raw and raw != IMAGE_ONLY_SENTINEL:
+                pdf_text = raw[:15000]
+        except Exception:
+            pass
+
+    # Build the Final Analysis system prompt
+    final_sop = f"""You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
+
+You are producing a FINAL COMPREHENSIVE ANALYSIS for an agenda item. You have been given ALL available research sources — initial AI debrief, analyst notes, AI chat Q&A sessions, watch points, legislative history, reviewer notes, and the full PDF document text.
+
+Your job is to SYNTHESIZE all of these sources into one polished, comprehensive briefing that incorporates every relevant finding. This is the definitive analysis that will be reviewed by the OCA Director before the Board meeting.
+
+OUTPUT FORMAT RULES — MANDATORY:
+- Do NOT use markdown. No **, no ##, no *, no _, no backticks anywhere.
+- Write in clean professional prose. Use plain text only.
+- For emphasis, use CAPS for section headers.
+- For bullet points, start lines with a dash and space: "- "
+- Never start with preamble. Go straight into the formatted output.
+
+FINAL ANALYSIS FORMAT:
+
+ITEM {file_num} - {title}
+Sponsor: [From document/sources]
+Meeting: {meeting.get("body_name", "")} — {meeting.get("meeting_date", "")}
+
+EXECUTIVE SUMMARY
+[2-3 sentences capturing the essential takeaway. What does this item do, why does it matter, and what should the Director know immediately?]
+
+FISCAL IMPACT
+[Detailed fiscal analysis. Dollar amounts, funding sources, budget implications. Cross-reference and verify numbers from the PDF against other sources. Flag any discrepancies.]
+
+PURPOSE AND BACKGROUND
+[3-5 sentences of context. What problem does this solve? What is the legislative/policy history? Include any relevant prior actions from legislative history.]
+
+KEY FINDINGS
+[Organized bullet list of the most important findings from ALL sources. Mark the source of each finding in parentheses: (PDF), (AI Debrief), (Analyst Notes), (Chat Research), (Web Search), (Legislative History)]
+
+CONCERNS AND RISK FACTORS
+[Any issues, red flags, or areas requiring attention. Include concerns raised by analysts in notes or chat sessions.]
+
+LEGISLATIVE HISTORY
+[Summary of prior actions, committee votes, amendments, related items]
+
+WATCH POINTS
+[3-5 specific items the Director and Commissioners should focus on during the meeting]
+
+ADDITIONAL NOTES
+[Any other relevant information, context from related items, or follow-up actions needed]
+
+IMPORTANT RULES:
+- Cross-reference all sources. If analyst notes contradict the PDF, flag it.
+- Cite which source each finding comes from.
+- Never fabricate information. If something is uncertain, say so.
+- Be comprehensive but concise. Every sentence should add value.
+- Fiscal numbers must be verified against the actual PDF document."""
+
+    # Build user message with all sources
+    user_parts = []
+
+    if pdf_text:
+        user_parts.append(f"=== FULL PDF DOCUMENT TEXT ===\n{pdf_text}\n")
+
+    if ai_summary:
+        user_parts.append(f"=== INITIAL AI DEBRIEF ===\n{ai_summary[:4000]}\n")
+
+    if existing_brief:
+        user_parts.append(f"=== EXISTING RESEARCH BRIEF ===\n{existing_brief[:3000]}\n")
+
+    if watch_points:
+        user_parts.append(f"=== WATCH POINTS ===\n{watch_points[:1000]}\n")
+
+    if analyst_notes:
+        user_parts.append(f"=== ANALYST NOTES ===\n{analyst_notes[:2000]}\n")
+
+    if reviewer_notes:
+        user_parts.append(f"=== REVIEWER NOTES ===\n{reviewer_notes[:1000]}\n")
+
+    if leg_history:
+        user_parts.append(f"=== LEGISLATIVE HISTORY ===\n{leg_history[:1500]}\n")
+
+    if chat_text:
+        user_parts.append(f"=== AI CHAT Q&A SESSIONS ===\n{chat_text[:3000]}\n")
+
+    user_message = "\n".join(user_parts)
+
+    if not user_message.strip():
+        user_message = f"Item: {file_num} — {title}\nSponsor: {sponsor}\nNo additional sources available. Produce a brief analysis based on the title alone."
+
+    user_message += "\n\nProduce the FINAL COMPREHENSIVE ANALYSIS now."
+
+    # Call Claude
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4000,
+            system=[{
+                "type": "text",
+                "text": final_sop,
+                "cache_control": {"type": "ephemeral"},
+            }],
+            messages=[{"role": "user", "content": user_message}],
+        )
+        final_text = "\n".join(b.text for b in resp.content if hasattr(b, "text")).strip()
+
+        # Store as finalized_brief
+        now = now_iso()
+        with get_db() as conn:
+            conn.execute(
+                """UPDATE appearances SET
+                    finalized_brief=?,
+                    updated_at=?
+                WHERE id=?""",
+                (final_text, now, aid)
+            )
+
+        usage = resp.usage
+        app.logger.info(
+            f"Final analysis compiled for appearance {aid}: "
+            f"in={usage.input_tokens} out={usage.output_tokens}"
+        )
+    except Exception as e:
+        app.logger.error(f"Final analysis failed for appearance {aid}: {e}")
+
+
+@app.route("/api/meeting-prep/<int:meeting_id>/export-excel", methods=["POST"])
+def api_export_meeting_prep_excel(meeting_id):
+    """Export Meeting Prep as a two-sheet Excel workbook:
+    Sheet 1: Summary table (compact grid)
+    Sheet 2: Detailed analysis per item"""
+    from repository import get_meeting_by_id
+
+    m = get_meeting_by_id(meeting_id)
+    if not m:
+        return jsonify({"error": "not found"}), 404
+
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return jsonify({"error": "openpyxl not installed"}), 500
+
+    # Get enriched items
+    import meeting_service
+    pkg = meeting_service.get_meeting_package(meeting_id)
+    items = pkg.get("items", [])
+
+    # Sort items by agenda position
+    import re as _re
+    def _sort_key(item):
+        pos = (item.get("bcc_item_number") or item.get("committee_item_number")
+               or item.get("raw_agenda_item_number") or "ZZZ")
+        parts = _re.findall(r'(\d+|[A-Za-z]+)', pos)
+        key = []
+        for p in parts:
+            if p.isdigit():
+                key.append((0, int(p), p))
+            else:
+                key.append((1, 0, p.upper()))
+        return key
+    items.sort(key=_sort_key)
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: Summary ──
+    ws1 = wb.active
+    ws1.title = "Summary"
+
+    header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+    alt_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+    watch_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+    body_font = Font(name="Arial", size=10)
+    bold_font = Font(name="Arial", size=10, bold=True)
+    wrap_align = Alignment(wrap_text=True, vertical="top")
+    thin_border = Border(
+        left=Side(style="thin", color="CCCCCC"),
+        right=Side(style="thin", color="CCCCCC"),
+        top=Side(style="thin", color="CCCCCC"),
+        bottom=Side(style="thin", color="CCCCCC"),
+    )
+
+    # Title row
+    ws1.merge_cells("A1:G1")
+    title_cell = ws1["A1"]
+    title_cell.value = f"{m.get('body_name', '')} — {m.get('meeting_date', '')} — Meeting Prep"
+    title_cell.font = Font(name="Arial", bold=True, size=14, color="1B3A5C")
+    title_cell.alignment = Alignment(vertical="center")
+    ws1.row_dimensions[1].height = 30
+
+    # Headers
+    headers = ["Risk", "Researcher", "Position", "Item #", "Body", "Status", "Notes Preview"]
+    col_widths = [8, 14, 10, 10, 50, 12, 80]
+    for col_idx, (header, width) in enumerate(zip(headers, col_widths), 1):
+        cell = ws1.cell(row=3, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = thin_border
+        ws1.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # Data rows
+    for row_idx, item in enumerate(items, 4):
+        risk = _classify_risk(item)
+        researcher = item.get("assigned_to") or "—"
+        position = (item.get("bcc_item_number") or item.get("committee_item_number")
+                    or item.get("raw_agenda_item_number") or "")
+        file_num = item.get("file_number") or ""
+        body = item.get("appearance_title") or item.get("short_title") or ""
+        status = item.get("workflow_status") or "New"
+        has_watch = bool((item.get("watch_points_for_appearance") or "").strip())
+
+        # Build notes preview
+        notes = ""
+        brief = (item.get("finalized_brief") or "").strip()
+        summary = (item.get("ai_summary_for_appearance") or "").strip()
+        if brief:
+            notes = brief[:500]
+        elif summary:
+            notes = summary[:500]
+
+        row_data = [risk, researcher, position, file_num, body, status, notes]
+
+        for col_idx, value in enumerate(row_data, 1):
+            cell = ws1.cell(row=row_idx, column=col_idx, value=value)
+            cell.font = body_font
+            cell.alignment = wrap_align
+            cell.border = thin_border
+
+            # Alternate row shading
+            if row_idx % 2 == 0:
+                cell.fill = alt_fill
+            # Watch items get yellow highlight
+            if has_watch:
+                cell.fill = watch_fill
+
+        # Bold the risk cell and color it
+        risk_cell = ws1.cell(row=row_idx, column=1)
+        risk_cell.font = Font(name="Arial", size=9, bold=True, color="FFFFFF")
+        risk_colors = {"HIGH": "DC2626", "MEDIUM": "D97706", "LOW": "16A34A", "INFO": "6366F1"}
+        risk_cell.fill = PatternFill(start_color=risk_colors.get(risk, "6366F1"),
+                                     end_color=risk_colors.get(risk, "6366F1"),
+                                     fill_type="solid")
+        risk_cell.alignment = Alignment(horizontal="center", vertical="top")
+
+        ws1.row_dimensions[row_idx].height = max(30, min(100, len(notes) // 3))
+
+    # ── Sheet 2: Detailed Analysis ──
+    ws2 = wb.create_sheet("Detailed Analysis")
+    detail_row = 1
+
+    ws2.column_dimensions["A"].width = 18
+    ws2.column_dimensions["B"].width = 90
+
+    for item in items:
+        position = (item.get("bcc_item_number") or item.get("committee_item_number")
+                    or item.get("raw_agenda_item_number") or "")
+        file_num = item.get("file_number") or ""
+        title_text = item.get("appearance_title") or item.get("short_title") or ""
+
+        # Item header
+        cell = ws2.cell(row=detail_row, column=1, value=f"{position} — {file_num}")
+        cell.font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+        cell2 = ws2.cell(row=detail_row, column=2, value=title_text)
+        cell2.font = Font(name="Arial", bold=True, size=12, color="FFFFFF")
+        cell2.fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+        cell2.alignment = wrap_align
+        ws2.row_dimensions[detail_row].height = 25
+        detail_row += 1
+
+        # Metadata
+        meta_items = [
+            ("Sponsor", item.get("sponsor") or item.get("department") or "—"),
+            ("Researcher", item.get("assigned_to") or "—"),
+            ("Status", item.get("workflow_status") or "New"),
+            ("Risk Level", _classify_risk(item)),
+        ]
+        for label, value in meta_items:
+            ws2.cell(row=detail_row, column=1, value=label).font = bold_font
+            ws2.cell(row=detail_row, column=2, value=value).font = body_font
+            detail_row += 1
+
+        # Content sections
+        sections = [
+            ("Final Analysis", (item.get("finalized_brief") or "").strip()),
+            ("AI Debrief", (item.get("ai_summary_for_appearance") or "").strip()),
+            ("Watch Points", (item.get("watch_points_for_appearance") or "").strip()),
+            ("Analyst Notes", (item.get("analyst_working_notes") or "").strip()),
+            ("Reviewer Notes", (item.get("reviewer_notes") or "").strip()),
+            ("Legislative History", (item.get("leg_history_summary") or "").strip()),
+        ]
+        for section_name, content in sections:
+            if content:
+                detail_row += 1
+                header_cell = ws2.cell(row=detail_row, column=1, value=section_name)
+                header_cell.font = Font(name="Arial", bold=True, size=10, color="1B3A5C")
+                header_cell.fill = PatternFill(start_color="D5E8F0", end_color="D5E8F0", fill_type="solid")
+                ws2.cell(row=detail_row, column=2).fill = PatternFill(start_color="D5E8F0", end_color="D5E8F0", fill_type="solid")
+                detail_row += 1
+
+                content_cell = ws2.cell(row=detail_row, column=1)
+                content_cell.value = ""
+                body_cell = ws2.cell(row=detail_row, column=2, value=content[:3000])
+                body_cell.font = body_font
+                body_cell.alignment = wrap_align
+                ws2.row_dimensions[detail_row].height = max(30, min(400, len(content) // 2))
+                detail_row += 1
+
+        # Spacer between items
+        detail_row += 2
+
+    # Save
+    meeting_date = m.get("meeting_date", "unknown")
+    body_name = (m.get("body_name") or "Meeting").replace(" ", "_")[:20]
+    filename = f"MeetingPrep_{body_name}_{meeting_date}.xlsx"
+    output_path = Path(app.root_path) / "exports" / filename
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(str(output_path))
+
+    return send_file(str(output_path), as_attachment=True, download_name=filename,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 # ─────────────────────────────────────────────────────────────
