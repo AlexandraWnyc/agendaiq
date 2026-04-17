@@ -20,7 +20,15 @@ def set_db_path(path):
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.OperationalError:
+        # If WAL fails (disk full), try to recover by checkpointing
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            log.warning("Could not set WAL mode — disk may be full")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
 
@@ -41,6 +49,17 @@ def get_db():
 def init_db():
     """Create all tables if they do not exist, then run migrations."""
     from schema import DDL_STATEMENTS, MIGRATION_STATEMENTS
+
+    # Checkpoint WAL first to reclaim space (helps recover from disk-full)
+    if DB_PATH.exists():
+        try:
+            c = sqlite3.connect(str(DB_PATH))
+            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            c.close()
+            log.info("WAL checkpoint completed on startup")
+        except Exception as e:
+            log.warning(f"WAL checkpoint failed on startup: {e}")
+
     with get_db() as conn:
         for stmt in DDL_STATEMENTS:
             conn.execute(stmt)

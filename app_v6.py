@@ -2132,12 +2132,15 @@ function drTab(tab, el) {
 }
 
 function renderDrawerOverview(body, matter, app, saveBtn) {
+  const analystNotes = app?.analyst_working_notes || '';
   // Sort all appearances chronologically (newest first)
   const allApps = (matter?.appearances||[]).slice().sort((a,b) =>
     (b.meeting_date||'').localeCompare(a.meeting_date||'')
   );
 
   body.innerHTML = `
+    ${analystNotes ? `<div class="ds"><div class="ds-title">ANALYST DEBRIEF</div>
+      <div class="editable-field" style="cursor:default;font-size:.82rem;line-height:1.55;white-space:pre-wrap;max-height:300px;overflow-y:auto">${esc(analystNotes)}</div></div>` : ''}
     ${app?.leg_history_summary ? `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
       <div class="editable-field" style="cursor:default;font-size:.82rem;line-height:1.55">${esc(app.leg_history_summary)}</div></div>` :
       `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
@@ -3013,7 +3016,7 @@ function renderDrawerNotes(body, app) {
       <textarea id="edit-working-notes"
         style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem${!analystCanEdit?';background:#f8fafc;cursor:default':''}"
         ${!analystCanEdit ? 'readonly' : ''}
-        placeholder="Write your debrief analysis, observations, and recommendations here..."></textarea>
+        placeholder="Write your debrief analysis, observations, and recommendations here...">${esc(wn)}</textarea>
       ${analystCanEdit ? `
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Draft</button>
@@ -3276,11 +3279,14 @@ function _appendChatBubble(container, msg) {
   if(msg.role === 'assistant') {
     const appendedNotes = msg.appended_to === 'notes';
     const appendedPart1 = msg.appended_to === 'part1';
+    const appendedDeep = msg.appended_to === 'deep_research';
     html += `<div class="chat-actions">
       <button onclick="appendChatToTarget(${msg.id},'notes',this)" ${appendedNotes?'class="appended" disabled':''}>
-        ${appendedNotes ? 'Added to Notes' : '+ Add to Notes'}</button>
+        ${appendedNotes ? '✓ Added to Notes' : '+ Agenda Debrief'}</button>
+      <button onclick="appendChatToTarget(${msg.id},'deep_research',this)" ${appendedDeep?'class="appended" disabled':''}>
+        ${appendedDeep ? '✓ Saved to Deep Research' : '+ Deep Research'}</button>
       <button onclick="appendChatToTarget(${msg.id},'part1',this)" ${appendedPart1?'class="appended" disabled':''}>
-        ${appendedPart1 ? 'Added to Part 1' : '+ Add to Part 1'}</button>
+        ${appendedPart1 ? '✓ Added to Part 1' : '+ Part 1 Summary'}</button>
     </div>`;
   }
   div.innerHTML = html;
@@ -3344,7 +3350,8 @@ async function appendChatToTarget(msgId, target, btnEl) {
     });
     const d = await r.json();
     if(d.ok) {
-      btnEl.textContent = target==='notes' ? 'Added to Notes' : 'Added to Part 1';
+      const labels = {notes:'✓ Added to Notes', part1:'✓ Added to Part 1', deep_research:'✓ Saved to Deep Research'};
+      btnEl.textContent = labels[target] || '✓ Added';
       btnEl.classList.add('appended');
       btnEl.disabled = true;
       // Refresh drawer data
@@ -5938,9 +5945,9 @@ def api_chat_append(appearance_id):
     user = _current_user()
     data = request.get_json(force=True)
     msg_id = data.get("message_id")
-    target = data.get("target", "notes")  # 'notes' or 'part1'
+    target = data.get("target", "notes")  # 'notes', 'part1', or 'deep_research'
 
-    if target not in ("notes", "part1"):
+    if target not in ("notes", "part1", "deep_research"):
         return jsonify({"error": "Invalid target"}), 400
 
     # Fetch the chat message
@@ -5967,6 +5974,17 @@ def api_chat_append(appearance_id):
                 "UPDATE appearances SET analyst_working_notes=?, analyst_notes_updated_at=?, analyst_notes_updated_by=?, updated_at=? WHERE id=?",
                 (new_notes, now, user, now, appearance_id)
             )
+        elif target == "deep_research":
+            existing = conn.execute(
+                "SELECT finalized_brief FROM appearances WHERE id=?", (appearance_id,)
+            ).fetchone()
+            old_text = (existing["finalized_brief"] or "") if existing else ""
+            separator = "\n\n--- AI Chat Research (added by {}) ---\n".format(user)
+            new_text = old_text + separator + content
+            conn.execute(
+                "UPDATE appearances SET finalized_brief=?, finalized_brief_updated_at=?, finalized_brief_updated_by=?, updated_at=? WHERE id=?",
+                (new_text, now, user, now, appearance_id)
+            )
         else:  # part1
             existing = conn.execute(
                 "SELECT ai_summary_for_appearance FROM appearances WHERE id=?", (appearance_id,)
@@ -5985,6 +6003,47 @@ def api_chat_append(appearance_id):
         )
 
     return jsonify({"ok": True, "target": target})
+
+
+@app.route("/api/maintenance/vacuum", methods=["POST"])
+def api_maintenance_vacuum():
+    """Reclaim disk space: checkpoint WAL, vacuum, and report DB size."""
+    import os
+    try:
+        with get_db() as conn:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        # VACUUM must run outside a transaction
+        c = get_connection()
+        c.execute("VACUUM")
+        c.close()
+        db_size = os.path.getsize(str(DB_PATH))
+        wal_path = str(DB_PATH) + "-wal"
+        wal_size = os.path.getsize(wal_path) if os.path.exists(wal_path) else 0
+        return jsonify({
+            "ok": True,
+            "db_size_mb": round(db_size / 1048576, 2),
+            "wal_size_mb": round(wal_size / 1048576, 2),
+            "total_mb": round((db_size + wal_size) / 1048576, 2),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/maintenance/db-size")
+def api_maintenance_db_size():
+    """Report current database file sizes."""
+    import os
+    db_size = os.path.getsize(str(DB_PATH)) if DB_PATH.exists() else 0
+    wal_path = str(DB_PATH) + "-wal"
+    wal_size = os.path.getsize(wal_path) if os.path.exists(wal_path) else 0
+    shm_path = str(DB_PATH) + "-shm"
+    shm_size = os.path.getsize(shm_path) if os.path.exists(shm_path) else 0
+    return jsonify({
+        "db_size_mb": round(db_size / 1048576, 2),
+        "wal_size_mb": round(wal_size / 1048576, 2),
+        "shm_size_mb": round(shm_size / 1048576, 2),
+        "total_mb": round((db_size + wal_size + shm_size) / 1048576, 2),
+    })
 
 
 # ─────────────────────────────────────────────────────────────
