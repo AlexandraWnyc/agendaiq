@@ -1083,12 +1083,8 @@ def store_transcript_notes(meeting_id: int, segments: dict,
             updated += 1
             log.info(f"    Stored transcript notes for File# {fn}")
 
-    # Also store the video URL on the meeting record for reference
-    with get_db() as conn:
-        conn.execute(
-            "UPDATE meetings SET notes=COALESCE(notes,'') || ? WHERE id=?",
-            (f"\n[YouTube: {video_url} — {video_title}]", meeting_id)
-        )
+    # Video URL is returned in the result dict and stored per-item in transcript_analysis.
+    # (meetings table has no notes column — no need to duplicate it there.)
 
     return updated
 
