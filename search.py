@@ -25,6 +25,19 @@ def search_by_file_number(file_number: str) -> dict | None:
             (matter["id"],)
         ).fetchall()
         matter["appearances"] = [dict(r) for r in apps]
+
+        # Include legislative timeline events for the status ladder
+        try:
+            timeline = conn.execute(
+                """SELECT * FROM matter_timeline
+                   WHERE matter_id=?
+                   ORDER BY event_date ASC""",
+                (matter["id"],)
+            ).fetchall()
+            matter["timeline"] = [dict(r) for r in timeline]
+        except Exception:
+            matter["timeline"] = []
+
         return matter
 
 

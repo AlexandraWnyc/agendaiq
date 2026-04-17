@@ -1384,12 +1384,12 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="dr-meta" id="dr-meta"></div>
   </div>
   <div class="dr-tabs">
-    <button class="dtab on" onclick="drTab('overview',this)" title="Debrief + Watchpoints + Appearance Timeline">Overview</button>
+    <button class="dtab on" onclick="drTab('overview',this)" title="Debrief + Watchpoints + Legislative Status + Item Evolution">Agenda Debrief</button>
     <button class="dtab" onclick="drTab('notes',this)">Notes</button>
-    <button class="dtab" onclick="drTab('deep',this)" title="Reference only — not exported">Deep Research</button>
+    <button class="dtab" onclick="drTab('deep',this)" title="Part 2 notes + meeting transcript notes">Deep Research</button>
     <button class="dtab" onclick="drTab('chat',this)" title="Private AI chat about this item">AI Chat</button>
-    <button class="dtab" onclick="drTab('history',this)">History</button>
     <button class="dtab" onclick="drTab('lifecycle',this)">Lifecycle</button>
+    <button class="dtab" onclick="drTab('history',this)">History</button>
   </div>
   <div class="dr-body" id="dr-body">
     <div style="color:var(--gray-400);font-size:.85rem">Loading…</div>
@@ -2137,6 +2137,10 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
       <div class="editable-field" id="edit-wp" contenteditable="false">${esc(wp)||'<span style="color:var(--gray-400)">None.</span>'}</div>
     </div>
     ${renderStatusLadder(matter, app)}
+    ${app?.leg_history_summary ? `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
+      <div class="editable-field" style="cursor:default">${esc(app.leg_history_summary)}</div></div>` : ''}
+    ${matter.legislative_notes ? `<div class="ds"><div class="ds-title">LEGISLATIVE NOTES</div>
+      <div class="editable-field" style="cursor:default">${esc(matter.legislative_notes)}</div></div>` : ''}
     <div class="ds">
       <div class="ds-title">
         <span>APPEARANCE TIMELINE</span>
