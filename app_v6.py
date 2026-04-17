@@ -6493,15 +6493,16 @@ def api_chat_send(appearance_id):
     analyst_notes = app_row.get("analyst_working_notes") or ""
     watch_points = app_row.get("watch_points_for_appearance") or ""
 
-    # Load PDF text so the AI can answer detailed questions about the actual document
+    # Load PDF text so the AI can answer detailed questions about the actual document.
+    # Uses the same OCR-capable extractor from scraper.py so scanned PDFs are readable too.
     pdf_text = ""
     pdf_path = app_row.get("item_pdf_local_path") or ""
     if pdf_path and Path(pdf_path).exists():
         try:
-            import fitz
-            doc = fitz.open(pdf_path)
-            pdf_text = "\n".join(page.get_text() for page in doc)[:12000]
-            doc.close()
+            from scraper import extract_pdf_text, IMAGE_ONLY_SENTINEL
+            raw = extract_pdf_text(Path(pdf_path))
+            if raw and raw != IMAGE_ONLY_SENTINEL:
+                pdf_text = raw[:12000]
         except Exception:
             pass
 
