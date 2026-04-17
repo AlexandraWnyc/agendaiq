@@ -6815,9 +6815,16 @@ def api_bulk_transcript_backfill():
                         skipped += 1
                         reason = result.get("message", "no recording found")
                         _bulk_tx_log(f"  ⏭ {label}: skipped — {reason}")
+                    elif result and result.get("status") == "error":
+                        skipped += 1
+                        reason = result.get("message", "unknown error")
+                        _bulk_tx_log(f"  ⚠ {label}: {reason}")
                     else:
                         skipped += 1
                         _bulk_tx_log(f"  ⏭ {label}: no transcript available")
+                except OSError as e:
+                    skipped += 1
+                    _bulk_tx_log(f"  ❌ {label}: disk error — {e} (check free space)")
                 except Exception as e:
                     skipped += 1
                     _bulk_tx_log(f"  ⚠ {label}: error — {e}")

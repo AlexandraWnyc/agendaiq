@@ -1135,6 +1135,15 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
     if not appearances:
         return {"status": "error", "message": "No items for this meeting"}
 
+    # ── Skip if this meeting already has transcript notes (unless forcing via raw paste)
+    if not raw_transcript and not video_url:
+        has_transcript = any(
+            "[Meeting Discussion" in (a.get("analyst_working_notes") or "")
+            for a in appearances
+        )
+        if has_transcript:
+            return {"status": "skipped", "message": "already has transcript notes"}
+
     # ── Shortcut: if raw transcript was pasted, skip search + download
     if raw_transcript and raw_transcript.strip():
         _emit(f"Using pasted transcript ({len(raw_transcript):,} chars). Segmenting by item…",
@@ -1177,8 +1186,10 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
             "items_updated": updated,
         }
 
+    _created_temp_dir = False
     if output_dir is None:
         output_dir = Path(tempfile.mkdtemp())
+        _created_temp_dir = True
 
     transcript = None
     video_id = None
@@ -1237,9 +1248,13 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                 source = "youtube"
 
     if not transcript:
+        # Cleanup temp files even on failure
+        if _created_temp_dir:
+            import shutil
+            shutil.rmtree(output_dir, ignore_errors=True)
         return {
-            "status": "error",
-            "message": "Could not get transcript. YouTube captions blocked from cloud IP, and no Granicus MP3 found. Use 'Paste Transcript' instead.",
+            "status": "skipped",
+            "message": "No transcript available — no Granicus MP3 or YouTube captions found.",
             "video_id": video_id,
             "video_title": video_title,
             "video_url": final_url,
@@ -1264,6 +1279,9 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
     )
 
     if not segments:
+        if _created_temp_dir:
+            import shutil
+            shutil.rmtree(output_dir, ignore_errors=True)
         return {
             "status": "error",
             "message": "AI segmentation returned no results",
@@ -1282,7 +1300,25 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
 
     # Save raw transcript to disk for reference
     raw_path = output_dir / f"transcript_{meeting_id}_{video_id}.txt"
-    raw_path.write_text(transcript, encoding="utf-8")
+    try:
+        raw_path.write_text(transcript, encoding="utf-8")
+    except OSError:
+        log.warning("Could not save raw transcript file (disk space?)")
+        raw_path = None
+
+    # ── Cleanup: delete MP3 and other large temp files to free disk ──
+    try:
+        for f in output_dir.glob("*.mp3"):
+            f.unlink(missing_ok=True)
+            log.info(f"  Cleaned up temp MP3: {f.name}")
+        for f in output_dir.glob("*.wav"):
+            f.unlink(missing_ok=True)
+        if _created_temp_dir:
+            import shutil
+            shutil.rmtree(output_dir, ignore_errors=True)
+            log.info(f"  Cleaned up temp dir: {output_dir}")
+    except Exception as cleanup_err:
+        log.warning(f"  Cleanup warning: {cleanup_err}")
 
     return {
         "status": "ok",
@@ -1292,5 +1328,5 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         "transcript_length": transcript_len,
         "items_segmented": len(segments),
         "items_updated": updated,
-        "transcript_file": str(raw_path),
+        "transcript_file": str(raw_path) if raw_path else None,
     }
