@@ -17,19 +17,70 @@ def set_db_path(path):
     DB_PATH = Path(path)
 
 
+def _try_reclaim_disk_space():
+    """Aggressively try to free disk space before any DB writes.
+    Deletes WAL/SHM files if possible, removes stale temp files, etc."""
+    import os, glob
+
+    # 1. Try WAL checkpoint (merges WAL back into main DB, then truncates)
+    try:
+        c = sqlite3.connect(str(DB_PATH))
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        c.close()
+        log.info("WAL checkpoint completed — space reclaimed")
+    except Exception as e:
+        log.warning(f"WAL checkpoint failed: {e}")
+
+    # 2. If WAL file is huge, delete it directly (DB will recreate on next connect)
+    wal_path = str(DB_PATH) + "-wal"
+    shm_path = str(DB_PATH) + "-shm"
+    for f in (wal_path, shm_path):
+        if os.path.exists(f):
+            try:
+                sz = os.path.getsize(f)
+                if sz > 0:
+                    os.remove(f)
+                    log.info(f"Deleted {f} ({sz / 1048576:.1f} MB freed)")
+            except Exception as e:
+                log.warning(f"Could not delete {f}: {e}")
+
+    # 3. Remove stale pdf_cache files older than 30 days to free space
+    from paths import PDF_CACHE_DIR
+    import time
+    cutoff = time.time() - (30 * 86400)
+    freed = 0
+    for pdf in glob.glob(str(PDF_CACHE_DIR / "*.pdf")):
+        try:
+            if os.path.getmtime(pdf) < cutoff:
+                sz = os.path.getsize(pdf)
+                os.remove(pdf)
+                freed += sz
+        except Exception:
+            pass
+    if freed:
+        log.info(f"Cleared {freed / 1048576:.1f} MB of old cached PDFs")
+
+
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode=WAL")
     except sqlite3.OperationalError:
-        # If WAL fails (disk full), try to recover by checkpointing
+        # Disk may be full — try to recover
         try:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.execute("PRAGMA journal_mode=WAL")
         except Exception:
-            log.warning("Could not set WAL mode — disk may be full")
-    conn.execute("PRAGMA foreign_keys=ON")
+            # Fall back to DELETE journal mode (uses less disk space)
+            try:
+                conn.execute("PRAGMA journal_mode=DELETE")
+            except Exception:
+                log.warning("Could not set any journal mode — disk may be full")
+    try:
+        conn.execute("PRAGMA foreign_keys=ON")
+    except Exception:
+        pass
     return conn
 
 
@@ -46,32 +97,60 @@ def get_db():
         conn.close()
 
 
+def _db_has_core_tables() -> bool:
+    """Check if the DB already has core tables (matters, meetings, appearances).
+    If so, we can skip DDL on disk-full restarts."""
+    try:
+        c = sqlite3.connect(str(DB_PATH))
+        c.row_factory = sqlite3.Row
+        tables = {r[0] for r in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        c.close()
+        return {"matters", "meetings", "appearances"}.issubset(tables)
+    except Exception:
+        return False
+
+
 def init_db():
-    """Create all tables if they do not exist, then run migrations."""
+    """Create all tables if they do not exist, then run migrations.
+    On disk-full, skips DDL/migrations if core tables already exist."""
     from schema import DDL_STATEMENTS, MIGRATION_STATEMENTS
 
-    # Checkpoint WAL first to reclaim space (helps recover from disk-full)
+    # Step 1: Try to reclaim disk space before doing anything
     if DB_PATH.exists():
-        try:
-            c = sqlite3.connect(str(DB_PATH))
-            c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            c.close()
-            log.info("WAL checkpoint completed on startup")
-        except Exception as e:
-            log.warning(f"WAL checkpoint failed on startup: {e}")
+        _try_reclaim_disk_space()
 
-    with get_db() as conn:
-        for stmt in DDL_STATEMENTS:
-            conn.execute(stmt)
-        # Always run migrations so existing DBs get new tables
-        for stmt in MIGRATION_STATEMENTS:
-            try:
+    # Step 2: Check if we can skip DDL (existing DB with all tables)
+    already_initialized = DB_PATH.exists() and _db_has_core_tables()
+
+    if already_initialized:
+        # Try migrations but don't crash if disk is full
+        try:
+            with get_db() as conn:
+                for stmt in MIGRATION_STATEMENTS:
+                    try:
+                        conn.execute(stmt)
+                    except Exception:
+                        pass
+        except sqlite3.OperationalError as e:
+            if "disk" in str(e).lower() or "full" in str(e).lower() or "I/O" in str(e):
+                log.warning(f"Disk full — skipping migrations (DB already has core tables): {e}")
+            else:
+                raise
+        log.info(f"Database ready (existing): {DB_PATH}")
+    else:
+        # Fresh DB — must create tables
+        with get_db() as conn:
+            for stmt in DDL_STATEMENTS:
                 conn.execute(stmt)
-            except Exception:
-                pass
-        # One-time fix: normalize M/D/YYYY dates → YYYY-MM-DD and merge dups
-        _normalize_meeting_dates(conn)
-    log.info(f"Database initialized: {DB_PATH}")
+            for stmt in MIGRATION_STATEMENTS:
+                try:
+                    conn.execute(stmt)
+                except Exception:
+                    pass
+            _normalize_meeting_dates(conn)
+        log.info(f"Database initialized (fresh): {DB_PATH}")
 
 
 def _normalize_meeting_dates(conn):
