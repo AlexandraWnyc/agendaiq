@@ -6485,11 +6485,25 @@ def api_chat_send(appearance_id):
             (appearance_id, user, "user", user_msg, 0, now_iso())
         )
 
-    # Build system prompt (keep it lean for speed)
+    # Build system prompt with full item context including PDF text
     title = app_row.get("appearance_title") or app_row.get("short_title") or app_row.get("full_title") or ""
     file_num = app_row.get("matter_file_number") or app_row.get("file_number") or ""
     ai_summary = app_row.get("ai_summary_for_appearance") or ""
     leg_hist = app_row.get("leg_history_summary") or ""
+    analyst_notes = app_row.get("analyst_working_notes") or ""
+    watch_points = app_row.get("watch_points_for_appearance") or ""
+
+    # Load PDF text so the AI can answer detailed questions about the actual document
+    pdf_text = ""
+    pdf_path = app_row.get("item_pdf_local_path") or ""
+    if pdf_path and Path(pdf_path).exists():
+        try:
+            import fitz
+            doc = fitz.open(pdf_path)
+            pdf_text = "\n".join(page.get_text() for page in doc)[:12000]
+            doc.close()
+        except Exception:
+            pass
 
     sys_prompt = (
         "You are a research assistant for the Office of the Commission Auditor (OCA) at Miami-Dade County. "
@@ -6497,10 +6511,16 @@ def api_chat_send(appearance_id):
         "Do NOT use markdown formatting. Use plain text only. For bullets, use dashes.\n\n"
         f"ITEM: {file_num} — {title}\n"
     )
+    if pdf_text:
+        sys_prompt += f"\nFULL DOCUMENT TEXT:\n{pdf_text}\n"
     if ai_summary:
-        sys_prompt += f"\nANALYSIS:\n{ai_summary[:1500]}\n"
+        sys_prompt += f"\nAI ANALYSIS:\n{ai_summary[:2000]}\n"
+    if watch_points:
+        sys_prompt += f"\nWATCH POINTS:\n{watch_points[:500]}\n"
     if leg_hist:
         sys_prompt += f"\nLEGISLATIVE HISTORY:\n{leg_hist[:500]}\n"
+    if analyst_notes:
+        sys_prompt += f"\nANALYST NOTES:\n{analyst_notes[:1000]}\n"
 
     # Build messages array
     messages = [{"role": h["role"], "content": h["content"]} for h in history]
