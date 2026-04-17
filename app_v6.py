@@ -1200,6 +1200,91 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           </div>
         </div>
       </div>
+      <div class="card" style="margin-top:1rem">
+        <div class="ch"><div class="ch-left"><div class="cicon">⚡</div>Power Automate — Teams + Planner</div></div>
+        <div class="cb">
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.85rem;">
+            <label style="margin:0;font-size:.82rem;font-weight:500">Enable Power Automate integration</label>
+            <input type="checkbox" id="pa-enabled" style="width:auto;margin:0;accent-color:var(--blue)">
+          </div>
+          <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:7px;padding:.65rem .9rem;margin-bottom:.75rem;font-size:.78rem;color:#1e40af;line-height:1.5;">
+            <strong>How to set up (bypasses Teams webhook restrictions):</strong><br>
+            1. Open <a href="https://make.powerautomate.com" target="_blank" style="color:#1d4ed8">Power Automate</a> → Create → Instant cloud flow → <b>"When an HTTP request is received"</b><br>
+            2. <b>For Teams notifications:</b> Add action → "Post message in a chat or channel" → select your channel → paste the schema below<br>
+            3. <b>For Planner tasks:</b> Add action → "Create a task" with dynamic content from the trigger → paste the Planner schema below<br>
+            4. Save the flow → copy the HTTP POST URL → paste it below<br><br>
+            <details style="margin-top:.25rem"><summary style="cursor:pointer;font-weight:600;color:#1d4ed8">📋 Teams Flow JSON Schema (click to expand)</summary>
+            <pre style="background:#f8fafc;padding:.5rem;border-radius:4px;margin-top:.35rem;font-size:.7rem;overflow-x:auto;white-space:pre-wrap">{
+  "type": "object",
+  "properties": {
+    "title":      {"type": "string"},
+    "message":    {"type": "string"},
+    "color":      {"type": "string"},
+    "link_url":   {"type": "string"},
+    "link_label": {"type": "string"},
+    "timestamp":  {"type": "string"},
+    "source":     {"type": "string"},
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name":  {"type": "string"},
+          "value": {"type": "string"}
+        }
+      }
+    }
+  }
+}</pre></details>
+            <details style="margin-top:.35rem"><summary style="cursor:pointer;font-weight:600;color:#1d4ed8">📋 Planner Flow JSON Schema (click to expand)</summary>
+            <pre style="background:#f8fafc;padding:.5rem;border-radius:4px;margin-top:.35rem;font-size:.7rem;overflow-x:auto;white-space:pre-wrap">{
+  "type": "object",
+  "properties": {
+    "action":             {"type": "string"},
+    "task_title":         {"type": "string"},
+    "task_title_pattern": {"type": "string"},
+    "assigned_to":        {"type": "string"},
+    "due_date":           {"type": "string"},
+    "meeting_date":       {"type": "string"},
+    "body_name":          {"type": "string"},
+    "status":             {"type": "string"},
+    "planner_status":     {"type": "string"},
+    "appearance_id":      {"type": "integer"},
+    "file_number":        {"type": "string"},
+    "old_status":         {"type": "string"},
+    "new_status":         {"type": "string"},
+    "is_complete":        {"type": "boolean"},
+    "notes":              {"type": "string"},
+    "timestamp":          {"type": "string"},
+    "source":             {"type": "string"},
+    "checklist": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title":         {"type": "string"},
+          "isChecked":     {"type": "boolean"},
+          "appearance_id": {"type": "integer"},
+          "file_number":   {"type": "string"}
+        }
+      }
+    }
+  }
+}</pre></details>
+          </div>
+          <label>AgendaIQ Public URL (for deep links in notifications)</label>
+          <input type="text" id="pa-app-base-url" placeholder="https://your-app.onrender.com">
+          <label style="margin-top:.5rem">Teams Notification Flow URL</label>
+          <input type="text" id="pa-teams-url" placeholder="https://prod-XX.westus.logic.azure.com:443/workflows/...">
+          <label style="margin-top:.5rem">Planner Task Flow URL</label>
+          <input type="text" id="pa-planner-url" placeholder="https://prod-XX.westus.logic.azure.com:443/workflows/...">
+          <div style="display:flex;gap:.5rem;margin-top:.65rem">
+            <button class="btn btn-p btn-sm" onclick="saveSettings()">Save Settings</button>
+            <button class="btn btn-o btn-sm" onclick="testPowerAutomate()">Test Connection</button>
+          </div>
+          <div id="pa-test-result" style="margin-top:.5rem;font-size:.78rem;display:none"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -2024,10 +2109,9 @@ async function bulkAssign() {
       const due=document.getElementById('bulk-assign-due')?.value||'';
       const payload={assigned_to:person,changed_by:currentUser};
       if(due) payload.due_date=due;
-      await Promise.all(ids.map(id=>
-        fetch(`/api/appearance/${id}/workflow`,{method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify(payload)})
-      ));
+      // Use batch endpoint for Planner integration (creates one parent task with subtasks)
+      await fetch('/api/workflow/batch-assign',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({appearance_ids:ids,...payload})});
       loadWorkflow(); loadDashboard();
     }
   );
@@ -4088,6 +4172,11 @@ async function loadSettings() {
   document.getElementById('reminder-days').value=_cfg.reminder_days||7;
   document.getElementById('webhook-enabled').checked=!!_cfg.webhook_enabled;
   document.getElementById('webhook-url').value=_cfg.webhook_url||'';
+  // Power Automate fields
+  document.getElementById('pa-enabled').checked=!!_cfg.pa_enabled;
+  document.getElementById('pa-app-base-url').value=_cfg.pa_app_base_url||'';
+  document.getElementById('pa-teams-url').value=_cfg.pa_teams_webhook_url||'';
+  document.getElementById('pa-planner-url').value=_cfg.pa_planner_webhook_url||'';
   renderTeamList();
 }
 
@@ -4130,6 +4219,11 @@ async function saveSettings(silent=false) {
   _cfg.reminder_days=parseInt(document.getElementById('reminder-days')?.value)||7;
   _cfg.webhook_enabled=document.getElementById('webhook-enabled')?.checked||false;
   _cfg.webhook_url=document.getElementById('webhook-url')?.value||'';
+  // Power Automate settings
+  _cfg.pa_enabled=document.getElementById('pa-enabled')?.checked||false;
+  _cfg.pa_app_base_url=document.getElementById('pa-app-base-url')?.value||'';
+  _cfg.pa_teams_webhook_url=document.getElementById('pa-teams-url')?.value||'';
+  _cfg.pa_planner_webhook_url=document.getElementById('pa-planner-url')?.value||'';
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_cfg)});
   if(!silent)toast('Settings saved','ok');
   loadConfig();
@@ -4147,6 +4241,28 @@ async function testWebhook() {
   const r=await fetch('/api/test-webhook',{method:'POST'});
   const d=await r.json();
   alert(d.ok?'Test message sent! Check your Teams/Slack channel.':'Failed: '+(d.error||'Unknown error'));
+}
+
+async function testPowerAutomate() {
+  await saveSettings(true);
+  const el=document.getElementById('pa-test-result');
+  el.style.display='block';
+  el.innerHTML='<span style="color:#6b7280">Testing...</span>';
+  try {
+    const r=await fetch('/api/test-power-automate',{method:'POST'});
+    const d=await r.json();
+    if(d.ok){
+      const parts=[];
+      if(d.results.teams) parts.push('Teams: '+d.results.teams);
+      if(d.results.planner) parts.push('Planner: '+d.results.planner);
+      const allOk=Object.values(d.results).every(v=>v==='OK'||v==='Not configured');
+      el.innerHTML=`<span style="color:${allOk?'#059669':'#d97706'}">${parts.join(' · ')}</span>`;
+    } else {
+      el.innerHTML=`<span style="color:#dc2626">Failed: ${d.error||'Unknown error'}</span>`;
+    }
+  } catch(e) {
+    el.innerHTML=`<span style="color:#dc2626">Error: ${e.message}</span>`;
+  }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -5081,6 +5197,84 @@ def api_search():
     return jsonify({"type": "list", "data": []})
 
 
+@app.route("/api/workflow/batch-assign", methods=["POST"])
+def api_workflow_batch_assign():
+    """Assign multiple appearances at once. Creates a single Planner task with subtasks."""
+    import workflow as wf
+    from repository import get_appearance_by_id, get_meeting_by_id, get_matter_by_file_number
+    d = request.get_json(force=True)
+    ids = d.get("appearance_ids", [])
+    person = d.get("assigned_to", "")
+    due = d.get("due_date", "")
+    by = d.get("changed_by") or "system"
+
+    if not ids or not person:
+        return jsonify({"error": "appearance_ids and assigned_to required"}), 400
+
+    # Assign each appearance individually (triggers email notifications)
+    items_for_planner = []
+    meeting_date = ""
+    body_name = ""
+    for aid in ids:
+        old_app = get_appearance_by_id(aid) or {}
+        old_assignee = old_app.get("assigned_to") or ""
+
+        wf.assign_appearance(aid, person, by)
+        if due:
+            wf.set_due_date(aid, due, by)
+
+        # Collect enriched data for Planner task
+        new_app = get_appearance_by_id(aid) or {}
+        mt = get_meeting_by_id(new_app.get("meeting_id", 0)) or {}
+        matter = get_matter_by_file_number(new_app.get("file_number", "")) or {}
+        enriched = dict(new_app)
+        enriched.setdefault("short_title", matter.get("short_title", ""))
+        enriched["meeting_date"] = mt.get("meeting_date", "")
+        enriched["body_name"] = mt.get("body_name", "")
+
+        if not meeting_date:
+            meeting_date = mt.get("meeting_date", "")
+        if not body_name:
+            body_name = mt.get("body_name", "")
+
+        # Email notification for new assignments
+        if person != old_assignee:
+            try:
+                notifications.send_assignment_notification(enriched)
+            except Exception:
+                pass
+
+        items_for_planner.append({
+            "id": aid,
+            "file_number": new_app.get("file_number", ""),
+            "item_number": (new_app.get("committee_item_number") or
+                           new_app.get("bcc_item_number") or
+                           new_app.get("raw_agenda_item_number") or ""),
+            "title": (enriched.get("short_title") or
+                     new_app.get("appearance_title") or "")[:80],
+        })
+
+    # Power Automate: one Teams message + one Planner task with all items as subtasks
+    try:
+        import planner_sync as ps
+        # Build enriched appearance for the Teams message (use first item)
+        first = get_appearance_by_id(ids[0]) or {}
+        mt = get_meeting_by_id(first.get("meeting_id", 0)) or {}
+        matter = get_matter_by_file_number(first.get("file_number", "")) or {}
+        enriched = dict(first)
+        enriched.setdefault("short_title", matter.get("short_title", ""))
+        enriched["meeting_date"] = mt.get("meeting_date", "")
+        enriched["body_name"] = mt.get("body_name", "")
+        if due:
+            enriched["due_date"] = due
+
+        ps.notify_assignment(enriched, items_in_batch=items_for_planner)
+    except Exception as _pe:
+        app.logger.warning(f"Planner batch sync error: {_pe}")
+
+    return jsonify({"ok": True, "count": len(ids)})
+
+
 @app.route("/api/appearance/<int:app_id>")
 def api_appearance(app_id):
     from repository import get_appearance_by_id, get_matter_by_file_number, get_meeting_by_id
@@ -5155,6 +5349,12 @@ def api_workflow_update(app_id):
         # 1. New assignment → notify assignee
         if new_assignee and new_assignee != old_assignee:
             notifications.send_assignment_notification(enriched)
+            # Power Automate: Teams message + Planner task
+            try:
+                import planner_sync as ps
+                ps.notify_assignment(enriched)
+            except Exception as _pe:
+                app.logger.warning(f"Planner sync (assign) error: {_pe}")
 
         # 2. Status → Draft Complete → notify reviewer
         if new_status == "Draft Complete" and old_status != "Draft Complete":
@@ -5167,6 +5367,14 @@ def api_workflow_update(app_id):
         # 4. Status → Finalized → notify analyst of approval
         if new_status == "Finalized" and old_status in ("Draft Complete", "In Review"):
             notifications.send_approval_notification(enriched)
+
+        # 5. Power Automate: status sync to Planner for any status change
+        if new_status != old_status:
+            try:
+                import planner_sync as ps
+                ps.notify_status_change(enriched, old_status, new_status)
+            except Exception as _pe:
+                app.logger.warning(f"Planner sync (status) error: {_pe}")
 
     except Exception as _e:
         app.logger.warning(f"Notification error: {_e}")
@@ -6014,6 +6222,16 @@ def api_test_webhook():
         cfg = notifications.load_config()
         result = notifications.test_webhook(cfg)
         return jsonify(result)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/test-power-automate", methods=["POST"])
+def api_test_power_automate():
+    try:
+        import planner_sync as ps
+        result = ps.test_power_automate()
+        return jsonify({"ok": True, "results": result})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 

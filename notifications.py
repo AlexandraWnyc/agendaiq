@@ -40,6 +40,10 @@ DEFAULT_CONFIG = {
     "team_members": [],
     "webhook_enabled": False,
     "webhook_url": "",
+    "pa_enabled": False,
+    "pa_teams_webhook_url": "",
+    "pa_planner_webhook_url": "",
+    "pa_app_base_url": "",
 }
 
 
