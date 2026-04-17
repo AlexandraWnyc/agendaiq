@@ -1271,16 +1271,17 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           title="Search for this meeting's recording and add per-item discussion summaries to notes">
           🎙 Backfill Transcript
         </button>
-        <button class="btn btn-o btn-sm" onclick="backfillMeetingUrls()"
+        <button class="btn btn-o btn-sm" id="md-urls-btn" onclick="backfillMeetingUrls()"
           title="Fetch Legistar URLs and lifecycle history for all items in this meeting">
           🔗 Backfill URLs + Lifecycle
         </button>
-        <button class="btn btn-o btn-sm" onclick="reanalyzeMeetingItems()"
+        <button class="btn btn-o btn-sm" id="md-reanalyze-btn" onclick="reanalyzeMeetingItems()"
           title="Re-run AI analysis on all items in this meeting">
           🤖 Re-analyze All Items
         </button>
       </div>
     </div>
+    <div id="md-operation-progress" style="display:none;margin:0 1rem .5rem;padding:.5rem .75rem;border-radius:.5rem;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem"></div>
     <div class="cb" id="md-artifacts"></div>
   </div>
 
@@ -2503,42 +2504,97 @@ async function reanalyzeAppearance() {
   }
 }
 
+function _mdProgress(html, show=true) {
+  const el = document.getElementById('md-operation-progress');
+  if (!el) return;
+  el.style.display = show ? 'block' : 'none';
+  if (html) el.innerHTML = html;
+}
+
 async function backfillMeetingUrls() {
   const mid = currentMeetingId;
   if (!mid) { toast('No meeting loaded', 'err'); return; }
-  toast('Starting URL + lifecycle backfill for this meeting…', 'info');
+  const btn = document.getElementById('md-urls-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '🔗 Running…'; }
+  _mdProgress('<b>🔗 URLs + Lifecycle Backfill</b><br>Starting…');
+
   try {
     const r = await fetch('/api/backfill/urls-and-lifecycle', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({meeting_id: mid})
     });
     const d = await r.json();
-    if (d.ok) {
-      toast('Backfill started — poll progress for updates', 'ok');
-      const poll = setInterval(async () => {
+    if (!d.ok) {
+      _mdProgress('<b>🔗 URLs + Lifecycle</b><br><span style="color:#dc2626">❌ ' + esc(d.error||'Failed') + '</span>');
+      if (btn) { btn.disabled = false; btn.textContent = '🔗 Backfill URLs + Lifecycle'; }
+      return;
+    }
+    // Poll progress
+    const poll = setInterval(async () => {
+      try {
         const pr = await fetch('/api/backfill/progress');
         const pd = await pr.json();
-        if (pd.status === 'done' || pd.status === 'error') {
+        const pct = pd.percent || 0;
+        const done = pd.done || 0;
+        const total = pd.total || 0;
+        _mdProgress(`<b>🔗 URLs + Lifecycle Backfill</b>
+          <div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">
+            <div style="width:${pct}%;height:100%;background:#6366f1;transition:width .3s"></div></div>
+          <span style="color:#4338ca">${done}/${total} items · ${pct}% complete</span>`);
+        if (pd.summary || pd.error || (!pd.running && pct >= 100)) {
           clearInterval(poll);
-          toast(pd.status === 'done' ? 'URL + lifecycle backfill complete' : 'Backfill failed', pd.status === 'done' ? 'ok' : 'err');
-          loadMeetingDetail(mid);
+          const s = pd.summary || {};
+          _mdProgress(`<b>🔗 URLs + Lifecycle</b><br>
+            <span style="color:#15803d">✓ Done</span> — ${s.matters||0} matters · ${s.urls_filled||0} links · ${s.pdfs_downloaded||0} PDFs · ${s.timeline_events||0} lifecycle events`);
+          if (btn) { btn.disabled = false; btn.textContent = '🔗 Backfill URLs + Lifecycle'; }
+          if (currentMeetingId) openMeeting(currentMeetingId);
+          setTimeout(() => _mdProgress('', false), 10000);
         }
-      }, 3000);
-    } else { toast('Backfill failed: ' + (d.error||''), 'err'); }
-  } catch(e) { toast('Backfill error: ' + e.message, 'err'); }
+      } catch(_){}
+    }, 2000);
+  } catch(e) {
+    _mdProgress('<b>🔗 URLs + Lifecycle</b><br><span style="color:#dc2626">❌ ' + esc(e.message) + '</span>');
+    if (btn) { btn.disabled = false; btn.textContent = '🔗 Backfill URLs + Lifecycle'; }
+  }
 }
 
 async function reanalyzeMeetingItems() {
   const mid = currentMeetingId;
   if (!mid) { toast('No meeting loaded', 'err'); return; }
-  toast('Starting AI re-analysis for all items in this meeting…', 'info');
+  const btn = document.getElementById('md-reanalyze-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '🤖 Running…'; }
+  _mdProgress('<b>🤖 AI Re-analysis</b><br>Queuing all items…');
+
   try {
     const r = await fetch('/api/meeting/' + mid + '/reanalyze-all', {method:'POST'});
     const d = await r.json();
-    if (d.ok) {
-      toast(`Re-analysis queued for ${d.count||'all'} items — this may take a few minutes`, 'ok');
-    } else { toast('Re-analysis failed: ' + (d.error||''), 'err'); }
-  } catch(e) { toast('Error: ' + e.message, 'err'); }
+    if (!d.ok) {
+      _mdProgress('<b>🤖 AI Re-analysis</b><br><span style="color:#dc2626">❌ ' + esc(d.error||'Failed') + '</span>');
+      if (btn) { btn.disabled = false; btn.textContent = '🤖 Re-analyze All Items'; }
+      return;
+    }
+    const total = d.count || 0;
+    let elapsed = 0;
+    _mdProgress(`<b>🤖 AI Re-analysis</b><br><span style="color:#4338ca">Analyzing ${total} items — this may take a few minutes…</span>`);
+    // Poll — this endpoint runs sequentially so we estimate progress
+    const poll = setInterval(() => {
+      elapsed += 3;
+      const estPct = Math.min(95, Math.round((elapsed / (total * 20)) * 100));
+      _mdProgress(`<b>🤖 AI Re-analysis</b>
+        <div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">
+          <div style="width:${estPct}%;height:100%;background:#6366f1;transition:width .3s"></div></div>
+        <span style="color:#4338ca">~${estPct}% · ${elapsed}s elapsed · analyzing ${total} items…</span>`);
+      if (elapsed > total * 25 + 60) {
+        clearInterval(poll);
+        _mdProgress(`<b>🤖 AI Re-analysis</b><br><span style="color:#15803d">✓ Should be complete — refresh to see results</span>`);
+        if (btn) { btn.disabled = false; btn.textContent = '🤖 Re-analyze All Items'; }
+        if (currentMeetingId) openMeeting(currentMeetingId);
+      }
+    }, 3000);
+  } catch(e) {
+    _mdProgress('<b>🤖 AI Re-analysis</b><br><span style="color:#dc2626">❌ ' + esc(e.message) + '</span>');
+    if (btn) { btn.disabled = false; btn.textContent = '🤖 Re-analyze All Items'; }
+  }
 }
 
 async function renderDrawerLifecycle(body, appData) {
@@ -4103,6 +4159,8 @@ async function _txSubmitPaste() {
 
 function _txStartPolling(panel, btn) {
   let _txPollCount = 0;
+  let _lastMsg = '';
+  let _stuckCount = 0;
   _txPollTimer = setInterval(async () => {
     _txPollCount++;
     try {
@@ -4113,17 +4171,27 @@ function _txStartPolling(panel, btn) {
         _handleTranscriptResult(pd.result, panel, btn);
         return;
       }
-      if (pd.phase === 'transcript') {
-        panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
-          `<div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">` +
-          `<div style="width:${pd.pct||0}%;height:100%;background:#6366f1;transition:width .3s"></div></div>` +
-          `<span style="color:#4338ca">${esc(pd.msg || 'Working…')}</span>`;
-      }
-      // Safety: if running > 15 min with no completion, stop polling
-      if (_txPollCount > 750) {
+      const msg = pd.msg || 'Working…';
+      panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
+        `<div style="margin:.3rem 0;background:#e0e7ff;border-radius:4px;height:6px;overflow:hidden">` +
+        `<div style="width:${pd.pct||0}%;height:100%;background:#6366f1;transition:width .3s"></div></div>` +
+        `<span style="color:#4338ca">${esc(msg)}</span>`;
+
+      // Detect stuck state: same message for 60+ seconds
+      if (msg === _lastMsg) { _stuckCount++; } else { _stuckCount = 0; _lastMsg = msg; }
+      if (_stuckCount > 50) {  // ~60s at 1.2s interval
         clearInterval(_txPollTimer); _txPollTimer = null;
         panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
-          '<span style="color:#b45309">⚠ Taking longer than expected. Refresh the page and check item notes — they may already be saved.</span>';
+          `<span style="color:#b45309">⚠ Appears stuck at "${esc(msg)}". This may be a disk space issue.</span><br>` +
+          '<span style="font-size:.75rem;color:#64748b">Refresh the page and check item notes — they may already be saved.</span>';
+        if (btn) btn.disabled = false;
+        return;
+      }
+      // Safety: absolute max 10 min
+      if (_txPollCount > 500) {
+        clearInterval(_txPollTimer); _txPollTimer = null;
+        panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>' +
+          '<span style="color:#b45309">⚠ Taking longer than expected. Refresh the page and check item notes.</span>';
         if (btn) btn.disabled = false;
       }
     } catch(_) {}
