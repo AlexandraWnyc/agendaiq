@@ -312,6 +312,16 @@ MIGRATION_STATEMENTS = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_chat_app_user ON chat_messages(appearance_id, username)",
     "CREATE INDEX IF NOT EXISTS idx_chat_created  ON chat_messages(created_at)",
+
+    # ── Workflow improvements: separate internal notes, resubmission, revision tracking
+    # internal_notes: private scratch pad (never shared in review)
+    "ALTER TABLE appearances ADD COLUMN internal_notes TEXT",
+    # resubmission_comment: analyst's comment when resubmitting after revision
+    "ALTER TABLE appearances ADD COLUMN resubmission_comment TEXT",
+    # debrief_snapshot: snapshot of AI summary at submission time for change tracking
+    "ALTER TABLE appearances ADD COLUMN debrief_snapshot_on_submit TEXT",
+    # analyst_notes_snapshot: snapshot of analyst notes at submission time
+    "ALTER TABLE appearances ADD COLUMN analyst_notes_snapshot_on_submit TEXT",
 ]
 
 # Meeting package status values

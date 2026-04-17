@@ -280,9 +280,9 @@ tr.clickable:hover td{background:var(--blue-lt)}
 .b-New{background:#e0f2fe;color:#0369a1}
 .b-Assigned{background:#fef3c7;color:#92400e}
 .b-InProgress{background:#ede9fe;color:#5b21b6}
-.b-DraftComplete{background:#dcfce7;color:#166534}
-.b-InReview{background:#fce7f3;color:#9d174d}
-.b-NeedsRevision{background:#fef3c7;color:#92400e}
+.b-DraftComplete{background:#fffbeb;color:#b45309}
+.b-InReview{background:#dbeafe;color:#1d4ed8}
+.b-NeedsRevision{background:#fef2f2;color:#dc2626}
 .b-Finalized{background:var(--green-lt);color:var(--green)}
 .b-Archived{background:var(--gray-100);color:var(--gray-400)}
 .b-cf{background:var(--orange-lt);color:var(--orange)}
@@ -486,9 +486,9 @@ tr.wf-group-hdr td{background:linear-gradient(90deg,#eef2ff 0%,#f8fafc 60%)!impo
 .b-New{background:#e0f2fe;color:#0c4a6e;border-color:#bae6fd}
 .b-Assigned{background:#fef3c7;color:#854d0e;border-color:#fde68a}
 .b-InProgress{background:#ede9fe;color:#4c1d95;border-color:#ddd6fe}
-.b-DraftComplete{background:#dcfce7;color:#14532d;border-color:#bbf7d0}
-.b-InReview{background:#fce7f3;color:#831843;border-color:#fbcfe8}
-.b-NeedsRevision{background:#fef3c7;color:#78350f;border-color:#fde68a}
+.b-DraftComplete{background:#fffbeb;color:#b45309;border-color:#fde68a}
+.b-InReview{background:#dbeafe;color:#1d4ed8;border-color:#93c5fd}
+.b-NeedsRevision{background:#fef2f2;color:#dc2626;border-color:#fca5a5}
 .b-Finalized{background:#dcfce7;color:#064e3b;border-color:#86efac}
 .b-Archived{background:#f1f5f9;color:#475569;border-color:#e2e8f0}
 .b-cf{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
@@ -3058,26 +3058,65 @@ function renderDrawerNotes(body, app) {
   const isReviewer = currentUser && currentUser === reviewer;
   const isAnalyst = currentUser && currentUser === (app?.assigned_to || '');
   const reviewerNotes = app?.reviewer_notes || '';
+  const internalNotes = app?.internal_notes || '';
+  const resubComment = app?.resubmission_comment || '';
+  const debriefSnapshot = app?.debrief_snapshot_on_submit || '';
+  const notesSnapshot = app?.analyst_notes_snapshot_on_submit || '';
 
   // Workflow state machine — determine what actions are available
   const analystCanEdit = ['New','Assigned','In Progress','Needs Revision'].includes(status);
   const canSubmit = ['In Progress','Needs Revision'].includes(status);
+  const isNeedsRevision = status === 'Needs Revision';
   const canAcceptAssignment = status === 'Assigned' && isAnalyst;
   const reviewerCanAct = ['Draft Complete','In Review'].includes(status) && isReviewer;
   const canAcceptReview = status === 'Draft Complete' && isReviewer;
   const isFinalized = status === 'Finalized' || status === 'Archived';
 
-  // Status badge colors
+  // Status badge colors — Draft Complete=orange, In Review=blue, Needs Revision=red
   const statusColors = {
     'New':'#64748b','Assigned':'#2563eb','In Progress':'#7c3aed',
-    'Draft Complete':'#059669','In Review':'#db2777','Needs Revision':'#d97706',
+    'Draft Complete':'#d97706','In Review':'#2563eb','Needs Revision':'#dc2626',
     'Finalized':'#059669','Archived':'#64748b'
   };
   const statusBg = {
     'New':'#f1f5f9','Assigned':'#eff6ff','In Progress':'#f5f3ff',
-    'Draft Complete':'#f0fdf4','In Review':'#fdf2f8','Needs Revision':'#fffbeb',
+    'Draft Complete':'#fffbeb','In Review':'#eff6ff','Needs Revision':'#fef2f2',
     'Finalized':'#f0fdf4','Archived':'#f1f5f9'
   };
+
+  // Change summary: if reviewer is looking and there's a snapshot, compute diff
+  let changesSummaryHtml = '';
+  if (reviewerCanAct && (debriefSnapshot || notesSnapshot)) {
+    const currentDebrief = app?.ai_summary_for_appearance || '';
+    const currentNotes = wn;
+    const changes = [];
+    if (debriefSnapshot && currentDebrief !== debriefSnapshot) {
+      changes.push('Agenda Debrief was modified');
+    } else if (debriefSnapshot) {
+      changes.push('Agenda Debrief: no changes');
+    }
+    if (notesSnapshot && currentNotes !== notesSnapshot) {
+      changes.push('Analyst Notes were modified');
+    } else if (notesSnapshot) {
+      changes.push('Analyst Notes: no changes');
+    }
+    if (resubComment) {
+      changes.push('Analyst comment: "' + resubComment + '"');
+    }
+    if (changes.length) {
+      changesSummaryHtml = `
+      <div style="background:#eff6ff;border:2px solid #93c5fd;border-radius:10px;padding:.65rem .85rem;margin-bottom:.75rem">
+        <div style="font-size:.78rem;font-weight:700;color:#1e40af;margin-bottom:.35rem">REVISION CHANGES SUMMARY</div>
+        ${changes.map(c => {
+          const isModified = c.includes('was modified');
+          const isNoChange = c.includes('no changes');
+          const color = isModified ? '#dc2626' : (isNoChange ? '#059669' : '#475569');
+          const icon = isModified ? '✏' : (isNoChange ? '✓' : '💬');
+          return '<div style="font-size:.8rem;color:'+color+';line-height:1.6">'+icon+' '+esc(c)+'</div>';
+        }).join('')}
+      </div>`;
+    }
+  }
 
   body.innerHTML = `
     <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;padding:.6rem .85rem;
@@ -3099,20 +3138,31 @@ function renderDrawerNotes(body, app) {
       </div>
       <div style="display:flex;gap:.4rem;flex-wrap:wrap">
         ${canAcceptAssignment ? `<button class="btn btn-sm" style="background:#2563eb;color:#fff;border:none" onclick="acceptAssignment()">✓ Accept Assignment</button>` : ''}
-        ${canSubmit ? `<button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="submitForReview()">📤 Submit for Review</button>` : ''}
-        ${canAcceptReview ? `<button class="btn btn-sm" style="background:#db2777;color:#fff;border:none" onclick="acceptReview()">📋 Begin Review</button>` : ''}
+        ${canSubmit && !isNeedsRevision ? `<button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="submitForReview()">📤 Submit for Review</button>` : ''}
+        ${canAcceptReview ? `<button class="btn btn-sm" style="background:#2563eb;color:#fff;border:none" onclick="acceptReview()">📋 Begin Review</button>` : ''}
         ${status==='In Review' && isReviewer ? `
           <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="reviewerAction('approve')">✓ Approve & Finalize</button>
-          <button class="btn btn-sm" style="background:#d97706;color:#fff;border:none" onclick="reviewerAction('revise')">↩ Request Revision</button>
+          <button class="btn btn-sm" style="background:#dc2626;color:#fff;border:none" onclick="reviewerAction('revise')">↩ Request Revision</button>
         ` : ''}
       </div>
     </div>
 
     ${status === 'Needs Revision' && reviewerNotes ? `
-    <div style="background:#fef3c7;border:2px solid #f59e0b;border-radius:10px;padding:.65rem .85rem;margin-bottom:.75rem">
-      <div style="font-size:.78rem;font-weight:700;color:#92400e;margin-bottom:.35rem">⚠ REVISION REQUESTED BY ${esc(reviewer).toUpperCase()}</div>
-      <div style="font-size:.8rem;color:#78350f;line-height:1.5;white-space:pre-wrap">${esc(reviewerNotes)}</div>
+    <div style="background:#fef2f2;border:2px solid #fca5a5;border-radius:10px;padding:.65rem .85rem;margin-bottom:.75rem">
+      <div style="font-size:.78rem;font-weight:700;color:#991b1b;margin-bottom:.35rem">⚠ REVISION REQUESTED BY ${esc(reviewer).toUpperCase()}</div>
+      <div style="font-size:.8rem;color:#7f1d1d;line-height:1.5;white-space:pre-wrap">${esc(reviewerNotes)}</div>
     </div>` : ''}
+
+    ${isNeedsRevision ? `
+    <div style="background:#fffbeb;border:2px solid #fde68a;border-radius:10px;padding:.65rem .85rem;margin-bottom:.75rem">
+      <div style="font-size:.72rem;font-weight:600;color:#92400e;margin-bottom:.3rem;text-transform:uppercase;letter-spacing:.3px">YOUR RESPONSE TO REVIEWER</div>
+      <textarea id="edit-resubmission-comment"
+        style="min-height:80px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem;border-color:#fde68a"
+        placeholder="Describe what you changed and why...">${esc(resubComment)}</textarea>
+      <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="resubmitForReview()">📤 Resubmit for Review</button>
+    </div>` : ''}
+
+    ${changesSummaryHtml}
 
     ${reviewerCanAct ? `
     <div style="background:#f0fdf4;border:2px solid #22c55e;border-radius:10px;padding:.75rem 1rem;margin-bottom:.85rem">
@@ -3135,8 +3185,8 @@ function renderDrawerNotes(body, app) {
     <div class="ds">
       <div class="ds-title">
         <span>ANALYST NOTES</span>
-        ${['Draft Complete','In Review'].includes(status) ? '<span style="font-size:.68rem;color:#059669;font-weight:400;text-transform:none;letter-spacing:0">✓ Submitted</span>' : ''}
-        ${status==='Needs Revision' ? '<span style="font-size:.68rem;color:#d97706;font-weight:400;text-transform:none;letter-spacing:0">⚠ Revision requested</span>' : ''}
+        ${['Draft Complete','In Review'].includes(status) ? '<span style="font-size:.68rem;color:#d97706;font-weight:400;text-transform:none;letter-spacing:0">✓ Submitted</span>' : ''}
+        ${status==='Needs Revision' ? '<span style="font-size:.68rem;color:#dc2626;font-weight:400;text-transform:none;letter-spacing:0">⚠ Revision requested</span>' : ''}
         ${isFinalized ? '<span style="font-size:.68rem;color:#059669;font-weight:400;text-transform:none;letter-spacing:0">✓ Finalized</span>' : ''}
       </div>
       <textarea id="edit-working-notes"
@@ -3152,10 +3202,10 @@ function renderDrawerNotes(body, app) {
     </div>
     <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
     <div class="ds">
-      <div class="ds-title">INTERNAL NOTES</div>
+      <div class="ds-title">INTERNAL NOTES <span style="font-size:.65rem;color:#94a3b8;font-weight:400;text-transform:none;letter-spacing:0">(private — not shared in review)</span></div>
       <textarea id="edit-internal-notes" rows="4"
         style="min-height:80px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem"
-        placeholder="Private notes — not included in exports or review submissions...">${esc(reviewerNotes)}</textarea>
+        placeholder="Private scratch pad — only you can see these notes...">${esc(internalNotes)}</textarea>
       <div style="display:flex;gap:.4rem;align-items:center">
         <button class="btn btn-o btn-sm" onclick="saveInternalNotes()">Save Note</button>
         <span id="in-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
@@ -3187,15 +3237,17 @@ async function acceptAssignment() {
 async function submitForReview() {
   if (!currentAppId) return;
   const val = document.getElementById('edit-working-notes')?.value || '';
+  // Save the analyst notes
   await fetch('/api/appearance/' + currentAppId + '/notes', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({analyst_working_notes: val, replace: true, changed_by: currentUser})
   });
-  await fetch('/api/appearance/' + currentAppId + '/workflow', {
+  // Snapshot current state and change status
+  await fetch('/api/appearance/' + currentAppId + '/submit-for-review', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({status: 'Draft Complete', changed_by: currentUser})
+    body: JSON.stringify({changed_by: currentUser})
   });
-  toast('Submitted for review — Rolando will be notified', 'ok');
+  toast('Submitted for review — ' + (_drData?.appData?.reviewer||'Rolando') + ' will be notified', 'ok');
   const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
   _drData.appData = ar.appearance;
   renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
@@ -3619,12 +3671,38 @@ async function addNote(type) {
 async function saveInternalNotes() {
   if(!currentAppId)return;
   const val = document.getElementById('edit-internal-notes')?.value || '';
-  await fetch(`/api/appearance/${currentAppId}/notes`,{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({reviewer_notes:val, replace:true, changed_by:currentUser})
+  try {
+    const r = await fetch(`/api/appearance/${currentAppId}/notes`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({internal_notes:val, replace:true, changed_by:currentUser})
+    });
+    if (!r.ok) { toast('Save failed — check disk space', 'err'); return; }
+    const m=document.getElementById('in-save-msg');
+    if(m){m.textContent='✓ Saved';m.style.display='';setTimeout(()=>m.style.display='none',2500);}
+    const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+    _drData.appData=ar.appearance;
+  } catch(e) { toast('Save failed: ' + (e.message||e), 'err'); }
+}
+
+async function resubmitForReview() {
+  if (!currentAppId) return;
+  const comment = document.getElementById('edit-resubmission-comment')?.value?.trim() || '';
+  const val = document.getElementById('edit-working-notes')?.value || '';
+  // Save the analyst notes
+  await fetch('/api/appearance/' + currentAppId + '/notes', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({analyst_working_notes: val, replace: true, changed_by: currentUser})
   });
-  const m=document.getElementById('in-save-msg');
-  if(m){m.textContent='✓ Saved';m.style.display='';setTimeout(()=>m.style.display='none',2500);}
+  // Save resubmission comment and snapshot, then change status
+  await fetch('/api/appearance/' + currentAppId + '/resubmit', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({resubmission_comment: comment, changed_by: currentUser})
+  });
+  toast('Resubmitted for review — ' + (_drData?.appData?.reviewer||'Rolando') + ' will be notified', 'ok');
+  const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
+  _drData.appData = ar.appearance;
+  renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
+  loadDashboard(); loadWorkflow();
 }
 
 async function reanalyzeAllAppearances() {
@@ -5075,10 +5153,77 @@ def api_notes_update(app_id):
             wf.replace_working_notes(app_id, d["analyst_working_notes"], changed_by=by)
         if "reviewer_notes" in d:
             wf.replace_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
+        if "internal_notes" in d:
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE appearances SET internal_notes=?, updated_at=? WHERE id=?",
+                    (d["internal_notes"], now_iso(), app_id)
+                )
     else:
         if d.get("working_notes"):   wf.append_working_notes(app_id, d["working_notes"], changed_by=by)
         if d.get("reviewer_notes"):  wf.append_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
     if "finalized_brief" in d:   wf.set_finalized_brief(app_id, d.get("finalized_brief") or "", changed_by=by)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/appearance/<int:app_id>/submit-for-review", methods=["POST"])
+def api_submit_for_review(app_id):
+    """Snapshot current debrief + notes state, then change status to Draft Complete."""
+    import workflow as wf
+    d = request.get_json(force=True)
+    by = d.get("changed_by") or "system"
+    now = now_iso()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT ai_summary_for_appearance, analyst_working_notes FROM appearances WHERE id=?",
+            (app_id,)
+        ).fetchone()
+        if row:
+            conn.execute(
+                """UPDATE appearances SET
+                   debrief_snapshot_on_submit=?,
+                   analyst_notes_snapshot_on_submit=?,
+                   resubmission_comment=NULL,
+                   updated_at=?
+                   WHERE id=?""",
+                (row["ai_summary_for_appearance"] or "",
+                 row["analyst_working_notes"] or "",
+                 now, app_id)
+            )
+    wf.set_workflow_status(app_id, "Draft Complete", changed_by=by)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/appearance/<int:app_id>/resubmit", methods=["POST"])
+def api_resubmit_for_review(app_id):
+    """Save resubmission comment, re-snapshot, change status to Draft Complete."""
+    import workflow as wf
+    d = request.get_json(force=True)
+    by = d.get("changed_by") or "system"
+    comment = d.get("resubmission_comment", "")
+    now = now_iso()
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT ai_summary_for_appearance, analyst_working_notes FROM appearances WHERE id=?",
+            (app_id,)
+        ).fetchone()
+        if row:
+            conn.execute(
+                """UPDATE appearances SET
+                   resubmission_comment=?,
+                   debrief_snapshot_on_submit=?,
+                   analyst_notes_snapshot_on_submit=?,
+                   updated_at=?
+                   WHERE id=?""",
+                (comment,
+                 row["ai_summary_for_appearance"] or "",
+                 row["analyst_working_notes"] or "",
+                 now, app_id)
+            )
+    wf.set_workflow_status(app_id, "Draft Complete", changed_by=by)
+    wf.log_history(app_id, "resubmit",
+                   note=f"Resubmitted after revision. Comment: {comment[:200]}" if comment else "Resubmitted after revision",
+                   changed_by=by)
     return jsonify({"ok": True})
 
 
