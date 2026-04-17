@@ -1128,6 +1128,10 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <option value="7">Due in 7 days</option>
         <option value="30">Due in 30 days</option>
       </select></div>
+    <div><label style="margin-bottom:.2rem">Meeting</label>
+      <select id="wf-f-meeting" onchange="loadWorkflow()" style="margin:0"><option value="">All Meetings</option></select></div>
+    <div style="flex:1;min-width:140px"><label style="margin-bottom:.2rem">Search</label>
+      <input type="text" id="wf-f-search" placeholder="File #, title, BCC #…" oninput="loadWorkflow()" style="margin:0;font-size:.82rem"></div>
     <div style="margin-left:auto;display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap">
       <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="showReviewQueue()" title="Items awaiting your review">📋 My Review Queue</button>
       <button class="btn btn-o btn-sm" onclick="bulkAssign()">Bulk Assign</button>
@@ -1389,10 +1393,21 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         </button>
       </div>
     </div>
+    <div style="padding:.5rem .75rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
+      <select id="mtg-f-body" onchange="filterMeetingsTable()" style="margin:0;font-size:.82rem;min-width:160px">
+        <option value="">All Bodies</option></select>
+      <select id="mtg-f-status" onchange="filterMeetingsTable()" style="margin:0;font-size:.82rem;min-width:120px">
+        <option value="">All Statuses</option>
+        <option>Draft</option><option>In Progress</option>
+        <option>Final Ready</option><option>Final Generated</option>
+      </select>
+      <input type="text" id="mtg-f-search" placeholder="Search meetings…" oninput="filterMeetingsTable()"
+        style="margin:0;font-size:.82rem;flex:1;min-width:140px;max-width:260px">
+    </div>
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Meeting</th><th>Date</th><th>Body</th>
+          <th>Date</th><th>Body</th><th>Type</th>
           <th>Items</th><th>Progress</th><th>Package Status</th>
           <th>Exports</th><th></th>
         </tr></thead>
@@ -2100,7 +2115,36 @@ async function loadWorkflow() {
   else if(assigned==='unassigned') url+=`assigned=__unassigned__&`;
   else if(assigned && assigned!=='me' && assigned!=='reviewer:me') url+=`assigned=${encodeURIComponent(assigned)}&`;
   if(due) url+=`due=${encodeURIComponent(due)}&`;
-  const r=await fetch(url); const d=await r.json();
+  const r=await fetch(url); let d=await r.json();
+
+  // Populate meeting filter dropdown (once per load)
+  const mtgSel=document.getElementById('wf-f-meeting');
+  const prevMtgVal=mtgSel.value;
+  const mtgSet=new Set();
+  d.forEach(a=>{ if(a.body_name&&a.meeting_date) mtgSet.add(`${a.meeting_date}||${a.body_name}`); });
+  const mtgOpts=[...mtgSet].sort().reverse();
+  mtgSel.innerHTML='<option value="">All Meetings</option>'+mtgOpts.map(k=>{
+    const [dt,bn]=k.split('||');
+    return `<option value="${esc(k)}"${k===prevMtgVal?' selected':''}>${fmtDate(dt)} — ${esc(bn)}</option>`;
+  }).join('');
+
+  // Client-side meeting filter
+  const mtgFilter=document.getElementById('wf-f-meeting').value;
+  if(mtgFilter){
+    const [fdt,fbn]=mtgFilter.split('||');
+    d=d.filter(a=>a.meeting_date===fdt&&a.body_name===fbn);
+  }
+
+  // Client-side search filter
+  const q=(document.getElementById('wf-f-search').value||'').toLowerCase().trim();
+  if(q){
+    d=d.filter(a=>{
+      const hay=[a.file_number,a.short_title,a.appearance_title,a.bcc_item_number,
+        a.committee_item_number,a.raw_agenda_item_number,a.assigned_to,a.sponsor,a.body_name].join(' ').toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
   document.getElementById('wf-count').textContent=`${d.length} item(s)`;
   const tb=document.getElementById('wf-tbody');
   if(!d.length){
@@ -2152,8 +2196,9 @@ async function loadWorkflow() {
     const total=rows.length;
     const pct=total?Math.round(100*finalized/total):0;
     const gid=`wf-grp-${mid||(dt+body).replace(/\\W/g,'')}`;
-    const header=`<tr class="wf-group-hdr" style="background:linear-gradient(90deg,#eef2ff,#f8fafc);cursor:pointer" onclick="document.querySelectorAll('.${gid}').forEach(el=>el.style.display=el.style.display==='none'?'':'none')">
+    const header=`<tr class="wf-group-hdr" style="background:linear-gradient(90deg,#eef2ff,#f8fafc);cursor:pointer" onclick="const els=document.querySelectorAll('.${gid}');const show=els[0]&&els[0].style.display==='none';els.forEach(el=>el.style.display=show?'':'none');this.querySelector('.wf-caret').textContent=show?'▼':'▶'">
       <td colspan="11" style="padding:.55rem .75rem;font-weight:600;color:#1e3a8a;border-top:2px solid #6366f1">
+        <span class="wf-caret" style="display:inline-block;width:1.2em;font-size:.7rem;color:#6366f1">▶</span>
         <span style="display:inline-block;min-width:7ch;color:#475569">${esc(dt||'—')}</span>
         <span style="margin:0 .5rem">·</span>
         <span>${esc(body||'')}</span>
@@ -2162,8 +2207,8 @@ async function loadWorkflow() {
       </td></tr>`;
     const body_rows=rows.map(a=>{
       const h=mkRow(a);
-      // inject group class for toggling
-      return h.replace('<tr class="clickable"', `<tr class="clickable ${gid}"`);
+      // inject group class for toggling — start collapsed
+      return h.replace('<tr class="clickable"', `<tr class="clickable ${gid}" style="display:none"`);
     }).join('');
     return header+body_rows;
   }).join('');
@@ -4803,6 +4848,36 @@ async function loadSavedMeetings() {
     )+'</td></tr>';
     return;
   }
+  // Store rows globally for filtering
+  window._mtgRows = rows;
+
+  // Populate body filter
+  const bodySel = document.getElementById('mtg-f-body');
+  const prevBody = bodySel.value;
+  const bodies = [...new Set(rows.map(m=>m.body_name).filter(Boolean))].sort();
+  bodySel.innerHTML = '<option value="">All Bodies</option>' +
+    bodies.map(b=>`<option${b===prevBody?' selected':''}>${esc(b)}</option>`).join('');
+
+  filterMeetingsTable();
+}
+
+function filterMeetingsTable() {
+  let rows = window._mtgRows || [];
+  const bodyF = (document.getElementById('mtg-f-body').value||'').toLowerCase();
+  const statusF = (document.getElementById('mtg-f-status').value||'');
+  const q = (document.getElementById('mtg-f-search').value||'').toLowerCase().trim();
+  if (bodyF) rows = rows.filter(m=>(m.body_name||'').toLowerCase()===bodyF);
+  if (statusF) rows = rows.filter(m=>m.status===statusF);
+  if (q) rows = rows.filter(m=>{
+    const hay = [m.body_name, m.meeting_date, m.meeting_type, m.status].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+  const tb = document.getElementById('mtg-tbody');
+  document.getElementById('mtg-count').textContent = `${rows.length} meeting(s)`;
+  if (!rows.length) {
+    tb.innerHTML = '<tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">No meetings match filters</td></tr>';
+    return;
+  }
   tb.innerHTML = rows.map(m => {
     const pct = m.total ? Math.round((m.finalized * 100) / m.total) : 0;
     const statusColor = {
@@ -4810,8 +4885,8 @@ async function loadSavedMeetings() {
       'Final Ready':'b-DraftComplete','Final Generated':'b-Finalized',
       'Empty':'b-Archived'}[m.status] || 'b-New';
     return `<tr class="clickable" onclick="openMeeting(${m.id})">
-      <td style="font-weight:600">${esc(m.body_name||'')}</td>
-      <td style="white-space:nowrap">${fmtDate(m.meeting_date)}</td>
+      <td style="white-space:nowrap;font-weight:600">${fmtDate(m.meeting_date)}</td>
+      <td>${esc(m.body_name||'')}</td>
       <td style="font-size:.75rem">${esc(m.meeting_type||'—')}</td>
       <td>${m.total}</td>
       <td>
@@ -6780,6 +6855,7 @@ def api_bulk_transcript_backfill():
         try:
             import transcript as tx
             import meeting_service
+            import concurrent.futures
             meetings = meeting_service.list_saved_meetings()
             total = len(meetings)
             with _bulk_tx_lock:
@@ -6803,10 +6879,15 @@ def api_bulk_transcript_backfill():
                 _bulk_tx_log(f"[{i+1}/{total}] Processing: {label}", pct=pct)
 
                 try:
-                    result = tx.backfill_transcript(
-                        meeting_id=mid,
-                        emit=lambda msg, **kw: None,  # silent per-meeting
-                    )
+                    # 5-minute timeout per meeting to prevent hanging
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(
+                            tx.backfill_transcript,
+                            meeting_id=mid,
+                            emit=lambda msg, **kw: None,
+                        )
+                        result = future.result(timeout=300)  # 5 min max
+
                     if result and result.get("status") == "ok":
                         items_up = result.get("items_updated", 0)
                         updated += items_up
@@ -6822,6 +6903,9 @@ def api_bulk_transcript_backfill():
                     else:
                         skipped += 1
                         _bulk_tx_log(f"  ⏭ {label}: no transcript available")
+                except concurrent.futures.TimeoutError:
+                    skipped += 1
+                    _bulk_tx_log(f"  ⏱ {label}: timed out after 5 min — skipping")
                 except OSError as e:
                     skipped += 1
                     _bulk_tx_log(f"  ❌ {label}: disk error — {e} (check free space)")
