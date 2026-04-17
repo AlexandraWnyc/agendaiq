@@ -4694,9 +4694,17 @@ function emptyState(icon, title, hint, ctaHtml){
 # API Routes
 # ─────────────────────────────────────────────────────────────
 
+_db_initialized = False
+
 @app.before_request
 def ensure_db():
-    init_db()
+    global _db_initialized
+    if not _db_initialized:
+        try:
+            init_db()
+        except Exception as e:
+            app.logger.error(f"init_db failed (continuing anyway): {e}")
+        _db_initialized = True
 
 
 @app.errorhandler(Exception)

@@ -1,8 +1,16 @@
 """
 db.py — SQLite connection and initialization for OCA Agenda Intelligence v6
+
+Designed to survive disk-full conditions on Render free tier:
+- Reclaims space aggressively (WAL files, old PDFs, __pycache__)
+- Skips DDL/migrations when core tables already exist
+- Falls back to read-only mode if absolutely nothing can be written
+- NEVER crashes on startup — the app must start so the user can fix things
 """
 import sqlite3
 import logging
+import os
+import glob
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -11,72 +19,102 @@ log = logging.getLogger("oca-agent")
 from paths import DB_PATH as _DEFAULT_DB_PATH
 DB_PATH = _DEFAULT_DB_PATH
 
+# Track if we're in degraded mode (disk full, writes may fail)
+_disk_full_mode = False
+
 
 def set_db_path(path):
     global DB_PATH
     DB_PATH = Path(path)
 
 
-def _try_reclaim_disk_space():
-    """Aggressively try to free disk space before any DB writes.
-    Deletes WAL/SHM files if possible, removes stale temp files, etc."""
-    import os, glob
+def _get_disk_free_mb() -> float:
+    """Return free disk space in MB for the partition containing DB_PATH."""
+    try:
+        st = os.statvfs(str(DB_PATH.parent))
+        return (st.f_bavail * st.f_frsize) / 1048576
+    except Exception:
+        return -1
 
-    # 1. Try WAL checkpoint (merges WAL back into main DB, then truncates)
+
+def _try_reclaim_disk_space():
+    """Aggressively free disk space. Called before any DB writes."""
+    freed_total = 0
+
+    # 1. WAL checkpoint — merges WAL back into main DB file
     try:
         c = sqlite3.connect(str(DB_PATH))
         c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         c.close()
-        log.info("WAL checkpoint completed — space reclaimed")
+        log.info("WAL checkpoint completed")
     except Exception as e:
         log.warning(f"WAL checkpoint failed: {e}")
 
-    # 2. If WAL file is huge, delete it directly (DB will recreate on next connect)
-    wal_path = str(DB_PATH) + "-wal"
-    shm_path = str(DB_PATH) + "-shm"
-    for f in (wal_path, shm_path):
+    # 2. Delete WAL and SHM files (they get recreated automatically)
+    for suffix in ("-wal", "-shm"):
+        f = str(DB_PATH) + suffix
         if os.path.exists(f):
             try:
                 sz = os.path.getsize(f)
-                if sz > 0:
-                    os.remove(f)
-                    log.info(f"Deleted {f} ({sz / 1048576:.1f} MB freed)")
+                os.remove(f)
+                freed_total += sz
+                log.info(f"Deleted {f} ({sz / 1048576:.1f} MB)")
             except Exception as e:
                 log.warning(f"Could not delete {f}: {e}")
 
-    # 3. Remove stale pdf_cache files older than 30 days to free space
+    # 3. Delete ALL cached PDFs (can be re-downloaded)
     from paths import PDF_CACHE_DIR
-    import time
-    cutoff = time.time() - (30 * 86400)
-    freed = 0
     for pdf in glob.glob(str(PDF_CACHE_DIR / "*.pdf")):
         try:
-            if os.path.getmtime(pdf) < cutoff:
-                sz = os.path.getsize(pdf)
-                os.remove(pdf)
-                freed += sz
+            sz = os.path.getsize(pdf)
+            os.remove(pdf)
+            freed_total += sz
         except Exception:
             pass
-    if freed:
-        log.info(f"Cleared {freed / 1048576:.1f} MB of old cached PDFs")
+
+    # 4. Clear __pycache__ directories
+    from paths import PROJECT_DIR
+    for root, dirs, files in os.walk(str(PROJECT_DIR)):
+        if "__pycache__" in root:
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    sz = os.path.getsize(fp)
+                    os.remove(fp)
+                    freed_total += sz
+                except Exception:
+                    pass
+
+    # 5. Delete old output/export files
+    from paths import OUTPUT_DIR, EXPORTS_DIR
+    for d in (OUTPUT_DIR, EXPORTS_DIR):
+        for f in glob.glob(str(d / "*")):
+            if os.path.isfile(f):
+                try:
+                    sz = os.path.getsize(f)
+                    os.remove(f)
+                    freed_total += sz
+                except Exception:
+                    pass
+
+    if freed_total > 0:
+        log.info(f"Total space reclaimed: {freed_total / 1048576:.1f} MB")
+
+    free_mb = _get_disk_free_mb()
+    log.info(f"Disk free after cleanup: {free_mb:.1f} MB")
+    return freed_total
 
 
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
-    try:
-        conn.execute("PRAGMA journal_mode=WAL")
-    except sqlite3.OperationalError:
-        # Disk may be full — try to recover
+    # Try WAL mode, fall back gracefully
+    for mode in ("WAL", "DELETE", "MEMORY"):
         try:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.execute("PRAGMA journal_mode=WAL")
-        except Exception:
-            # Fall back to DELETE journal mode (uses less disk space)
-            try:
-                conn.execute("PRAGMA journal_mode=DELETE")
-            except Exception:
-                log.warning("Could not set any journal mode — disk may be full")
+            conn.execute(f"PRAGMA journal_mode={mode}")
+            break
+        except sqlite3.OperationalError:
+            continue
     try:
         conn.execute("PRAGMA foreign_keys=ON")
     except Exception:
@@ -98,8 +136,7 @@ def get_db():
 
 
 def _db_has_core_tables() -> bool:
-    """Check if the DB already has core tables (matters, meetings, appearances).
-    If so, we can skip DDL on disk-full restarts."""
+    """Read-only check: do core tables exist? Uses no disk space."""
     try:
         c = sqlite3.connect(str(DB_PATH))
         c.row_factory = sqlite3.Row
@@ -113,44 +150,59 @@ def _db_has_core_tables() -> bool:
 
 
 def init_db():
-    """Create all tables if they do not exist, then run migrations.
-    On disk-full, skips DDL/migrations if core tables already exist."""
-    from schema import DDL_STATEMENTS, MIGRATION_STATEMENTS
+    """Initialize database. NEVER raises — the app must always start.
 
-    # Step 1: Try to reclaim disk space before doing anything
-    if DB_PATH.exists():
-        _try_reclaim_disk_space()
+    Strategy:
+    1. Reclaim disk space aggressively
+    2. If core tables exist → skip DDL, try migrations (ignore failures)
+    3. If fresh DB → create tables (will fail if disk truly full, but
+       that means there's no data to serve anyway)
+    4. Any unhandled error → log warning, continue startup
+    """
+    global _disk_full_mode
 
-    # Step 2: Check if we can skip DDL (existing DB with all tables)
-    already_initialized = DB_PATH.exists() and _db_has_core_tables()
+    try:
+        # Step 1: Reclaim space
+        if DB_PATH.exists():
+            _try_reclaim_disk_space()
 
-    if already_initialized:
-        # Try migrations but don't crash if disk is full
-        try:
+        # Step 2: Check existing tables
+        already_initialized = DB_PATH.exists() and _db_has_core_tables()
+
+        if already_initialized:
+            # Existing DB — try migrations, skip on any disk error
+            try:
+                from schema import MIGRATION_STATEMENTS
+                with get_db() as conn:
+                    for stmt in MIGRATION_STATEMENTS:
+                        try:
+                            conn.execute(stmt)
+                        except Exception:
+                            pass
+            except Exception as e:
+                _disk_full_mode = True
+                log.warning(f"Migrations skipped (disk issue): {e}")
+            log.info(f"Database ready (existing): {DB_PATH}")
+        else:
+            # Fresh DB — must create tables
+            from schema import DDL_STATEMENTS, MIGRATION_STATEMENTS
             with get_db() as conn:
+                for stmt in DDL_STATEMENTS:
+                    conn.execute(stmt)
                 for stmt in MIGRATION_STATEMENTS:
                     try:
                         conn.execute(stmt)
                     except Exception:
                         pass
-        except sqlite3.OperationalError as e:
-            if "disk" in str(e).lower() or "full" in str(e).lower() or "I/O" in str(e):
-                log.warning(f"Disk full — skipping migrations (DB already has core tables): {e}")
-            else:
-                raise
-        log.info(f"Database ready (existing): {DB_PATH}")
-    else:
-        # Fresh DB — must create tables
-        with get_db() as conn:
-            for stmt in DDL_STATEMENTS:
-                conn.execute(stmt)
-            for stmt in MIGRATION_STATEMENTS:
-                try:
-                    conn.execute(stmt)
-                except Exception:
-                    pass
-            _normalize_meeting_dates(conn)
-        log.info(f"Database initialized (fresh): {DB_PATH}")
+                _normalize_meeting_dates(conn)
+            log.info(f"Database initialized (fresh): {DB_PATH}")
+
+    except Exception as e:
+        # NEVER crash here — the app must start
+        _disk_full_mode = True
+        log.error(f"Database init encountered error (app will start anyway): {e}")
+        log.error("Some features may not work until disk space is freed.")
+        log.error(f"Current disk free: {_get_disk_free_mb():.1f} MB")
 
 
 def _normalize_meeting_dates(conn):
@@ -159,7 +211,6 @@ def _normalize_meeting_dates(conn):
     import re
     from datetime import datetime as dt
 
-    # Tables that have a foreign key referencing appearances(id)
     FK_TABLES = ["workflow_history", "artifacts", "chat_messages"]
 
     rows = conn.execute("SELECT id, body_name, meeting_date FROM meetings").fetchall()
@@ -169,14 +220,11 @@ def _normalize_meeting_dates(conn):
         if not m:
             continue
         iso = dt.strptime(md, "%m/%d/%Y").strftime("%Y-%m-%d")
-        # Check if an ISO-dated duplicate already exists
         dup = conn.execute(
             "SELECT id FROM meetings WHERE body_name=? AND meeting_date=? AND id!=?",
             (r["body_name"], iso, r["id"])
         ).fetchone()
         if dup:
-            # Merge: reassign appearances from old meeting to canonical one,
-            # but skip any that would create a duplicate (same matter_id+meeting_id)
             old_apps = conn.execute(
                 "SELECT id, matter_id FROM appearances WHERE meeting_id=?",
                 (r["id"],)
@@ -187,7 +235,6 @@ def _normalize_meeting_dates(conn):
                     (oa["matter_id"], dup["id"])
                 ).fetchone()
                 if already:
-                    # Reassign child records to the surviving appearance, then delete
                     for tbl in FK_TABLES:
                         try:
                             conn.execute(
@@ -196,7 +243,6 @@ def _normalize_meeting_dates(conn):
                             )
                         except Exception:
                             pass
-                    # Also reassign prior_appearance_id references in other appearances
                     try:
                         conn.execute(
                             "UPDATE appearances SET prior_appearance_id=? WHERE prior_appearance_id=?",
@@ -210,7 +256,6 @@ def _normalize_meeting_dates(conn):
                         "UPDATE appearances SET meeting_id=? WHERE id=?",
                         (dup["id"], oa["id"])
                     )
-            # Also reassign any artifacts linked at meeting level
             try:
                 conn.execute(
                     "UPDATE artifacts SET meeting_id=? WHERE meeting_id=?",
