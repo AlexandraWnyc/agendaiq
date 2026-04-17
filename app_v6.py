@@ -1353,6 +1353,21 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div id="bf-log" style="max-height:120px;overflow-y:auto;background:#fafbfc;border-radius:8px;padding:.4rem .6rem"></div>
   </div>
 
+  <!-- Bulk transcript backfill progress panel -->
+  <div id="bulk-tx-progress" style="display:none;background:#fff;border:1px solid #c4b5fd;
+       border-radius:12px;padding:.9rem 1.1rem;margin-bottom:1rem;box-shadow:var(--shadow)">
+    <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem">
+      <div style="font-size:1rem">🎙</div>
+      <div style="flex:1;font-weight:600;font-size:.9rem;color:var(--ink)">Transcript Backfill in progress</div>
+      <div id="bulk-tx-text" style="font-size:.78rem;color:var(--gray-600)"></div>
+    </div>
+    <div style="height:8px;background:#ede9fe;border-radius:999px;overflow:hidden;margin-bottom:.55rem">
+      <div id="bulk-tx-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,#a78bfa);
+           transition:width .4s ease"></div>
+    </div>
+    <div id="bulk-tx-log" style="max-height:120px;overflow-y:auto;background:#faf5ff;border-radius:8px;padding:.4rem .6rem;font-size:.78rem;color:#4c1d95"></div>
+  </div>
+
   <div class="card" style="margin-bottom:1.1rem">
     <div class="ch">
       <div class="ch-left"><div class="cicon">🗂️</div>Saved Meeting Packages</div>
@@ -1366,6 +1381,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <button class="btn btn-o btn-sm" onclick="runBackfill(false)"
           title="Re-process EVERY matter in the DB (slower)">
           ⟳ Full refresh
+        </button>
+        <button class="btn btn-o btn-sm" id="bulk-tx-btn" onclick="runBulkTranscriptBackfill()"
+          title="Search for recordings for all saved meetings and backfill transcript discussion summaries"
+          style="border-color:#7c3aed;color:#7c3aed">
+          🎙 Backfill All Transcripts
         </button>
       </div>
     </div>
@@ -4457,6 +4477,60 @@ async function runBackfill(onlyMissing) {
   }
 }
 
+/* ── Bulk Transcript Backfill (all meetings) ────────────── */
+let _bulkTxPollTimer = null;
+
+function _renderBulkTxProgress(d) {
+  const panel = document.getElementById('bulk-tx-progress');
+  if (!panel) return;
+  panel.style.display = 'block';
+  const bar = document.getElementById('bulk-tx-bar');
+  const txt = document.getElementById('bulk-tx-text');
+  const log = document.getElementById('bulk-tx-log');
+  if (bar) bar.style.width = (d.pct || 0) + '%';
+  if (txt) txt.textContent = d.msg || '';
+  if (d.log_lines && log) {
+    log.innerHTML = d.log_lines.map(l => `<div>${l}</div>`).join('');
+    log.scrollTop = log.scrollHeight;
+  }
+  if (d.done && !d.running) {
+    if (txt) txt.textContent = d.error ? '❌ ' + d.error : '✅ ' + (d.msg || 'Done');
+  }
+}
+
+async function runBulkTranscriptBackfill() {
+  const btn = document.getElementById('bulk-tx-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch('/api/backfill/transcript/bulk', {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) {
+      toast(d.error || 'Failed to start bulk transcript backfill', 'err');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    _renderBulkTxProgress({pct:2, msg:'Starting bulk transcript backfill…', running:true});
+    if (_bulkTxPollTimer) clearInterval(_bulkTxPollTimer);
+    _bulkTxPollTimer = setInterval(async () => {
+      try {
+        const pr = await fetch('/api/backfill/transcript/bulk/progress');
+        const pd = await pr.json();
+        _renderBulkTxProgress(pd);
+        if (!pd.running) {
+          clearInterval(_bulkTxPollTimer); _bulkTxPollTimer = null;
+          if (btn) btn.disabled = false;
+          if (pd.error) toast('Bulk transcript backfill failed: ' + pd.error, 'err');
+          else toast('Bulk transcript backfill complete — ' + (pd.processed || 0) + ' meetings processed', 'ok');
+          loadSavedMeetings();
+        }
+      } catch(_){}
+    }, 2000);
+  } catch(e) {
+    toast('Failed to start: ' + (e.message||e), 'err');
+    if (btn) btn.disabled = false;
+  }
+}
+
 /* ── Transcript Backfill ─────────────────────────────────── */
 let _txPollTimer = null;
 
@@ -4669,6 +4743,30 @@ async function loadSavedMeetings() {
       }
     } else if (bpd && (bpd.summary || bpd.error)) {
       _renderBfProgress(bpd);  // show last result line
+    }
+  } catch(_){}
+
+  // If a bulk transcript backfill is already running, resume polling.
+  try {
+    const tp = await fetch('/api/backfill/transcript/bulk/progress'); const tpd = await tp.json();
+    if (tpd && tpd.running) {
+      _renderBulkTxProgress(tpd);
+      const txBtn = document.getElementById('bulk-tx-btn');
+      if (txBtn) txBtn.disabled = true;
+      if (!_bulkTxPollTimer) {
+        _bulkTxPollTimer = setInterval(async () => {
+          const r3 = await fetch('/api/backfill/transcript/bulk/progress');
+          const d3 = await r3.json();
+          _renderBulkTxProgress(d3);
+          if (!d3.running) {
+            clearInterval(_bulkTxPollTimer); _bulkTxPollTimer=null;
+            if (txBtn) txBtn.disabled = false;
+            loadSavedMeetings();
+          }
+        }, 2000);
+      }
+    } else if (tpd && tpd.done) {
+      _renderBulkTxProgress(tpd);
     }
   } catch(_){}
 
@@ -6644,6 +6742,126 @@ def api_transcript_progress():
             "msg": _tx_state["msg"],
             "done": _tx_state["done"],
             "result": _tx_state["result"],
+        })
+
+
+# ── Bulk Transcript Backfill (all meetings) ──────────────────────
+_bulk_tx_lock = _threading.Lock()
+_bulk_tx_state = {
+    "running": False, "done": False, "pct": 0, "msg": "",
+    "processed": 0, "total": 0, "skipped": 0, "updated": 0,
+    "error": None, "log_lines": [],
+}
+
+def _bulk_tx_log(msg, pct=None):
+    with _bulk_tx_lock:
+        _bulk_tx_state["msg"] = msg
+        if pct is not None:
+            _bulk_tx_state["pct"] = pct
+        _bulk_tx_state["log_lines"].append(msg)
+        # Keep log to last 50 lines
+        if len(_bulk_tx_state["log_lines"]) > 50:
+            _bulk_tx_state["log_lines"] = _bulk_tx_state["log_lines"][-50:]
+
+@app.route("/api/backfill/transcript/bulk", methods=["POST"])
+def api_bulk_transcript_backfill():
+    with _bulk_tx_lock:
+        if _bulk_tx_state["running"]:
+            return jsonify({"ok": False, "error": "Bulk transcript backfill already running"}), 409
+
+    with _bulk_tx_lock:
+        _bulk_tx_state.update({
+            "running": True, "done": False, "pct": 2, "msg": "Loading meetings…",
+            "processed": 0, "total": 0, "skipped": 0, "updated": 0,
+            "error": None, "log_lines": ["Starting bulk transcript backfill…"],
+        })
+
+    def _run_bulk():
+        try:
+            import transcript as tx
+            import meeting_service
+            meetings = meeting_service.list_saved_meetings()
+            total = len(meetings)
+            with _bulk_tx_lock:
+                _bulk_tx_state["total"] = total
+            if total == 0:
+                _bulk_tx_log("No saved meetings found.", pct=100)
+                with _bulk_tx_lock:
+                    _bulk_tx_state["done"] = True
+                    _bulk_tx_state["running"] = False
+                return
+
+            _bulk_tx_log(f"Found {total} meetings to process.", pct=3)
+            processed = 0
+            skipped = 0
+            updated = 0
+
+            for i, mtg in enumerate(meetings):
+                mid = mtg.get("id")
+                label = f"{mtg.get('body_name', '')} — {mtg.get('meeting_date', '')}"
+                pct = int(5 + (90 * i / total))
+                _bulk_tx_log(f"[{i+1}/{total}] Processing: {label}", pct=pct)
+
+                try:
+                    result = tx.backfill_transcript(
+                        meeting_id=mid,
+                        emit=lambda msg, **kw: None,  # silent per-meeting
+                    )
+                    if result and result.get("status") == "ok":
+                        items_up = result.get("items_updated", 0)
+                        updated += items_up
+                        _bulk_tx_log(f"  ✓ {label}: {items_up} items updated")
+                    elif result and result.get("status") == "skipped":
+                        skipped += 1
+                        reason = result.get("message", "no recording found")
+                        _bulk_tx_log(f"  ⏭ {label}: skipped — {reason}")
+                    else:
+                        skipped += 1
+                        _bulk_tx_log(f"  ⏭ {label}: no transcript available")
+                except Exception as e:
+                    skipped += 1
+                    _bulk_tx_log(f"  ⚠ {label}: error — {e}")
+
+                processed += 1
+                with _bulk_tx_lock:
+                    _bulk_tx_state["processed"] = processed
+                    _bulk_tx_state["skipped"] = skipped
+                    _bulk_tx_state["updated"] = updated
+
+            summary = f"Done — {processed} meetings processed, {updated} items updated, {skipped} skipped"
+            _bulk_tx_log(summary, pct=100)
+            with _bulk_tx_lock:
+                _bulk_tx_state["msg"] = summary
+                _bulk_tx_state["done"] = True
+                _bulk_tx_state["running"] = False
+
+        except Exception as e:
+            log.exception("Bulk transcript backfill error")
+            with _bulk_tx_lock:
+                _bulk_tx_state["error"] = str(e)
+                _bulk_tx_state["msg"] = f"Error: {e}"
+                _bulk_tx_state["done"] = True
+                _bulk_tx_state["running"] = False
+
+    t = _threading.Thread(target=_run_bulk, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "started": True})
+
+
+@app.route("/api/backfill/transcript/bulk/progress")
+def api_bulk_transcript_progress():
+    with _bulk_tx_lock:
+        return jsonify({
+            "running": _bulk_tx_state["running"],
+            "done": _bulk_tx_state["done"],
+            "pct": _bulk_tx_state["pct"],
+            "msg": _bulk_tx_state["msg"],
+            "processed": _bulk_tx_state["processed"],
+            "total": _bulk_tx_state["total"],
+            "skipped": _bulk_tx_state["skipped"],
+            "updated": _bulk_tx_state["updated"],
+            "error": _bulk_tx_state["error"],
+            "log_lines": list(_bulk_tx_state["log_lines"]),
         })
 
 
