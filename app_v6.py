@@ -6426,6 +6426,113 @@ def api_maintenance_db_size():
     })
 
 
+@app.route("/api/maintenance/diagnose")
+def api_maintenance_diagnose():
+    """Full diagnostic: disk, DB integrity, row counts."""
+    import os
+    diag = {"disk": {}, "db": {}, "counts": {}, "errors": []}
+    try:
+        st = os.statvfs(str(DB_PATH.parent))
+        diag["disk"]["free_mb"] = round((st.f_bavail * st.f_frsize) / 1048576, 2)
+        diag["disk"]["total_mb"] = round((st.f_blocks * st.f_frsize) / 1048576, 2)
+        diag["disk"]["used_pct"] = round(100 * (1 - st.f_bavail / st.f_blocks), 1)
+    except Exception as e:
+        diag["errors"].append(f"Disk check failed: {e}")
+
+    try:
+        db_size = os.path.getsize(str(DB_PATH)) if DB_PATH.exists() else 0
+        wal_path = str(DB_PATH) + "-wal"
+        wal_size = os.path.getsize(wal_path) if os.path.exists(wal_path) else 0
+        diag["db"]["db_mb"] = round(db_size / 1048576, 2)
+        diag["db"]["wal_mb"] = round(wal_size / 1048576, 2)
+        diag["db"]["exists"] = DB_PATH.exists()
+    except Exception as e:
+        diag["errors"].append(f"DB size check failed: {e}")
+
+    try:
+        import sqlite3
+        c = sqlite3.connect(str(DB_PATH))
+        result = c.execute("PRAGMA integrity_check").fetchone()
+        diag["db"]["integrity"] = result[0] if result else "unknown"
+        diag["db"]["journal_mode"] = c.execute("PRAGMA journal_mode").fetchone()[0]
+
+        for table in ["meetings", "appearances", "matters", "matter_timeline",
+                      "workflow_history", "chat_messages", "artifacts"]:
+            try:
+                cnt = c.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                diag["counts"][table] = cnt
+            except Exception as e:
+                diag["counts"][table] = f"ERROR: {e}"
+        c.close()
+    except Exception as e:
+        diag["errors"].append(f"DB query failed: {e}")
+
+    return jsonify(diag)
+
+
+@app.route("/api/maintenance/vacuum", methods=["POST"])
+def api_maintenance_vacuum():
+    """Reclaim disk space: WAL checkpoint, VACUUM, clear caches."""
+    results = []
+    try:
+        # 1. Reclaim via db.py helper
+        from db import _try_reclaim_disk_space
+        freed = _try_reclaim_disk_space()
+        results.append(f"Reclaim freed {freed / 1048576:.1f} MB")
+
+        # 2. VACUUM to compact the DB file
+        import sqlite3 as _sq
+        c = _sq.connect(str(DB_PATH))
+        c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        results.append("WAL checkpoint done")
+        try:
+            c.execute("VACUUM")
+            results.append("VACUUM done")
+        except Exception as ve:
+            results.append(f"VACUUM failed (need ~2x DB free space): {ve}")
+        c.close()
+
+        # 3. Report new free space
+        st = os.statvfs(str(DB_PATH.parent))
+        free_mb = round((st.f_bavail * st.f_frsize) / 1048576, 2)
+        results.append(f"Free space now: {free_mb} MB")
+    except Exception as e:
+        results.append(f"Error: {e}")
+
+    return jsonify({"ok": True, "results": results})
+
+
+@app.route("/api/maintenance/sample-data")
+def api_maintenance_sample_data():
+    """Quick peek at actual data — confirms whether rows exist and have content."""
+    sample = {}
+    try:
+        with db.get_db() as conn:
+            # Recent meetings
+            rows = conn.execute(
+                "SELECT id, body_name, meeting_date, agenda_status FROM meetings ORDER BY meeting_date DESC LIMIT 5"
+            ).fetchall()
+            sample["recent_meetings"] = [dict(r) for r in rows]
+
+            # Recent appearances
+            rows = conn.execute(
+                "SELECT a.id, a.file_number, a.workflow_status, m.meeting_date, m.body_name "
+                "FROM appearances a JOIN meetings m ON a.meeting_id=m.id "
+                "ORDER BY m.meeting_date DESC LIMIT 5"
+            ).fetchall()
+            sample["recent_appearances"] = [dict(r) for r in rows]
+
+            # Check if any meetings have appearances
+            row = conn.execute(
+                "SELECT COUNT(DISTINCT meeting_id) as meetings_with_items FROM appearances"
+            ).fetchone()
+            sample["meetings_with_items"] = row["meetings_with_items"]
+    except Exception as e:
+        sample["error"] = str(e)
+
+    return jsonify(sample)
+
+
 # ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
