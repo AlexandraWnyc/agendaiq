@@ -136,6 +136,7 @@ nav{display:flex;gap:.2rem;margin-left:1.25rem}
 .alert-bar .count{font-weight:700;font-size:.9rem}
 .ab-red{background:var(--red-lt);color:var(--red);border:1px solid #fca5a5}
 .ab-orange{background:var(--orange-lt);color:var(--orange);border:1px solid #fcd34d}
+.ab-green{background:#f0fdf4;color:#166534;border:1px solid #86efac}
 .ab-gray{background:var(--gray-100);color:var(--gray-600);border:1px solid var(--gray-200)}
 
 /* ── Cards ── */
@@ -1091,7 +1092,8 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <option value="7">Due in 7 days</option>
         <option value="30">Due in 30 days</option>
       </select></div>
-    <div style="margin-left:auto;display:flex;gap:.4rem;align-items:flex-end">
+    <div style="margin-left:auto;display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap">
+      <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="showReviewQueue()" title="Items awaiting your review">📋 My Review Queue</button>
       <button class="btn btn-o btn-sm" onclick="bulkAssign()">Bulk Assign</button>
       <button class="btn btn-o btn-sm" onclick="bulkStatus()">Bulk Status</button>
     </div>
@@ -1574,6 +1576,13 @@ async function loadDashboard() {
       <span class="count">View →</span>
     </div>`;
   }
+  if (d.pending_review_count > 0) {
+    bars.innerHTML += `<div class="alert-bar ab-green" onclick="showPg('workflow');setTimeout(showReviewQueue,100)">
+      <span class="icon">📋</span>
+      <span class="txt"><strong>${d.pending_review_count} item${d.pending_review_count>1?'s':''} awaiting review</strong> — drafts ready for reviewer approval</span>
+      <span class="count">Review Queue →</span>
+    </div>`;
+  }
   if (d.unassigned_count > 0) {
     bars.innerHTML += `<div class="alert-bar ab-gray" onclick="filterWorkflow('unassigned')">
       <span class="icon">⚪</span>
@@ -1841,8 +1850,9 @@ async function loadWorkflow() {
   let url='/api/workflow?';
   if(status) url+=`status=${encodeURIComponent(status)}&`;
   if(assigned==='me'&&currentUser) url+=`assigned=${encodeURIComponent(currentUser)}&`;
+  else if(assigned==='reviewer:me'&&currentUser) url+=`reviewer=${encodeURIComponent(currentUser)}&`;
   else if(assigned==='unassigned') url+=`assigned=__unassigned__&`;
-  else if(assigned && assigned!=='me') url+=`assigned=${encodeURIComponent(assigned)}&`;
+  else if(assigned && assigned!=='me' && assigned!=='reviewer:me') url+=`assigned=${encodeURIComponent(assigned)}&`;
   if(due) url+=`due=${encodeURIComponent(due)}&`;
   const r=await fetch(url); const d=await r.json();
   document.getElementById('wf-count').textContent=`${d.length} item(s)`;
@@ -2165,6 +2175,9 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
         <button class="btn btn-s btn-sm" onclick="runBackfillForItem('transcript')" id="bf-tx-btn">
           🎙 Backfill Transcript
         </button>
+        <button class="btn btn-s btn-sm" onclick="reanalyzeAppearance()" id="bf-ai-btn">
+          🤖 Re-run AI Analysis
+        </button>
         <button class="btn btn-s btn-sm" onclick="runBackfillForItem('all')" id="bf-all-btn">
           ⚡ Backfill Everything
         </button>
@@ -2441,6 +2454,47 @@ async function runBackfillForItem(type) {
     }
   } catch(e) {
     if(prog){ prog.textContent='❌ Backfill failed: ' + (e.message||e); setTimeout(()=>prog.style.display='none', 5000); }
+  }
+}
+
+async function reanalyzeAppearance() {
+  if (!currentAppId) { toast('No appearance selected','err'); return; }
+  const prog = document.getElementById('bf-item-progress');
+  if(prog){ prog.style.display=''; prog.textContent='🤖 Running AI analysis…'; }
+  const btn = document.getElementById('bf-ai-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Analyzing…'; }
+  try {
+    const r = await fetch('/api/appearance/' + currentAppId + '/reanalyze', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      if(prog) prog.textContent='AI analysis started — this takes 15-30 seconds…';
+      // Poll for completion by checking if the appearance has been updated
+      const startTime = Date.now();
+      const pollAI = setInterval(async () => {
+        try {
+          const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
+          const analysisAt = ar.appearance?.analysis_at || '';
+          if (analysisAt && new Date(analysisAt) > new Date(startTime)) {
+            clearInterval(pollAI);
+            if(prog){ prog.textContent='✓ AI analysis complete'; setTimeout(()=>prog.style.display='none', 3000); }
+            if(btn){ btn.disabled=false; btn.textContent='🤖 Re-run AI Analysis'; }
+            // Refresh drawer
+            _drData.appData = ar.appearance;
+            if(currentFileNum) openDrawer(currentFileNum, currentAppId);
+          } else if (Date.now() - startTime > 120000) {
+            clearInterval(pollAI);
+            if(prog) prog.textContent='⏳ Analysis is still running — check back shortly';
+            if(btn){ btn.disabled=false; btn.textContent='🤖 Re-run AI Analysis'; }
+          }
+        } catch(e){ /* keep polling */ }
+      }, 5000);
+    } else {
+      if(prog) prog.textContent='❌ ' + (d.error||'Failed');
+      if(btn){ btn.disabled=false; btn.textContent='🤖 Re-run AI Analysis'; }
+    }
+  } catch(e) {
+    if(prog) prog.textContent='❌ Failed: ' + (e.message||e);
+    if(btn){ btn.disabled=false; btn.textContent='🤖 Re-run AI Analysis'; }
   }
 }
 
@@ -2830,12 +2884,46 @@ function _renderTranscriptNotes(notesText) {
 
 function renderDrawerNotes(body, app) {
   const wn = app?.analyst_working_notes || '';
+  const status = app?.workflow_status || 'New';
+  const isReviewer = currentUser && currentUser === (app?.reviewer || '');
+  const isAnalyst = currentUser && currentUser === (app?.assigned_to || '');
+  const needsReview = status === 'Draft Complete' || status === 'In Review';
+  const reviewerNotes = app?.reviewer_notes || '';
+
+  // Determine which mode to show
+  const showReviewerPanel = isReviewer && needsReview;
+  const canSubmitForReview = ['New','Assigned','In Progress'].includes(status);
+
   body.innerHTML = `
     <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
       padding:.55rem .85rem;margin-bottom:.75rem;font-size:.74rem;color:#1e3a8a;line-height:1.55">
       <strong>Analyst Notes.</strong> Write your debrief notes here. Use <em>Save Draft</em> to save in progress,
       or <em>Append Note</em> to add a timestamped entry. These notes feed into the Part 1 deliverable export.
+      ${canSubmitForReview ? '<br><span style="color:#059669;font-weight:600">When ready, click <em>Submit for Review</em> to send to your reviewer.</span>' : ''}
     </div>
+
+    ${showReviewerPanel ? `
+    <div style="background:#f0fdf4;border:2px solid #22c55e;border-radius:10px;padding:.75rem 1rem;margin-bottom:.85rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+        <div style="font-size:.82rem;font-weight:700;color:#166534">📋 REVIEWER PANEL</div>
+        <span style="font-size:.7rem;color:#16a34a;background:#dcfce7;padding:.15rem .5rem;border-radius:10px;font-weight:600">
+          ${esc(status)}
+        </span>
+      </div>
+      <div style="font-size:.74rem;color:#166534;margin-bottom:.6rem">
+        You are the reviewer for this item. Read the analyst notes below, add feedback, then approve or send back.
+      </div>
+      <div style="font-size:.72rem;font-weight:600;color:#475569;margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.3px">REVIEWER FEEDBACK</div>
+      <textarea id="edit-reviewer-notes" style="min-height:100px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem;border-color:#22c55e"
+        placeholder="Add your review comments, corrections, or feedback here...">${esc(reviewerNotes)}</textarea>
+      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="reviewerAction('approve')">✓ Approve → Finalized</button>
+        <button class="btn btn-sm" style="background:#d97706;color:#fff;border:none" onclick="reviewerAction('revise')">↩ Send Back for Revision</button>
+        <button class="btn btn-s btn-sm" onclick="saveFullNotes('reviewer')">Save Feedback Only</button>
+        <span id="rn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
+      </div>
+    </div>` : ''}
+
     <div class="ds">
       <div class="ds-title">
         <span>WORKFLOW</span>
@@ -2845,7 +2933,7 @@ function renderDrawerNotes(body, app) {
           <label>Status</label>
           <select id="nw-status" style="margin:0">
             ${['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived']
-              .map(s=>`<option${s===(app?.workflow_status||'New')?' selected':''}>${s}</option>`).join('')}
+              .map(s=>`<option${s===status?' selected':''}>${s}</option>`).join('')}
           </select>
         </div>
         <div>
@@ -2876,18 +2964,82 @@ function renderDrawerNotes(body, app) {
     </div>
     <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
     <div class="ds">
-      <div class="ds-title">ANALYST NOTES</div>
+      <div class="ds-title">
+        <span>ANALYST NOTES</span>
+        ${(status === 'Draft Complete' || status === 'In Review') ? '<span style="font-size:.68rem;color:#d97706;font-weight:400;text-transform:none;letter-spacing:0">Submitted for review</span>' : ''}
+      </div>
       <textarea id="edit-working-notes" style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem"
         placeholder="Write your debrief analysis, observations, and recommendations here...">${esc(wn)}</textarea>
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Draft</button>
         <button class="btn btn-s btn-sm" onclick="addNote('working')">+ Append Timestamped Note</button>
+        ${canSubmitForReview ? `<button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="submitForReview()">📤 Submit for Review</button>` : ''}
         <span id="wn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
       </div>
       <textarea id="new-working-note" rows="2" style="margin-top:.5rem;font-size:.78rem"
         placeholder="Type a quick note to append with timestamp..."></textarea>
     </div>
+
+    ${reviewerNotes && !showReviewerPanel ? `
+    <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
+    <div class="ds">
+      <div class="ds-title" style="color:#059669">REVIEWER FEEDBACK</div>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:.55rem .75rem;font-size:.8rem;color:#166534;line-height:1.5;white-space:pre-wrap">${esc(reviewerNotes)}</div>
+    </div>` : ''}
   `;
+}
+
+async function submitForReview() {
+  if (!currentAppId) return;
+  // First save the current notes
+  const val = document.getElementById('edit-working-notes')?.value || '';
+  await fetch('/api/appearance/' + currentAppId + '/notes', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({analyst_working_notes: val, replace: true, changed_by: currentUser})
+  });
+  // Set status to "Draft Complete" — this triggers reviewer notification
+  await fetch('/api/appearance/' + currentAppId + '/workflow', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({status: 'Draft Complete', changed_by: currentUser})
+  });
+  toast('Submitted for review — reviewer will be notified', 'ok');
+  // Refresh drawer
+  const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
+  _drData.appData = ar.appearance;
+  renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
+}
+
+async function reviewerAction(action) {
+  if (!currentAppId) return;
+  // Save reviewer notes first
+  const reviewerNotes = document.getElementById('edit-reviewer-notes')?.value || '';
+  await fetch('/api/appearance/' + currentAppId + '/notes', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({reviewer_notes: reviewerNotes, replace: true, changed_by: currentUser})
+  });
+
+  if (action === 'approve') {
+    // Set status to Finalized
+    await fetch('/api/appearance/' + currentAppId + '/workflow', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({status: 'Finalized', changed_by: currentUser})
+    });
+    toast('Item approved and finalized', 'ok');
+  } else if (action === 'revise') {
+    // Set status back to In Progress
+    await fetch('/api/appearance/' + currentAppId + '/workflow', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({status: 'In Progress', changed_by: currentUser})
+    });
+    toast('Sent back to analyst for revision', 'ok');
+  }
+
+  // Refresh drawer
+  const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
+  _drData.appData = ar.appearance;
+  renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
+  // Refresh workflow pages in background
+  loadDashboard(); loadWorkflow();
 }
 
 // ─── Deep Research tab (formerly "Finalized Brief") ───────────
@@ -3132,6 +3284,26 @@ async function appendChatToTarget(msgId, target, btnEl) {
   } catch(e) {}
 }
 
+function showReviewQueue() {
+  if (!currentUser) {
+    alert('To see your review queue, first select your name from the "Acting as…" dropdown in the top-right header.');
+    return;
+  }
+  document.getElementById('wf-f-status').value = 'Draft Complete';
+  // We'll use a special convention: assigned filter "reviewer:me"
+  const wfAssigned = document.getElementById('wf-f-assigned');
+  // Check if reviewer option exists, add it if not
+  let revOpt = wfAssigned.querySelector('option[value="reviewer:me"]');
+  if (!revOpt) {
+    revOpt = document.createElement('option');
+    revOpt.value = 'reviewer:me';
+    revOpt.textContent = 'My Reviews';
+    wfAssigned.appendChild(revOpt);
+  }
+  wfAssigned.value = 'reviewer:me';
+  loadWorkflow();
+}
+
 async function saveWorkflowFromDrawer() {
   if(!currentAppId)return;
   await fetch(`/api/appearance/${currentAppId}/workflow`,{
@@ -3162,6 +3334,18 @@ async function saveFullNotes(type) {
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({[key]:val,replace:true,changed_by:currentUser})
   });
+
+  // Auto-advance status: New/Assigned → In Progress when analyst saves notes
+  if (type === 'working' && val.trim()) {
+    const curStatus = _drData?.appData?.workflow_status || '';
+    if (curStatus === 'New' || curStatus === 'Assigned') {
+      await fetch(`/api/appearance/${currentAppId}/workflow`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({status: 'In Progress', changed_by: currentUser})
+      });
+    }
+  }
+
   const m=document.getElementById(msgEl);
   if(m){m.textContent='✓ Saved';m.style.display='';setTimeout(()=>m.style.display='none',2500);}
   const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
@@ -4429,6 +4613,8 @@ def api_stats():
     d["overdue_count"]    = len(get_overdue_appearances())
     d["due_soon_count"]   = len(get_due_soon_appearances(7))
     d["unassigned_count"] = len(get_unassigned_appearances())
+    # Count items pending review (Draft Complete status)
+    d["pending_review_count"] = d.get("by_status", {}).get("Draft Complete", 0)
     return jsonify(d)
 
 
@@ -4528,6 +4714,14 @@ def api_workflow_update(app_id):
         if new_status == "Draft Complete" and old_status != "Draft Complete":
             notifications.send_draft_complete_notification(enriched)
 
+        # 3. Status sent back (Draft Complete/In Review → In Progress) → notify analyst
+        if new_status == "In Progress" and old_status in ("Draft Complete", "In Review"):
+            notifications.send_revision_notification(enriched)
+
+        # 4. Status → Finalized → notify analyst of approval
+        if new_status == "Finalized" and old_status in ("Draft Complete", "In Review"):
+            notifications.send_approval_notification(enriched)
+
     except Exception as _e:
         app.logger.warning(f"Notification error: {_e}")
 
@@ -4621,6 +4815,102 @@ def api_meeting_detail(meeting_id):
     if not pkg:
         return jsonify({"error": "not found"}), 404
     return jsonify(pkg)
+
+
+@app.route("/api/appearance/<int:app_id>/reanalyze", methods=["POST"])
+def api_appearance_reanalyze(app_id):
+    """Re-run AI analysis on a single appearance. Uses the item PDF text
+    (or just the title if no PDF) and stores the result. Runs in a background
+    thread so the UI doesn't block."""
+    from repository import get_appearance_by_id, get_matter_by_file_number
+    a = get_appearance_by_id(app_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+
+    def _run_reanalysis():
+        try:
+            from analyzer import AgendaAnalyzer
+            from repository import get_meeting_by_id
+            import db as _db
+
+            matter = get_matter_by_file_number(a["file_number"]) or {}
+            meeting = get_meeting_by_id(a["meeting_id"]) or {}
+            title = a.get("appearance_title") or matter.get("short_title") or ""
+            item_num = a.get("committee_item_number") or a.get("bcc_item_number") or a.get("raw_agenda_item_number") or ""
+            committee = meeting.get("body_name") or ""
+
+            # Try to get PDF text from local file
+            pdf_text = ""
+            pdf_path = a.get("item_pdf_local_path") or ""
+            if pdf_path and Path(pdf_path).exists():
+                try:
+                    import fitz
+                    doc = fitz.open(pdf_path)
+                    pdf_text = "\n".join(page.get_text() for page in doc)
+                    doc.close()
+                except Exception as e:
+                    app.logger.warning(f"PDF read failed for reanalysis: {e}")
+
+            # Build prior context from earlier appearances
+            prior = ""
+            from repository import get_all_appearances_for_matter
+            all_apps = get_all_appearances_for_matter(matter.get("id", 0))
+            for pa in sorted(all_apps, key=lambda x: x.get("meeting_date", "")):
+                if pa["id"] == app_id:
+                    break
+                if (pa.get("ai_summary_for_appearance") or "").strip():
+                    prior += f"\n[Prior {pa.get('body_name','')} {pa.get('meeting_date','')}]\n"
+                    prior += pa["ai_summary_for_appearance"][:1000] + "\n"
+
+            analyzer = AgendaAnalyzer()
+            part1, part2, full, meta = analyzer.analyze_item(
+                item_number=item_num,
+                title=title,
+                pdf_text=pdf_text,
+                committee_name=committee,
+                prior_context=prior,
+            )
+
+            # Store results
+            now = now_iso()
+            with _db.get_db() as conn:
+                conn.execute("""UPDATE appearances SET
+                    ai_summary_for_appearance=?,
+                    watch_points_for_appearance=?,
+                    finalized_brief=CASE WHEN finalized_brief IS NULL OR finalized_brief='' THEN ? ELSE finalized_brief END,
+                    analysis_input_hash=?,
+                    analysis_tokens_in=?,
+                    analysis_tokens_out=?,
+                    analysis_cached_tokens=?,
+                    analysis_at=?,
+                    updated_at=? WHERE id=?""",
+                    (part1,
+                     "",  # watch points extracted separately if needed
+                     part2,
+                     meta.get("input_hash",""),
+                     meta.get("usage",{}).get("in",0),
+                     meta.get("usage",{}).get("out",0),
+                     meta.get("usage",{}).get("cached",0),
+                     now, now, app_id))
+
+            # Extract watch points from part1 if present
+            import re
+            wp_match = re.search(r'(?:WATCH POINTS|Watch Points|POINTS TO WATCH)[:\s]*\n([\s\S]*?)(?:\n\n|\Z)', part1)
+            if wp_match:
+                wp_text = wp_match.group(1).strip()
+                with _db.get_db() as conn:
+                    conn.execute("UPDATE appearances SET watch_points_for_appearance=? WHERE id=?",
+                                 (wp_text, app_id))
+
+            app.logger.info(f"Reanalysis complete for appearance {app_id}: "
+                           f"{meta.get('usage',{}).get('in',0)} in / {meta.get('usage',{}).get('out',0)} out tokens")
+        except Exception as e:
+            app.logger.error(f"Reanalysis failed for appearance {app_id}: {e}")
+
+    import threading
+    t = threading.Thread(target=_run_reanalysis, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "message": "Reanalysis started in background"})
 
 
 @app.route("/api/meeting/<int:meeting_id>/regenerate", methods=["POST"])
@@ -4949,6 +5239,7 @@ def api_workflow():
 
     status   = request.args.get("status")
     assigned = request.args.get("assigned")
+    reviewer = request.args.get("reviewer")
     due_filter = request.args.get("due")
 
     with _db.get_db() as conn:
@@ -4956,6 +5247,8 @@ def api_workflow():
         params = []
         if status:
             where.append("a.workflow_status=?"); params.append(status)
+        if reviewer:
+            where.append("a.reviewer=?"); params.append(reviewer)
         if assigned == "__unassigned__":
             where.append("(a.assigned_to IS NULL OR a.assigned_to='')")
         elif assigned:

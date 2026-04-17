@@ -176,6 +176,92 @@ def send_draft_complete_notification(appearance: dict):
     _send_email(cfg_to, f"[AgendaIQ] Review Needed: {file_num} — {title[:45]}", html)
 
 
+def send_revision_notification(appearance: dict):
+    """Email the analyst when their item is sent back for revision by the reviewer."""
+    cfg = load_config()
+    if not cfg.get("email_enabled"):
+        return
+    analyst = appearance.get("assigned_to") or ""
+    if not analyst:
+        return
+    email = get_member_email(analyst)
+    if not email:
+        log.info(f"  No email for analyst '{analyst}' — revision notification skipped")
+        return
+
+    file_num    = appearance.get("file_number", "")
+    title       = (appearance.get("short_title") or appearance.get("appearance_title") or "")[:80]
+    reviewer    = appearance.get("reviewer") or "Reviewer"
+    reviewer_notes = (appearance.get("reviewer_notes") or "").strip()[:500]
+
+    html = f"""
+    <div style='font-family:Arial,sans-serif;max-width:700px;'>
+      <div style='background:#d97706;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:18px;'>&#x21A9; AgendaIQ &#x2014; Revision Requested</h2>
+        <p style='margin:4px 0 0;opacity:.8;font-size:13px;'>Your draft has been sent back for revision</p>
+      </div>
+      <div style='border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:20px;'>
+        <p style='margin:0 0 16px;'>Hi <strong>{analyst}</strong>, your reviewer (<strong>{reviewer}</strong>) has requested changes to:</p>
+        <table style='width:100%;border-collapse:collapse;margin-bottom:16px;background:#f8fafc;'>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;width:130px;border-bottom:1px solid #e2e8f0;'>File #</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#003087;'>{file_num}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;'>Title</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;'>{title}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;'>Reviewer</td>
+              <td style='padding:9px 14px;'>{reviewer}</td></tr>
+        </table>
+        {'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:12px;margin-bottom:16px;"><p style="margin:0 0 4px;font-weight:600;font-size:13px;color:#92400e;">Reviewer Feedback:</p><p style="margin:0;font-size:13px;color:#78350f;white-space:pre-wrap;">' + reviewer_notes + '</p></div>' if reviewer_notes else ''}
+        <p style='color:#64748b;font-size:12px;margin:0;'>&#x2014; AgendaIQ &middot; Office of the Commission Auditor &middot; Miami-Dade County</p>
+      </div>
+    </div>"""
+
+    cfg_to = dict(cfg)
+    cfg_to["notify_recipients"] = [email]
+    _send_email(cfg_to, f"[AgendaIQ] Revision Requested: {file_num} — {title[:45]}", html)
+
+
+def send_approval_notification(appearance: dict):
+    """Email the analyst when their item has been approved/finalized by the reviewer."""
+    cfg = load_config()
+    if not cfg.get("email_enabled"):
+        return
+    analyst = appearance.get("assigned_to") or ""
+    if not analyst:
+        return
+    email = get_member_email(analyst)
+    if not email:
+        log.info(f"  No email for analyst '{analyst}' — approval notification skipped")
+        return
+
+    file_num    = appearance.get("file_number", "")
+    title       = (appearance.get("short_title") or appearance.get("appearance_title") or "")[:80]
+    reviewer    = appearance.get("reviewer") or "Reviewer"
+
+    html = f"""
+    <div style='font-family:Arial,sans-serif;max-width:700px;'>
+      <div style='background:#059669;color:#fff;padding:16px 24px;border-radius:8px 8px 0 0;'>
+        <h2 style='margin:0;font-size:18px;'>&#x2705; AgendaIQ &#x2014; Brief Approved</h2>
+        <p style='margin:4px 0 0;opacity:.8;font-size:13px;'>Your draft has been approved and finalized</p>
+      </div>
+      <div style='border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;padding:20px;'>
+        <p style='margin:0 0 16px;'>Hi <strong>{analyst}</strong>, your brief has been approved by <strong>{reviewer}</strong>:</p>
+        <table style='width:100%;border-collapse:collapse;margin-bottom:16px;background:#f8fafc;'>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;width:130px;border-bottom:1px solid #e2e8f0;'>File #</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;font-weight:600;color:#003087;'>{file_num}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0;'>Title</td>
+              <td style='padding:9px 14px;border-bottom:1px solid #e2e8f0;'>{title}</td></tr>
+          <tr><td style='padding:9px 14px;font-weight:600;color:#475569;'>Status</td>
+              <td style='padding:9px 14px;font-weight:600;color:#059669;'>Finalized &#x2714;</td></tr>
+        </table>
+        <p style='color:#64748b;font-size:12px;margin:0;'>&#x2014; AgendaIQ &middot; Office of the Commission Auditor &middot; Miami-Dade County</p>
+      </div>
+    </div>"""
+
+    cfg_to = dict(cfg)
+    cfg_to["notify_recipients"] = [email]
+    _send_email(cfg_to, f"[AgendaIQ] Approved: {file_num} — {title[:45]}", html)
+
+
 def send_overdue_alert(overdue_items: list):
     cfg = load_config()
     if not overdue_items:
