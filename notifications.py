@@ -1,11 +1,11 @@
 """
-notifications.py — Email reminder system for OCA Agenda Intelligence v6
+notifications.py — Email + Webhook reminder system for OCA Agenda Intelligence v6
 
 Checks for overdue and due-soon appearances hourly.
 Configured via oca_config.json in the project directory.
 
 Config keys:
-  email_enabled       bool   — master on/off switch
+  email_enabled       bool   — master on/off switch for email
   smtp_host           str    — e.g. "smtp.gmail.com"
   smtp_port           int    — e.g. 587
   smtp_user           str    — sender address
@@ -14,8 +14,11 @@ Config keys:
   notify_recipients   list   — email addresses to notify
   reminder_days       int    — how many days ahead to warn (default 7)
   team_members        list   — [{name, email}] for assignment UI
+  webhook_enabled     bool   — master on/off switch for Teams/Slack webhook
+  webhook_url         str    — incoming webhook URL (Teams or Slack)
 """
 import json, smtplib, logging, threading, time
+import urllib.request
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
@@ -35,6 +38,8 @@ DEFAULT_CONFIG = {
     "notify_recipients": [],
     "reminder_days": 7,
     "team_members": [],
+    "webhook_enabled": False,
+    "webhook_url": "",
 }
 
 
@@ -73,6 +78,130 @@ def _send_email(cfg: dict, subject: str, body_html: str):
         log.info(f"  Email sent: {subject}")
     except Exception as e:
         log.error(f"  Email failed: {e}")
+
+
+def _detect_webhook_type(url: str) -> str:
+    """Auto-detect webhook type from URL."""
+    if not url:
+        return "unknown"
+    url_lower = url.lower()
+    if "office.com" in url_lower or "microsoft.com" in url_lower or "webhook.office" in url_lower:
+        return "teams"
+    if "hooks.slack.com" in url_lower or "slack" in url_lower:
+        return "slack"
+    # Default to Slack-compatible format (works with most webhooks)
+    return "slack"
+
+
+def _send_webhook(cfg: dict, title: str, message: str, color: str = "#003087",
+                   facts: list = None):
+    """Send notification to Teams or Slack incoming webhook.
+
+    Args:
+        cfg: config dict with webhook_url and webhook_enabled
+        title: notification title/header
+        message: notification body text
+        color: hex color for the card/attachment accent
+        facts: optional list of {"name": ..., "value": ...} for structured data
+    """
+    if not cfg.get("webhook_enabled"):
+        return
+    url = cfg.get("webhook_url", "").strip()
+    if not url:
+        return
+
+    hook_type = _detect_webhook_type(url)
+
+    try:
+        if hook_type == "teams":
+            # Microsoft Teams Adaptive Card via Incoming Webhook
+            # Teams deprecated Office 365 connectors; use Adaptive Card format
+            facts_blocks = []
+            if facts:
+                for f in facts:
+                    facts_blocks.append({
+                        "type": "ColumnSet",
+                        "columns": [
+                            {"type": "Column", "width": "auto", "items": [
+                                {"type": "TextBlock", "text": f["name"] + ":", "weight": "Bolder", "size": "Small"}
+                            ]},
+                            {"type": "Column", "width": "stretch", "items": [
+                                {"type": "TextBlock", "text": f["value"], "size": "Small", "wrap": True}
+                            ]}
+                        ]
+                    })
+
+            payload = {
+                "type": "message",
+                "attachments": [{
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
+                        "body": [
+                            {
+                                "type": "Container",
+                                "style": "emphasis",
+                                "items": [
+                                    {"type": "TextBlock", "text": title, "weight": "Bolder",
+                                     "size": "Medium", "color": "Accent"},
+                                ]
+                            },
+                            {"type": "TextBlock", "text": message, "wrap": True, "size": "Small"},
+                            *facts_blocks,
+                            {"type": "TextBlock", "text": "— AgendaIQ · OCA · Miami-Dade County",
+                             "size": "Small", "isSubtle": True, "spacing": "Medium"}
+                        ]
+                    }
+                }]
+            }
+        else:
+            # Slack-compatible payload
+            fields = []
+            if facts:
+                for f in facts:
+                    fields.append({"title": f["name"], "value": f["value"], "short": True})
+
+            payload = {
+                "text": f"*{title}*",
+                "attachments": [{
+                    "color": color,
+                    "text": message,
+                    "fields": fields,
+                    "footer": "AgendaIQ · OCA · Miami-Dade County",
+                }]
+            }
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data,
+                                      headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log.info(f"  Webhook sent ({hook_type}): {title} — status {resp.status}")
+    except Exception as e:
+        log.error(f"  Webhook failed ({hook_type}): {e}")
+
+
+def test_webhook(cfg: dict) -> dict:
+    """Send a test message to the configured webhook. Returns {ok, error}."""
+    url = cfg.get("webhook_url", "").strip()
+    if not url:
+        return {"ok": False, "error": "No webhook URL configured"}
+    hook_type = _detect_webhook_type(url)
+    try:
+        _send_webhook(
+            {**cfg, "webhook_enabled": True},
+            "AgendaIQ — Test Notification",
+            "This is a test message from AgendaIQ. Webhook notifications are working!",
+            color="#003087",
+            facts=[
+                {"name": "Type", "value": f"Detected as {hook_type.title()}"},
+                {"name": "Status", "value": "Connected successfully"},
+            ]
+        )
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def get_member_email(name: str) -> str | None:
@@ -129,6 +258,17 @@ def send_assignment_notification(appearance: dict):
     cfg_to["notify_recipients"] = [email]
     _send_email(cfg_to, f"[AgendaIQ] Assigned to You: {file_num} — {title[:45]}", html)
 
+    # Webhook notification
+    _send_webhook(cfg, f"📋 Item Assigned — {file_num}",
+        f"*{file_num}* has been assigned to *{assignee}*\n{title}",
+        color="#003087",
+        facts=[
+            {"name": "File #", "value": file_num},
+            {"name": "Assigned To", "value": assignee},
+            {"name": "Meeting", "value": f"{meeting} — {body_name}" if body_name else meeting},
+            {"name": "Due", "value": due},
+        ])
+
 
 def send_draft_complete_notification(appearance: dict):
     """Email the reviewer when an item reaches Draft Complete status."""
@@ -175,6 +315,17 @@ def send_draft_complete_notification(appearance: dict):
     cfg_to["notify_recipients"] = [email]
     _send_email(cfg_to, f"[AgendaIQ] Review Needed: {file_num} — {title[:45]}", html)
 
+    # Webhook notification
+    _send_webhook(cfg, f"✅ Draft Ready for Review — {file_num}",
+        f"*{assigned_to}* submitted *{file_num}* for review by *{reviewer}*\n{title}",
+        color="#00843d",
+        facts=[
+            {"name": "File #", "value": file_num},
+            {"name": "Analyst", "value": assigned_to},
+            {"name": "Reviewer", "value": reviewer},
+            {"name": "Due", "value": due},
+        ])
+
 
 def send_revision_notification(appearance: dict):
     """Email the analyst when their item is sent back for revision by the reviewer."""
@@ -219,6 +370,17 @@ def send_revision_notification(appearance: dict):
     cfg_to["notify_recipients"] = [email]
     _send_email(cfg_to, f"[AgendaIQ] Revision Requested: {file_num} — {title[:45]}", html)
 
+    # Webhook notification
+    _send_webhook(cfg, f"↩ Revision Requested — {file_num}",
+        f"*{reviewer}* sent *{file_num}* back to *{analyst}* for revision\n{title}",
+        color="#d97706",
+        facts=[
+            {"name": "File #", "value": file_num},
+            {"name": "Reviewer", "value": reviewer},
+            {"name": "Analyst", "value": analyst},
+            {"name": "Feedback", "value": reviewer_notes[:200] if reviewer_notes else "No comment"},
+        ])
+
 
 def send_approval_notification(appearance: dict):
     """Email the analyst when their item has been approved/finalized by the reviewer."""
@@ -261,6 +423,17 @@ def send_approval_notification(appearance: dict):
     cfg_to["notify_recipients"] = [email]
     _send_email(cfg_to, f"[AgendaIQ] Approved: {file_num} — {title[:45]}", html)
 
+    # Webhook notification
+    _send_webhook(cfg, f"✅ Brief Approved — {file_num}",
+        f"*{reviewer}* approved *{file_num}* — status is now *Finalized*\n{title}",
+        color="#059669",
+        facts=[
+            {"name": "File #", "value": file_num},
+            {"name": "Analyst", "value": analyst},
+            {"name": "Reviewer", "value": reviewer},
+            {"name": "Status", "value": "Finalized ✓"},
+        ])
+
 
 def send_overdue_alert(overdue_items: list):
     cfg = load_config()
@@ -297,6 +470,15 @@ def send_overdue_alert(overdue_items: list):
       </div>
     </div>"""
     _send_email(cfg, f"[AgendaIQ] {len(overdue_items)} Overdue Item(s) — Action Required", html)
+
+    # Webhook notification for overdue items
+    items_list = "\n".join(
+        f"• *{r.get('file_number','')}* — {r.get('short_title','')[:50]} (due {r.get('due_date','?')}, assigned to {r.get('assigned_to','Unassigned')})"
+        for r in overdue_items[:10]
+    )
+    _send_webhook(cfg, f"🔴 {len(overdue_items)} Overdue Item(s)",
+        items_list,
+        color="#dc2626")
 
 
 def send_due_soon_reminder(due_soon_items: list, days: int = 7):

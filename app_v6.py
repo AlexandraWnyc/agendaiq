@@ -1179,6 +1179,27 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           </div>
         </div>
       </div>
+      <div class="card" style="margin-top:1rem">
+        <div class="ch"><div class="ch-left"><div class="cicon">🔔</div>Teams / Slack Webhook</div></div>
+        <div class="cb">
+          <div style="display:flex;align-items:center;gap:.75rem;margin-bottom:.85rem;">
+            <label style="margin:0;font-size:.82rem;font-weight:500">Enable webhook notifications</label>
+            <input type="checkbox" id="webhook-enabled" style="width:auto;margin:0;accent-color:var(--blue)">
+          </div>
+          <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:7px;padding:.65rem .9rem;margin-bottom:.75rem;font-size:.78rem;color:#5b21b6;line-height:1.5;">
+            <strong>How to set up:</strong><br>
+            <b>Microsoft Teams:</b> Channel → Manage channel → Connectors → Incoming Webhook → Create → copy the URL.<br>
+            <b>Slack:</b> Apps → Incoming WebHooks → Add to Slack → pick a channel → copy the URL.<br>
+            AgendaIQ auto-detects which platform you're using from the URL.
+          </div>
+          <label>Webhook URL</label>
+          <input type="text" id="webhook-url" placeholder="https://hooks.slack.com/services/... or https://xxx.webhook.office.com/...">
+          <div style="display:flex;gap:.5rem;margin-top:.5rem">
+            <button class="btn btn-p btn-sm" onclick="saveSettings()">Save Settings</button>
+            <button class="btn btn-o btn-sm" onclick="testWebhook()">Send Test Message</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -4065,6 +4086,8 @@ async function loadSettings() {
   document.getElementById('smtp-pass').value=_cfg.smtp_password||'';
   document.getElementById('smtp-recip').value=(_cfg.notify_recipients||[]).join(', ');
   document.getElementById('reminder-days').value=_cfg.reminder_days||7;
+  document.getElementById('webhook-enabled').checked=!!_cfg.webhook_enabled;
+  document.getElementById('webhook-url').value=_cfg.webhook_url||'';
   renderTeamList();
 }
 
@@ -4105,8 +4128,10 @@ async function saveSettings(silent=false) {
   _cfg.smtp_password=document.getElementById('smtp-pass')?.value||'';
   _cfg.notify_recipients=(document.getElementById('smtp-recip')?.value||'').split(',').map(s=>s.trim()).filter(Boolean);
   _cfg.reminder_days=parseInt(document.getElementById('reminder-days')?.value)||7;
+  _cfg.webhook_enabled=document.getElementById('webhook-enabled')?.checked||false;
+  _cfg.webhook_url=document.getElementById('webhook-url')?.value||'';
   await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(_cfg)});
-  if(!silent)alert('Settings saved.');
+  if(!silent)toast('Settings saved','ok');
   loadConfig();
 }
 
@@ -4115,6 +4140,13 @@ async function testEmail() {
   const r=await fetch('/api/test-email',{method:'POST'});
   const d=await r.json();
   alert(d.ok?'Test email sent! Check your inbox.':'Failed: '+d.error);
+}
+
+async function testWebhook() {
+  await saveSettings(true);
+  const r=await fetch('/api/test-webhook',{method:'POST'});
+  const d=await r.json();
+  alert(d.ok?'Test message sent! Check your Teams/Slack channel.':'Failed: '+(d.error||'Unknown error'));
 }
 
 // ════════════════════════════════════════════════════════════
@@ -5972,6 +6004,16 @@ def api_test_email():
         notifications._send_email(cfg, "[AgendaIQ] Test Email",
             "<p>This is a test email from AgendaIQ. Email notifications are working!</p>")
         return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
+
+
+@app.route("/api/test-webhook", methods=["POST"])
+def api_test_webhook():
+    try:
+        cfg = notifications.load_config()
+        result = notifications.test_webhook(cfg)
+        return jsonify(result)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
