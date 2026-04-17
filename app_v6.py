@@ -1384,9 +1384,12 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="dr-meta" id="dr-meta"></div>
   </div>
   <div class="dr-tabs">
-    <button class="dtab on" onclick="drTab('overview',this)" title="Item overview + appearance timeline">Overview</button>
+    <button class="dtab on" onclick="drTab('overview',this)" title="Debrief + Watchpoints + Appearance Timeline">Overview</button>
+    <button class="dtab" onclick="drTab('notes',this)">Notes</button>
     <button class="dtab" onclick="drTab('deep',this)" title="Reference only — not exported">Deep Research</button>
     <button class="dtab" onclick="drTab('chat',this)" title="Private AI chat about this item">AI Chat</button>
+    <button class="dtab" onclick="drTab('history',this)">History</button>
+    <button class="dtab" onclick="drTab('lifecycle',this)">Lifecycle</button>
   </div>
   <div class="dr-body" id="dr-body">
     <div style="color:var(--gray-400);font-size:.85rem">Loading…</div>
@@ -2065,6 +2068,14 @@ async function openDrawer(fileNum, appId) {
       ? `<a target="_blank" href="/api/appearance/${appData.id}/pdf" style="color:#fff;text-decoration:underline">📄 Item PDF</a>` : '',
   ].filter(Boolean).join('');
 
+  // Add 🎙 badge to Notes tab if transcript notes exist
+  const notesTab = document.querySelectorAll('.dtab')[1]; // Notes is 2nd tab
+  if (notesTab) {
+    const hasTranscript = (appData?.analyst_working_notes || '').includes('[Meeting Discussion')
+      || (appData?.transcript_analysis || '');
+    notesTab.innerHTML = hasTranscript ? 'Notes <span style="font-size:.65rem" title="Has meeting transcript analysis">🎙</span>' : 'Notes';
+  }
+
   // Default to overview tab
   drTab('overview', document.querySelector('.dtab'));
 }
@@ -2085,8 +2096,11 @@ function drTab(tab, el) {
   const {matter,appData} = _drData;
 
   if(tab==='overview') renderDrawerOverview(body,matter,appData,save);
+  if(tab==='notes')   renderDrawerNotes(body,appData);
   if(tab==='deep')    renderDrawerDeepResearch(body,appData);
   if(tab==='chat')    renderDrawerChat(body,appData);
+  if(tab==='history') renderDrawerHistory(body,appData);
+  if(tab==='lifecycle')   renderDrawerLifecycle(body,appData);
 }
 
 function renderDrawerOverview(body, matter, app, saveBtn) {
