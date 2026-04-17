@@ -6603,30 +6603,6 @@ def api_chat_append(appearance_id):
     return jsonify({"ok": True, "target": target})
 
 
-@app.route("/api/maintenance/vacuum", methods=["POST"])
-def api_maintenance_vacuum():
-    """Reclaim disk space: checkpoint WAL, vacuum, and report DB size."""
-    import os
-    try:
-        with get_db() as conn:
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        # VACUUM must run outside a transaction
-        c = get_connection()
-        c.execute("VACUUM")
-        c.close()
-        db_size = os.path.getsize(str(DB_PATH))
-        wal_path = str(DB_PATH) + "-wal"
-        wal_size = os.path.getsize(wal_path) if os.path.exists(wal_path) else 0
-        return jsonify({
-            "ok": True,
-            "db_size_mb": round(db_size / 1048576, 2),
-            "wal_size_mb": round(wal_size / 1048576, 2),
-            "total_mb": round((db_size + wal_size) / 1048576, 2),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/api/maintenance/db-size")
 def api_maintenance_db_size():
     """Report current database file sizes."""
