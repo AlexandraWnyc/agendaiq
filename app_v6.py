@@ -2133,19 +2133,30 @@ function drTab(tab, el) {
 }
 
 function renderDrawerOverview(body, matter, app, saveBtn) {
-  const analystNotes = app?.analyst_working_notes || '';
+  const ai = app?.ai_summary_for_appearance || matter?.latest_ai_summary_part1 || '';
+  const wp = app?.watch_points_for_appearance || matter?.latest_watch_points || '';
   // Sort all appearances chronologically (newest first)
   const allApps = (matter?.appearances||[]).slice().sort((a,b) =>
     (b.meeting_date||'').localeCompare(a.meeting_date||'')
   );
 
   body.innerHTML = `
-    ${analystNotes ? `<div class="ds"><div class="ds-title">ANALYST DEBRIEF</div>
-      <div class="editable-field" style="cursor:default;font-size:.82rem;line-height:1.55;white-space:pre-wrap;max-height:300px;overflow-y:auto">${esc(analystNotes)}</div></div>` : ''}
+    <div class="ds">
+      <div class="ds-title">
+        <span>AGENDA DEBRIEF</span>
+        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-ai')">Edit</button>
+      </div>
+      <div class="editable-field" id="edit-ai" contenteditable="false">${esc(ai)||'<span style="color:var(--gray-400)">No debrief yet. Run AI analysis or write one manually.</span>'}</div>
+    </div>
+    <div class="ds">
+      <div class="ds-title">
+        <span>WATCH POINTS</span>
+        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-wp')">Edit</button>
+      </div>
+      <div class="editable-field" id="edit-wp" contenteditable="false">${esc(wp)||'<span style="color:var(--gray-400)">None.</span>'}</div>
+    </div>
     ${app?.leg_history_summary ? `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
-      <div class="editable-field" style="cursor:default;font-size:.82rem;line-height:1.55">${esc(app.leg_history_summary)}</div></div>` :
-      `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
-      <div style="color:var(--gray-400);font-size:.82rem;font-style:italic;padding:.5rem">No legislative history summary yet. Use backfill to generate one.</div></div>`}
+      <div class="editable-field" style="cursor:default;font-size:.82rem;line-height:1.55">${esc(app.leg_history_summary)}</div></div>` : ''}
     ${renderItemEvolution(allApps, app)}
     <div class="ds" id="debrief-backfill-section">
       <div class="ds-title">BACKFILL</div>
@@ -2172,7 +2183,7 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
       <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
     </div>
   `;
-  saveBtn.style.display='none';
+  saveBtn.style.display='';
 }
 
 function renderItemEvolution(allApps, currentApp) {
@@ -3072,10 +3083,11 @@ function renderDrawerNotes(body, app) {
       <textarea id="edit-working-notes"
         style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem${!analystCanEdit?';background:#f8fafc;cursor:default':''}"
         ${!analystCanEdit ? 'readonly' : ''}
-        placeholder="Write your debrief analysis, observations, and recommendations here...">${esc(wn)}</textarea>
+        placeholder="Write your debrief analysis, observations, and recommendations here..."></textarea>
       ${analystCanEdit ? `
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Draft</button>
+        <button class="btn btn-s btn-sm" onclick="appendNotesToDebrief()">+ Append to Debrief</button>
         <span id="wn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
       </div>` : ''}
     </div>
@@ -3465,26 +3477,68 @@ async function saveFullNotes(type) {
   const msgEl = type==='working' ? 'wn-save-msg' : 'rn-save-msg';
   const val = document.getElementById(field)?.value || '';
   const key = type==='working' ? 'analyst_working_notes' : 'reviewer_notes';
-  await fetch(`/api/appearance/${currentAppId}/notes`,{
-    method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({[key]:val,replace:true,changed_by:currentUser})
-  });
-
-  // Auto-advance status: New/Assigned → In Progress when analyst saves notes
-  if (type === 'working' && val.trim()) {
-    const curStatus = _drData?.appData?.workflow_status || '';
-    if (curStatus === 'New' || curStatus === 'Assigned') {
-      await fetch(`/api/appearance/${currentAppId}/workflow`, {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({status: 'In Progress', changed_by: currentUser})
-      });
+  try {
+    const r = await fetch(`/api/appearance/${currentAppId}/notes`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({[key]:val,replace:true,changed_by:currentUser})
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(()=>({}));
+      toast('Save failed: ' + (err.error || 'Server error ' + r.status), 'err');
+      return;
     }
-  }
 
-  const m=document.getElementById(msgEl);
-  if(m){m.textContent='✓ Saved';m.style.display='';setTimeout(()=>m.style.display='none',2500);}
-  const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
-  _drData.appData=ar.appearance;
+    // Auto-advance status: New/Assigned → In Progress when analyst saves notes
+    if (type === 'working' && val.trim()) {
+      const curStatus = _drData?.appData?.workflow_status || '';
+      if (curStatus === 'New' || curStatus === 'Assigned') {
+        await fetch(`/api/appearance/${currentAppId}/workflow`, {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({status: 'In Progress', changed_by: currentUser})
+        });
+      }
+    }
+
+    const m=document.getElementById(msgEl);
+    if(m){m.textContent='✓ Saved';m.style.display='';setTimeout(()=>m.style.display='none',2500);}
+    const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+    _drData.appData=ar.appearance;
+  } catch(e) {
+    toast('Save failed: ' + (e.message||e), 'err');
+  }
+}
+
+async function appendNotesToDebrief() {
+  if (!currentAppId) return;
+  const val = document.getElementById('edit-working-notes')?.value?.trim() || '';
+  if (!val) { toast('Nothing to append — write your notes first', 'err'); return; }
+  try {
+    // First save the notes
+    const r1 = await fetch(`/api/appearance/${currentAppId}/notes`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({analyst_working_notes:val, replace:true, changed_by:currentUser})
+    });
+    if (!r1.ok) { toast('Save failed — check disk space', 'err'); return; }
+
+    // Now append to the AI summary (agenda debrief)
+    const ar = await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
+    const existing = ar.appearance?.ai_summary_for_appearance || '';
+    const separator = existing ? '\\n\\n--- Analyst Notes (appended by ' + (currentUser||'analyst') + ') ---\\n' : '';
+    const newSummary = existing + separator + val;
+    const r2 = await fetch(`/api/appearance/${currentAppId}/ai`,{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({summary:newSummary, changed_by:currentUser})
+    });
+    if (!r2.ok) { toast('Append failed — check disk space', 'err'); return; }
+
+    toast('Notes saved and appended to Agenda Debrief', 'ok');
+    _drData.appData = (await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json())).appearance;
+    // Clear the textarea after successful append
+    const el = document.getElementById('edit-working-notes');
+    if (el) el.value = '';
+  } catch(e) {
+    toast('Error: ' + (e.message||e), 'err');
+  }
 }
 
 async function addNote(type) {
