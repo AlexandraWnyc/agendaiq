@@ -1268,8 +1268,16 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <button class="btn btn-o btn-sm" id="md-regen-btn" onclick="regenDraft()">↻ Regenerate Draft</button>
         <button class="btn btn-s btn-sm" id="md-final-btn" onclick="genFinal()" disabled>✓ Generate Final Export</button>
         <button class="btn btn-o btn-sm" id="md-transcript-btn" onclick="backfillTranscript()"
-          title="Search YouTube for this meeting's recording, download the auto-generated transcript, and add per-item discussion summaries to notes">
-          🎙 Backfill Meeting Transcript
+          title="Search for this meeting's recording and add per-item discussion summaries to notes">
+          🎙 Backfill Transcript
+        </button>
+        <button class="btn btn-o btn-sm" onclick="backfillMeetingUrls()"
+          title="Fetch Legistar URLs and lifecycle history for all items in this meeting">
+          🔗 Backfill URLs + Lifecycle
+        </button>
+        <button class="btn btn-o btn-sm" onclick="reanalyzeMeetingItems()"
+          title="Re-run AI analysis on all items in this meeting">
+          🤖 Re-analyze All Items
         </button>
       </div>
     </div>
@@ -2124,59 +2132,21 @@ function drTab(tab, el) {
 }
 
 function renderDrawerOverview(body, matter, app, saveBtn) {
-  const ai = app?.ai_summary_for_appearance || matter?.latest_ai_summary_part1 || '';
-  const wp = app?.watch_points_for_appearance || matter?.latest_watch_points || '';
-
   // Sort all appearances chronologically (newest first)
   const allApps = (matter?.appearances||[]).slice().sort((a,b) =>
     (b.meeting_date||'').localeCompare(a.meeting_date||'')
   );
 
-  // Build appearance timeline cards
-  let timelineHtml = '';
-  for (let i = 0; i < allApps.length; i++) {
-    const a = allApps[i];
-    const priorApp = i < allApps.length - 1 ? allApps[i + 1] : null;
-    const isCurrent = a.id === app?.id;
-    timelineHtml += renderAppearanceCard(a, matter, isCurrent, priorApp);
-  }
-
   body.innerHTML = `
-    <div class="ds">
-      <div class="ds-title">
-        <span>AGENDA DEBRIEF</span>
-        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-ai')">Edit</button>
-      </div>
-      <div class="editable-field" id="edit-ai" contenteditable="false">${esc(ai)||'<span style="color:var(--gray-400)">No debrief yet.</span>'}</div>
-    </div>
-    <div class="ds">
-      <div class="ds-title">
-        <span>WATCH POINTS</span>
-        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-wp')">Edit</button>
-      </div>
-      <div class="editable-field" id="edit-wp" contenteditable="false">${esc(wp)||'<span style="color:var(--gray-400)">None.</span>'}</div>
-    </div>
-    ${renderStatusLadder(matter, app)}
     ${app?.leg_history_summary ? `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
-      <div class="editable-field" style="cursor:default">${esc(app.leg_history_summary)}</div></div>` : ''}
-    ${matter.legislative_notes ? `<div class="ds"><div class="ds-title">LEGISLATIVE NOTES</div>
-      <div class="editable-field" style="cursor:default">${esc(matter.legislative_notes)}</div></div>` : ''}
+      <div class="editable-field" style="cursor:default;font-size:.82rem;line-height:1.55">${esc(app.leg_history_summary)}</div></div>` :
+      `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
+      <div style="color:var(--gray-400);font-size:.82rem;font-style:italic;padding:.5rem">No legislative history summary yet. Use backfill to generate one.</div></div>`}
     ${renderItemEvolution(allApps, app)}
-    <div class="ds">
-      <div class="ds-title">
-        <span>APPEARANCE TIMELINE</span>
-        <span style="font-size:.68rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
-          ${allApps.length} appearance${allApps.length!==1?'s':''}
-        </span>
-      </div>
-      <div class="app-timeline">
-        ${timelineHtml || '<div style="color:var(--gray-400);font-size:.82rem;font-style:italic;padding:.5rem">No appearances recorded yet.</div>'}
-      </div>
-    </div>
     <div class="ds" id="debrief-backfill-section">
       <div class="ds-title">BACKFILL</div>
       <div style="font-size:.74rem;color:var(--gray-400);margin-bottom:.5rem">
-        Fetch missing data for this item — URLs, lifecycle history, and meeting transcripts.
+        Fetch missing data for this item — URLs, lifecycle history, transcripts, and AI analysis.
       </div>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">
         <button class="btn btn-s btn-sm" onclick="runBackfillForItem('urls')" id="bf-urls-btn">
@@ -2188,6 +2158,9 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
         <button class="btn btn-s btn-sm" onclick="reanalyzeAppearance()" id="bf-ai-btn">
           🤖 Re-run AI Analysis
         </button>
+        <button class="btn btn-s btn-sm" onclick="reanalyzeAllAppearances()" id="bf-ai-all-btn">
+          🤖 Re-analyze ALL Appearances
+        </button>
         <button class="btn btn-s btn-sm" onclick="runBackfillForItem('all')" id="bf-all-btn">
           ⚡ Backfill Everything
         </button>
@@ -2195,11 +2168,12 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
       <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
     </div>
   `;
-  saveBtn.style.display='';
+  saveBtn.style.display='none';
 }
 
 function renderItemEvolution(allApps, currentApp) {
-  // Build "Item Changes / Evolution" section summarizing how the item changed across appearances
+  // "Item Changes / Evolution" — shows what was DISCUSSED at each meeting
+  // and whether the item PDF changed between appearances.
   if (!allApps || allApps.length < 2) return '';
 
   const fmtD = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); };
@@ -2213,40 +2187,55 @@ function renderItemEvolution(allApps, currentApp) {
     const bodyLabel = a.body_name || a.agenda_stage || 'Appearance';
     const dateLabel = fmtD(a.meeting_date);
     const isCurr = a.id === currentApp?.id;
-
-    // Determine what happened at this appearance
-    let summary = '';
-    let changeType = 'info'; // info, changed, nochange, carried
     const notes = (a.analyst_working_notes||'');
 
-    // Check for change detection blocks
+    // === 1. What was DISCUSSED (transcript analysis) ===
+    let discussionHtml = '';
+    let txText = a.transcript_analysis || '';
+    if (!txText) {
+      const txMatch = notes.match(/(\[Meeting Discussion[\s\S]*?)(?=\n\n\[(?!Meeting)|$)/);
+      if (txMatch) txText = txMatch[1];
+    }
+    if (txText) {
+      // Extract key discussion points, truncate for overview
+      const cleaned = txText.replace(/^\[Meeting Discussion[^\]]*\]\s*/i, '').trim();
+      const preview = cleaned.slice(0, 400) + (cleaned.length > 400 ? '…' : '');
+      discussionHtml = `
+        <div style="margin-top:.4rem;padding:.4rem .6rem;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:6px">
+          <div style="font-size:.7rem;font-weight:600;color:#6d28d9;margin-bottom:.2rem">🎙 WHAT WAS DISCUSSED</div>
+          <div style="font-size:.76rem;color:#374151;line-height:1.45;white-space:pre-wrap">${esc(preview)}</div>
+        </div>`;
+    } else {
+      discussionHtml = `
+        <div style="margin-top:.3rem;font-size:.72rem;color:#94a3b8;font-style:italic">
+          No transcript analysis available for this appearance.
+        </div>`;
+    }
+
+    // === 2. Did the PDF change? ===
+    let pdfChangeHtml = '';
     const cdChanges = notes.match(/\[(Changes from ([^\]]+) to [^\]]+)\]\s*([\s\S]*?)(?=\n\n\[|$)/);
     const cdNoChanges = notes.match(/\[(No changes from ([^\]]+) to [^\]]+)\]/);
+    const hasPdf = !!(a.item_pdf_url || a.item_pdf_local_path);
+
     if (cdChanges) {
-      changeType = 'changed';
-      summary = (cdChanges[3]||'').trim().split('\n').slice(0,3).join('; ').slice(0,300);
+      const changeSummary = (cdChanges[3]||'').trim().split('\n').slice(0, 4).join('\n').slice(0, 400);
+      pdfChangeHtml = `
+        <div style="margin-top:.3rem;padding:.4rem .6rem;background:#fef2f2;border:1px solid #fecaca;border-radius:6px">
+          <div style="font-size:.7rem;font-weight:600;color:#dc2626;margin-bottom:.2rem">⚠ PDF CHANGED from prior version</div>
+          <div style="font-size:.76rem;color:#374151;line-height:1.45;white-space:pre-wrap">${esc(changeSummary)}</div>
+        </div>`;
     } else if (cdNoChanges) {
-      changeType = 'nochange';
-      summary = 'Item text unchanged from prior appearance.';
-    } else if (a.carried_forward_from_prior && prev) {
-      changeType = 'carried';
-      summary = 'Carried forward from ' + (prev.body_name||'prior') + '.';
+      pdfChangeHtml = `
+        <div style="margin-top:.3rem;padding:.3rem .6rem;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px">
+          <div style="font-size:.72rem;color:#059669;font-weight:600">✓ PDF unchanged from prior version</div>
+        </div>`;
+    } else if (i > 0 && hasPdf) {
+      pdfChangeHtml = `
+        <div style="margin-top:.3rem;font-size:.72rem;color:#94a3b8;font-style:italic">
+          PDF change detection not yet run. Use backfill to compare versions.
+        </div>`;
     }
-
-    // Use AI summary if available and no change detection
-    if (!summary && a.ai_summary_for_appearance) {
-      summary = a.ai_summary_for_appearance.slice(0,250) + (a.ai_summary_for_appearance.length>250?'…':'');
-    }
-    if (!summary && i === 0) {
-      summary = 'Initial appearance on agenda.';
-    }
-
-    // Check for transcript
-    const hasTx = !!(a.transcript_analysis || notes.includes('[Meeting Discussion'));
-
-    const colors = { changed:'#fef2f2', nochange:'#f0fdf4', carried:'#fffbeb', info:'#f8fafc' };
-    const borders = { changed:'#fecaca', nochange:'#bbf7d0', carried:'#fde68a', info:'#e2e8f0' };
-    const icons = { changed:'⚠', nochange:'✓', carried:'↩', info:'📋' };
 
     evolutionRows += `
       <div style="display:flex;gap:.6rem;align-items:flex-start">
@@ -2254,16 +2243,19 @@ function renderItemEvolution(allApps, currentApp) {
           <div style="width:10px;height:10px;border-radius:50%;background:${isCurr?'#2563eb':'#94a3b8'};margin-top:5px"></div>
           ${i < chronoApps.length-1 ? '<div style="width:2px;flex:1;background:#e2e8f0;min-height:30px"></div>':''}
         </div>
-        <div style="flex:1;background:${colors[changeType]};border:1px solid ${borders[changeType]};
-          border-radius:8px;padding:.5rem .7rem;margin-bottom:.5rem;${isCurr?'box-shadow:0 0 0 2px #93c5fd':''}">
+        <div style="flex:1;background:#f8fafc;border:1px solid ${isCurr?'#93c5fd':'#e2e8f0'};
+          border-radius:8px;padding:.55rem .7rem;margin-bottom:.5rem;${isCurr?'box-shadow:0 0 0 2px #93c5fd':''}">
           <div style="display:flex;justify-content:space-between;align-items:center">
-            <div style="font-size:.78rem;font-weight:600;color:#1e293b">
-              ${icons[changeType]} ${esc(bodyLabel)} — ${esc(dateLabel)}
+            <div style="font-size:.8rem;font-weight:600;color:#1e293b">
+              ${esc(bodyLabel)} — ${esc(dateLabel)}
               ${isCurr?' <span style="color:#2563eb;font-size:.68rem">● CURRENT</span>':''}
             </div>
-            ${hasTx?'<span style="font-size:.68rem;color:#6d28d9">🎙</span>':''}
+            <button class="btn btn-o btn-xs" onclick="event.stopPropagation();openDrawer('${esc(a.file_number||'')}',${a.id})" style="font-size:.65rem">
+              Open
+            </button>
           </div>
-          ${summary ? `<div style="font-size:.76rem;color:var(--gray-600);margin-top:.2rem;line-height:1.45">${esc(summary)}</div>` : ''}
+          ${discussionHtml}
+          ${pdfChangeHtml}
         </div>
       </div>`;
   }
@@ -2272,7 +2264,7 @@ function renderItemEvolution(allApps, currentApp) {
     <div class="ds">
       <div class="ds-title">ITEM CHANGES / EVOLUTION</div>
       <div style="font-size:.74rem;color:var(--gray-400);margin-bottom:.5rem">
-        How this item has progressed across ${chronoApps.length} appearance${chronoApps.length!==1?'s':''}.
+        What was discussed and whether the item PDF changed across ${chronoApps.length} appearances.
       </div>
       ${evolutionRows}
     </div>`;
@@ -2506,6 +2498,44 @@ async function reanalyzeAppearance() {
     if(prog) prog.textContent='❌ Failed: ' + (e.message||e);
     if(btn){ btn.disabled=false; btn.textContent='🤖 Re-run AI Analysis'; }
   }
+}
+
+async function backfillMeetingUrls() {
+  const mid = currentMeetingId;
+  if (!mid) { toast('No meeting loaded', 'err'); return; }
+  toast('Starting URL + lifecycle backfill for this meeting…', 'info');
+  try {
+    const r = await fetch('/api/backfill/urls-and-lifecycle', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({meeting_id: mid})
+    });
+    const d = await r.json();
+    if (d.ok) {
+      toast('Backfill started — poll progress for updates', 'ok');
+      const poll = setInterval(async () => {
+        const pr = await fetch('/api/backfill/progress');
+        const pd = await pr.json();
+        if (pd.status === 'done' || pd.status === 'error') {
+          clearInterval(poll);
+          toast(pd.status === 'done' ? 'URL + lifecycle backfill complete' : 'Backfill failed', pd.status === 'done' ? 'ok' : 'err');
+          loadMeetingDetail(mid);
+        }
+      }, 3000);
+    } else { toast('Backfill failed: ' + (d.error||''), 'err'); }
+  } catch(e) { toast('Backfill error: ' + e.message, 'err'); }
+}
+
+async function reanalyzeMeetingItems() {
+  const mid = currentMeetingId;
+  if (!mid) { toast('No meeting loaded', 'err'); return; }
+  toast('Starting AI re-analysis for all items in this meeting…', 'info');
+  try {
+    const r = await fetch('/api/meeting/' + mid + '/reanalyze-all', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      toast(`Re-analysis queued for ${d.count||'all'} items — this may take a few minutes`, 'ok');
+    } else { toast('Re-analysis failed: ' + (d.error||''), 'err'); }
+  } catch(e) { toast('Error: ' + e.message, 'err'); }
 }
 
 async function renderDrawerLifecycle(body, appData) {
@@ -2967,30 +2997,12 @@ function renderDrawerNotes(body, app) {
       <span id="rn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
     </div>` : ''}
 
-    <div class="ds" style="margin-bottom:.5rem">
-      <div class="ds-title"><span>ASSIGNMENT</span></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:.5rem">
-        <div>
-          <label>Assigned To</label>
-          <select id="nw-assigned" style="margin:0" onchange="saveWorkflowFromDrawer()">
-            ${memberOptions(app?.assigned_to||'')}
-          </select>
-        </div>
-        <div>
-          <label>Priority</label>
-          <select id="nw-priority" style="margin:0" onchange="saveWorkflowFromDrawer()">
-            <option value="">—</option>
-            ${['Low','Medium','High','Urgent'].map(p=>`<option${p===(app?.priority||'')?'selected':''}>${p}</option>`).join('')}
-          </select>
-        </div>
-        <div>
-          <label>Due Date</label>
-          <input type="date" id="nw-due" value="${esc(app?.due_date||'')}" style="margin:0" onchange="saveWorkflowFromDrawer()">
-        </div>
-      </div>
-      <div style="font-size:.7rem;color:var(--gray-400)">Reviewer: <strong>${esc(reviewer)}</strong> (auto-assigned)</div>
+    <div style="font-size:.72rem;color:var(--gray-400);margin-bottom:.5rem;padding:0 .1rem">
+      Assigned to: <strong>${esc(app?.assigned_to||'Unassigned')}</strong>
+      ${app?.due_date ? ` · Due: <strong>${esc(app.due_date)}</strong>` : ''}
+      · Reviewer: <strong>${esc(reviewer)}</strong>
     </div>
-    <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
+    <hr style="border:none;border-top:1px solid var(--gray-200);margin:.5rem 0 .75rem">
     <div class="ds">
       <div class="ds-title">
         <span>ANALYST NOTES</span>
@@ -3001,15 +3013,23 @@ function renderDrawerNotes(body, app) {
       <textarea id="edit-working-notes"
         style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem${!analystCanEdit?';background:#f8fafc;cursor:default':''}"
         ${!analystCanEdit ? 'readonly' : ''}
-        placeholder="Write your debrief analysis, observations, and recommendations here...">${esc(wn)}</textarea>
+        placeholder="Write your debrief analysis, observations, and recommendations here..."></textarea>
       ${analystCanEdit ? `
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Draft</button>
-        <button class="btn btn-s btn-sm" onclick="addNote('working')">+ Append Timestamped Note</button>
         <span id="wn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
+      </div>` : ''}
+    </div>
+    <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
+    <div class="ds">
+      <div class="ds-title">INTERNAL NOTES</div>
+      <textarea id="edit-internal-notes" rows="4"
+        style="min-height:80px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem"
+        placeholder="Private notes — not included in exports or review submissions...">${esc(reviewerNotes)}</textarea>
+      <div style="display:flex;gap:.4rem;align-items:center">
+        <button class="btn btn-o btn-sm" onclick="saveInternalNotes()">Save Note</button>
+        <span id="in-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
       </div>
-      <textarea id="new-working-note" rows="2" style="margin-top:.5rem;font-size:.78rem"
-        placeholder="Type a quick note to append with timestamp..."></textarea>` : ''}
     </div>
 
     ${reviewerNotes && !reviewerCanAct && status !== 'Needs Revision' ? `
@@ -3421,6 +3441,58 @@ async function addNote(type) {
   const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
   _drData.appData=ar.appearance;
   renderDrawerNotes(document.getElementById('dr-body'),_drData.appData);
+}
+
+async function saveInternalNotes() {
+  if(!currentAppId)return;
+  const val = document.getElementById('edit-internal-notes')?.value || '';
+  await fetch(`/api/appearance/${currentAppId}/notes`,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({reviewer_notes:val, replace:true, changed_by:currentUser})
+  });
+  const m=document.getElementById('in-save-msg');
+  if(m){m.textContent='✓ Saved';m.style.display='';setTimeout(()=>m.style.display='none',2500);}
+}
+
+async function reanalyzeAllAppearances() {
+  if (!currentFileNum) { toast('No item selected','err'); return; }
+  const matter = _drData?.matter;
+  if (!matter?.appearances?.length) { toast('No appearances found','err'); return; }
+  const prog = document.getElementById('bf-item-progress');
+  if(prog){ prog.style.display=''; prog.textContent='🤖 Queuing AI analysis for ALL appearances…'; }
+  const btn = document.getElementById('bf-ai-all-btn');
+  if(btn){ btn.disabled=true; btn.textContent='Analyzing…'; }
+  try {
+    const r = await fetch('/api/matter/' + matter.id + '/reanalyze-all', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) {
+      if(prog) prog.textContent='AI analysis started for ' + (d.count||'all') + ' appearances — this may take a few minutes…';
+      // Poll for completion
+      const startTime = Date.now();
+      const pollAll = setInterval(async () => {
+        try {
+          const ar = await fetch('/api/matter/' + matter.id + '/reanalyze-progress').then(r=>r.json());
+          if(prog) prog.textContent = '🤖 ' + (ar.completed||0) + '/' + (ar.total||0) + ' appearances analyzed…';
+          if (ar.done) {
+            clearInterval(pollAll);
+            if(prog){ prog.textContent='✓ All appearances analyzed'; setTimeout(()=>prog.style.display='none', 3000); }
+            if(btn){ btn.disabled=false; btn.textContent='🤖 Re-analyze ALL Appearances'; }
+            if(currentFileNum) openDrawer(currentFileNum, currentAppId);
+          } else if (Date.now() - startTime > 300000) {
+            clearInterval(pollAll);
+            if(prog) prog.textContent='⏳ Analysis still running — check back shortly';
+            if(btn){ btn.disabled=false; btn.textContent='🤖 Re-analyze ALL Appearances'; }
+          }
+        } catch(e){ /* keep polling */ }
+      }, 5000);
+    } else {
+      if(prog) prog.textContent='❌ ' + (d.error||'Failed');
+      if(btn){ btn.disabled=false; btn.textContent='🤖 Re-analyze ALL Appearances'; }
+    }
+  } catch(e) {
+    if(prog) prog.textContent='❌ Failed: ' + (e.message||e);
+    if(btn){ btn.disabled=false; btn.textContent='🤖 Re-analyze ALL Appearances'; }
+  }
 }
 
 async function renderDrawerHistory(body, app) {
@@ -4964,6 +5036,184 @@ def api_appearance_reanalyze(app_id):
     t = threading.Thread(target=_run_reanalysis, daemon=True)
     t.start()
     return jsonify({"ok": True, "message": "Reanalysis started in background"})
+
+
+# ── Batch reanalysis: all appearances for a matter ────────────
+_batch_reanalysis = {}  # matter_id -> {total, completed, done}
+
+@app.route("/api/matter/<int:matter_id>/reanalyze-all", methods=["POST"])
+def api_matter_reanalyze_all(matter_id):
+    """Re-run AI analysis on ALL appearances of a matter (item)."""
+    from repository import get_all_appearances_for_matter
+    all_apps = get_all_appearances_for_matter(matter_id)
+    if not all_apps:
+        return jsonify({"error": "no appearances found"}), 404
+
+    _batch_reanalysis[matter_id] = {"total": len(all_apps), "completed": 0, "done": False}
+
+    def _run_batch():
+        try:
+            from analyzer import AgendaAnalyzer
+            from repository import get_appearance_by_id, get_matter_by_file_number, get_meeting_by_id
+            import db as _db
+
+            sorted_apps = sorted(all_apps, key=lambda x: x.get("meeting_date", ""))
+            for idx, ap in enumerate(sorted_apps):
+                try:
+                    aid = ap["id"]
+                    a = get_appearance_by_id(aid) or ap
+                    matter = get_matter_by_file_number(a["file_number"]) or {}
+                    meeting = get_meeting_by_id(a["meeting_id"]) or {}
+                    title = a.get("appearance_title") or matter.get("short_title") or ""
+                    item_num = a.get("committee_item_number") or a.get("bcc_item_number") or a.get("raw_agenda_item_number") or ""
+                    committee = meeting.get("body_name") or ""
+
+                    pdf_text = ""
+                    pdf_path = a.get("item_pdf_local_path") or ""
+                    if pdf_path and Path(pdf_path).exists():
+                        try:
+                            import fitz
+                            doc = fitz.open(pdf_path)
+                            pdf_text = "\n".join(page.get_text() for page in doc)
+                            doc.close()
+                        except Exception:
+                            pass
+
+                    # Build prior context from earlier analyzed appearances
+                    prior = ""
+                    for pa in sorted_apps[:idx]:
+                        if (pa.get("ai_summary_for_appearance") or "").strip():
+                            prior += f"\n[Prior {pa.get('body_name','')} {pa.get('meeting_date','')}]\n"
+                            prior += pa["ai_summary_for_appearance"][:1000] + "\n"
+
+                    analyzer = AgendaAnalyzer()
+                    part1, part2, full, meta = analyzer.analyze_item(
+                        item_number=item_num, title=title, pdf_text=pdf_text,
+                        committee_name=committee, prior_context=prior,
+                    )
+
+                    now = now_iso()
+                    with _db.get_db() as conn:
+                        conn.execute("""UPDATE appearances SET
+                            ai_summary_for_appearance=?,
+                            watch_points_for_appearance=?,
+                            finalized_brief=CASE WHEN finalized_brief IS NULL OR finalized_brief='' THEN ? ELSE finalized_brief END,
+                            analysis_input_hash=?, analysis_tokens_in=?,
+                            analysis_tokens_out=?, analysis_cached_tokens=?,
+                            analysis_at=?, updated_at=? WHERE id=?""",
+                            (part1, "", part2, meta.get("input_hash",""),
+                             meta.get("usage",{}).get("in",0),
+                             meta.get("usage",{}).get("out",0),
+                             meta.get("usage",{}).get("cached",0),
+                             now, now, aid))
+
+                    # Update the in-memory copy for subsequent prior_context
+                    ap["ai_summary_for_appearance"] = part1
+
+                    import re
+                    wp_match = re.search(r'(?:WATCH POINTS|Watch Points|POINTS TO WATCH)[:\s]*\n([\s\S]*?)(?:\n\n|\Z)', part1)
+                    if wp_match:
+                        with _db.get_db() as conn:
+                            conn.execute("UPDATE appearances SET watch_points_for_appearance=? WHERE id=?",
+                                         (wp_match.group(1).strip(), aid))
+
+                    app.logger.info(f"Batch reanalysis: appearance {aid} done ({idx+1}/{len(sorted_apps)})")
+                except Exception as e:
+                    app.logger.error(f"Batch reanalysis failed for appearance {ap.get('id')}: {e}")
+
+                _batch_reanalysis[matter_id]["completed"] = idx + 1
+        except Exception as e:
+            app.logger.error(f"Batch reanalysis error for matter {matter_id}: {e}")
+        finally:
+            _batch_reanalysis[matter_id]["done"] = True
+
+    import threading
+    t = threading.Thread(target=_run_batch, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "count": len(all_apps)})
+
+
+@app.route("/api/matter/<int:matter_id>/reanalyze-progress")
+def api_matter_reanalyze_progress(matter_id):
+    info = _batch_reanalysis.get(matter_id, {"total": 0, "completed": 0, "done": True})
+    return jsonify(info)
+
+
+@app.route("/api/meeting/<int:meeting_id>/reanalyze-all", methods=["POST"])
+def api_meeting_reanalyze_all(meeting_id):
+    """Re-run AI analysis on ALL items in a meeting."""
+    from repository import get_meeting_by_id
+    import db as _db
+    meeting = get_meeting_by_id(meeting_id)
+    if not meeting:
+        return jsonify({"error": "meeting not found"}), 404
+
+    with _db.get_db() as conn:
+        apps = conn.execute("SELECT id FROM appearances WHERE meeting_id=?", (meeting_id,)).fetchall()
+
+    if not apps:
+        return jsonify({"error": "no appearances in meeting"}), 404
+
+    app_ids = [a["id"] for a in apps]
+
+    def _run_meeting_batch():
+        for aid in app_ids:
+            try:
+                from repository import get_appearance_by_id, get_matter_by_file_number, get_all_appearances_for_matter
+                from analyzer import AgendaAnalyzer
+                a = get_appearance_by_id(aid)
+                if not a:
+                    continue
+                matter = get_matter_by_file_number(a["file_number"]) or {}
+                mt = get_meeting_by_id(a["meeting_id"]) or {}
+                title = a.get("appearance_title") or matter.get("short_title") or ""
+                item_num = a.get("committee_item_number") or a.get("bcc_item_number") or a.get("raw_agenda_item_number") or ""
+                committee = mt.get("body_name") or ""
+
+                pdf_text = ""
+                pdf_path = a.get("item_pdf_local_path") or ""
+                if pdf_path and Path(pdf_path).exists():
+                    try:
+                        import fitz
+                        doc = fitz.open(pdf_path)
+                        pdf_text = "\n".join(page.get_text() for page in doc)
+                        doc.close()
+                    except Exception:
+                        pass
+
+                prior = ""
+                all_apps = get_all_appearances_for_matter(matter.get("id", 0))
+                for pa in sorted(all_apps, key=lambda x: x.get("meeting_date", "")):
+                    if pa["id"] == aid:
+                        break
+                    if (pa.get("ai_summary_for_appearance") or "").strip():
+                        prior += f"\n[Prior {pa.get('body_name','')} {pa.get('meeting_date','')}]\n"
+                        prior += pa["ai_summary_for_appearance"][:1000] + "\n"
+
+                analyzer = AgendaAnalyzer()
+                part1, part2, full, meta = analyzer.analyze_item(
+                    item_number=item_num, title=title, pdf_text=pdf_text,
+                    committee_name=committee, prior_context=prior,
+                )
+                now = now_iso()
+                with _db.get_db() as conn:
+                    conn.execute("""UPDATE appearances SET
+                        ai_summary_for_appearance=?, watch_points_for_appearance=?,
+                        finalized_brief=CASE WHEN finalized_brief IS NULL OR finalized_brief='' THEN ? ELSE finalized_brief END,
+                        analysis_input_hash=?, analysis_tokens_in=?, analysis_tokens_out=?,
+                        analysis_cached_tokens=?, analysis_at=?, updated_at=? WHERE id=?""",
+                        (part1, "", part2, meta.get("input_hash",""),
+                         meta.get("usage",{}).get("in",0), meta.get("usage",{}).get("out",0),
+                         meta.get("usage",{}).get("cached",0), now, now, aid))
+
+                app.logger.info(f"Meeting batch reanalysis: appearance {aid} done")
+            except Exception as e:
+                app.logger.error(f"Meeting batch reanalysis failed for {aid}: {e}")
+
+    import threading
+    t = threading.Thread(target=_run_meeting_batch, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "count": len(app_ids)})
 
 
 @app.route("/api/meeting/<int:meeting_id>/regenerate", methods=["POST"])
