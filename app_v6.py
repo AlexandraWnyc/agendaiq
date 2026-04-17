@@ -685,7 +685,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 .app-timeline{display:flex;flex-direction:column;gap:0;position:relative;margin-top:.75rem}
 .app-timeline::before{content:'';position:absolute;left:14px;top:0;bottom:0;width:2px;background:var(--gray-200)}
 .app-card{position:relative;margin-left:32px;border:1px solid var(--gray-200);border-radius:10px;padding:.75rem 1rem;background:#fff;margin-bottom:.75rem;transition:box-shadow .15s}
-.app-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.app-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.06);border-color:var(--blue2);transition:border-color .15s}
 .app-card.current{border-color:var(--blue2);background:#f8fbff}
 .app-card::before{content:'';position:absolute;left:-24px;top:1rem;width:12px;height:12px;border-radius:50%;background:var(--gray-300);border:2px solid #fff}
 .app-card.current::before{background:var(--blue2)}
@@ -2141,6 +2141,7 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
       <div class="editable-field" style="cursor:default">${esc(app.leg_history_summary)}</div></div>` : ''}
     ${matter.legislative_notes ? `<div class="ds"><div class="ds-title">LEGISLATIVE NOTES</div>
       <div class="editable-field" style="cursor:default">${esc(matter.legislative_notes)}</div></div>` : ''}
+    ${renderItemEvolution(allApps, app)}
     <div class="ds">
       <div class="ds-title">
         <span>APPEARANCE TIMELINE</span>
@@ -2152,8 +2153,106 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
         ${timelineHtml || '<div style="color:var(--gray-400);font-size:.82rem;font-style:italic;padding:.5rem">No appearances recorded yet.</div>'}
       </div>
     </div>
+    <div class="ds" id="debrief-backfill-section">
+      <div class="ds-title">BACKFILL</div>
+      <div style="font-size:.74rem;color:var(--gray-400);margin-bottom:.5rem">
+        Fetch missing data for this item — URLs, lifecycle history, and meeting transcripts.
+      </div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('urls')" id="bf-urls-btn">
+          🔗 Backfill URLs + Lifecycle
+        </button>
+        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('transcript')" id="bf-tx-btn">
+          🎙 Backfill Transcript
+        </button>
+        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('all')" id="bf-all-btn">
+          ⚡ Backfill Everything
+        </button>
+      </div>
+      <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
+    </div>
   `;
   saveBtn.style.display='';
+}
+
+function renderItemEvolution(allApps, currentApp) {
+  // Build "Item Changes / Evolution" section summarizing how the item changed across appearances
+  if (!allApps || allApps.length < 2) return '';
+
+  const fmtD = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); };
+  let evolutionRows = '';
+  // allApps is newest-first; iterate oldest-first for chronological flow
+  const chronoApps = allApps.slice().reverse();
+
+  for (let i = 0; i < chronoApps.length; i++) {
+    const a = chronoApps[i];
+    const prev = i > 0 ? chronoApps[i-1] : null;
+    const bodyLabel = a.body_name || a.agenda_stage || 'Appearance';
+    const dateLabel = fmtD(a.meeting_date);
+    const isCurr = a.id === currentApp?.id;
+
+    // Determine what happened at this appearance
+    let summary = '';
+    let changeType = 'info'; // info, changed, nochange, carried
+    const notes = (a.analyst_working_notes||'');
+
+    // Check for change detection blocks
+    const cdChanges = notes.match(/\[(Changes from ([^\]]+) to [^\]]+)\]\s*([\s\S]*?)(?=\n\n\[|$)/);
+    const cdNoChanges = notes.match(/\[(No changes from ([^\]]+) to [^\]]+)\]/);
+    if (cdChanges) {
+      changeType = 'changed';
+      summary = (cdChanges[3]||'').trim().split('\n').slice(0,3).join('; ').slice(0,300);
+    } else if (cdNoChanges) {
+      changeType = 'nochange';
+      summary = 'Item text unchanged from prior appearance.';
+    } else if (a.carried_forward_from_prior && prev) {
+      changeType = 'carried';
+      summary = 'Carried forward from ' + (prev.body_name||'prior') + '.';
+    }
+
+    // Use AI summary if available and no change detection
+    if (!summary && a.ai_summary_for_appearance) {
+      summary = a.ai_summary_for_appearance.slice(0,250) + (a.ai_summary_for_appearance.length>250?'…':'');
+    }
+    if (!summary && i === 0) {
+      summary = 'Initial appearance on agenda.';
+    }
+
+    // Check for transcript
+    const hasTx = !!(a.transcript_analysis || notes.includes('[Meeting Discussion'));
+
+    const colors = { changed:'#fef2f2', nochange:'#f0fdf4', carried:'#fffbeb', info:'#f8fafc' };
+    const borders = { changed:'#fecaca', nochange:'#bbf7d0', carried:'#fde68a', info:'#e2e8f0' };
+    const icons = { changed:'⚠', nochange:'✓', carried:'↩', info:'📋' };
+
+    evolutionRows += `
+      <div style="display:flex;gap:.6rem;align-items:flex-start">
+        <div style="display:flex;flex-direction:column;align-items:center;min-width:28px">
+          <div style="width:10px;height:10px;border-radius:50%;background:${isCurr?'#2563eb':'#94a3b8'};margin-top:5px"></div>
+          ${i < chronoApps.length-1 ? '<div style="width:2px;flex:1;background:#e2e8f0;min-height:30px"></div>':''}
+        </div>
+        <div style="flex:1;background:${colors[changeType]};border:1px solid ${borders[changeType]};
+          border-radius:8px;padding:.5rem .7rem;margin-bottom:.5rem;${isCurr?'box-shadow:0 0 0 2px #93c5fd':''}">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div style="font-size:.78rem;font-weight:600;color:#1e293b">
+              ${icons[changeType]} ${esc(bodyLabel)} — ${esc(dateLabel)}
+              ${isCurr?' <span style="color:#2563eb;font-size:.68rem">● CURRENT</span>':''}
+            </div>
+            ${hasTx?'<span style="font-size:.68rem;color:#6d28d9">🎙</span>':''}
+          </div>
+          ${summary ? `<div style="font-size:.76rem;color:var(--gray-600);margin-top:.2rem;line-height:1.45">${esc(summary)}</div>` : ''}
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="ds">
+      <div class="ds-title">ITEM CHANGES / EVOLUTION</div>
+      <div style="font-size:.74rem;color:var(--gray-400);margin-bottom:.5rem">
+        How this item has progressed across ${chronoApps.length} appearance${chronoApps.length!==1?'s':''}.
+      </div>
+      ${evolutionRows}
+    </div>`;
 }
 
 function renderAppearanceCard(a, matter, isCurrent, priorApp) {
@@ -2209,34 +2308,40 @@ function renderAppearanceCard(a, matter, isCurrent, priorApp) {
   // Vote result from AI analysis or transcript
   const voteResult = a.vote_result || '';
 
+  const fileNum = matter?.file_number || a.file_number || '';
+  const hasPdf = !!(a.item_pdf_url || a.item_pdf_local_path);
+
   return `
-    <div class="app-card ${isCurrent?'current':''}">
+    <div class="app-card ${isCurrent?'current':''}" style="cursor:${isCurrent?'default':'pointer'}"
+      ${!isCurrent ? `onclick="openDrawer('${esc(fileNum)}',${a.id})"` : ''}
+      title="${isCurrent ? 'Currently viewing this appearance' : 'Click to open this appearance'}">
       <div class="app-card-header">
         <div>
           <div class="app-card-title">${esc(bodyName)}</div>
           <div class="app-card-date">${esc(fmt(a.meeting_date))} · ${esc(stageLabel)}</div>
         </div>
         <div class="app-card-badges">
-          ${isCurrent ? '<span class="badge-current">● CURRENT</span>' : ''}
+          ${isCurrent ? '<span class="badge-current">● CURRENT</span>' : '<span style="font-size:.68rem;color:#2563eb">Open →</span>'}
           ${hasTranscript ? '<span class="badge-transcript">🎙 Transcript</span>' : ''}
           ${a.carried_forward_from_prior ? '<span class="badge-carried">↩ Carried</span>' : ''}
         </div>
       </div>
       ${changeHtml}
-      ${transcriptHtml}
+      ${isCurrent ? transcriptHtml : (hasTranscript ? '<div style="font-size:.72rem;color:#6d28d9;margin:.2rem 0">🎙 Meeting transcript available</div>' : '')}
+      ${isCurrent ? `
       <div class="app-notes-section">
         <label>Analyst Notes ${whoA ? '('+esc(whoA)+')' : ''}</label>
-        <textarea id="app-notes-analyst-${a.id}" onchange="markAppNoteDirty(${a.id},'analyst')">${esc(cleanNotes)}</textarea>
-        <label>Reviewer Notes ${whoR ? '('+esc(whoR)+')' : ''}</label>
-        <textarea id="app-notes-reviewer-${a.id}" onchange="markAppNoteDirty(${a.id},'reviewer')">${esc(reviewer)}</textarea>
-        <button class="btn btn-p btn-xs" style="margin-top:.35rem;display:none" id="app-save-${a.id}"
-          onclick="saveAppearanceNotes(${a.id})">Save Notes</button>
-      </div>
+        <div style="font-size:.78rem;color:var(--gray-600);line-height:1.45;max-height:120px;overflow-y:auto;white-space:pre-wrap;background:#f8fafc;border-radius:6px;padding:.4rem .55rem;border:1px solid #e2e8f0">${esc(cleanNotes).slice(0,600) || '<span style="color:var(--gray-400);font-style:italic">No notes yet</span>'}${cleanNotes.length > 600 ? '…' : ''}</div>
+      </div>` : (cleanNotes ? `
+      <div style="font-size:.74rem;color:var(--gray-500);margin-top:.3rem;line-height:1.4">
+        ${esc(cleanNotes.slice(0,150))}${cleanNotes.length>150?'…':''}
+      </div>` : '')}
       ${voteResult ? `<div style="margin-top:.4rem;font-size:.76rem;color:var(--gray-600)"><strong>Vote:</strong> ${esc(voteResult)}</div>` : ''}
-      <div style="margin-top:.3rem;display:flex;gap:.5rem;font-size:.7rem;color:var(--gray-400)">
+      <div style="margin-top:.3rem;display:flex;gap:.5rem;font-size:.7rem;color:var(--gray-400);align-items:center">
         ${a.workflow_status ? `<span>Status: ${esc(a.workflow_status)}</span>` : ''}
         ${a.assigned_to ? `<span>· ${esc(a.assigned_to)}</span>` : ''}
-        ${a.item_pdf_url || a.item_pdf_local_path ? `<a href="/api/appearance/${a.id}/pdf" target="_blank" style="color:var(--blue2)">📄 PDF</a>` : ''}
+        ${hasPdf ? `<a href="/api/appearance/${a.id}/pdf" target="_blank" onclick="event.stopPropagation()" style="color:var(--blue2);text-decoration:none">📄 Item PDF</a>` : ''}
+        ${a.matter_url ? `<a href="${esc(a.matter_url)}" target="_blank" onclick="event.stopPropagation()" style="color:var(--blue2);text-decoration:none">↗ Legistar</a>` : ''}
       </div>
     </div>`;
 }
@@ -2292,6 +2397,53 @@ async function saveAppearanceNotes(appId) {
   } catch(e) { toast('Failed to save: ' + e.message, 'err'); }
 }
 
+async function runBackfillForItem(type) {
+  if (!currentAppId) { toast('No appearance selected','err'); return; }
+  const prog = document.getElementById('bf-item-progress');
+  if(prog){ prog.style.display=''; prog.textContent='Starting backfill…'; }
+
+  try {
+    if (type === 'urls' || type === 'all') {
+      if(prog) prog.textContent='Backfilling URLs + lifecycle…';
+      await fetch('/api/backfill/urls-and-lifecycle', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({only_missing: true})});
+    }
+    if (type === 'transcript' || type === 'all') {
+      if(prog) prog.textContent='Starting transcript backfill…';
+      // Need meeting_id from the appearance data
+      const meetingId = _drData?.appData?.meeting_id;
+      if (!meetingId) { if(prog) prog.textContent='❌ No meeting_id found for this appearance'; return; }
+      const r = await fetch('/api/backfill/transcript', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({meeting_id: meetingId})});
+      if (r.ok) {
+        // Poll for transcript progress
+        const pollTx = setInterval(async () => {
+          try {
+            const pr = await fetch('/api/backfill/transcript/progress');
+            const pd = await pr.json();
+            if(prog) prog.textContent = pd.step || 'Processing…';
+            if (pd.done || pd.error) {
+              clearInterval(pollTx);
+              if(prog) prog.textContent = pd.error ? '❌ ' + pd.error : '✓ Transcript backfill complete';
+              setTimeout(()=>{ if(prog) prog.style.display='none'; }, 4000);
+              // Refresh drawer
+              if(currentFileNum) openDrawer(currentFileNum, currentAppId);
+            }
+          } catch(e){ clearInterval(pollTx); }
+        }, 3000);
+        return; // Don't hide progress — poll will handle it
+      }
+    }
+    if (type === 'urls') {
+      if(prog){ prog.textContent='✓ URLs + lifecycle backfill complete'; setTimeout(()=>prog.style.display='none', 3000); }
+      // Refresh drawer
+      if(currentFileNum) openDrawer(currentFileNum, currentAppId);
+    }
+  } catch(e) {
+    if(prog){ prog.textContent='❌ Backfill failed: ' + (e.message||e); setTimeout(()=>prog.style.display='none', 5000); }
+  }
+}
+
 async function renderDrawerLifecycle(body, appData) {
   if(!appData?.id){ body.innerHTML='<p style="color:var(--gray-400)">No appearance.</p>'; return; }
   body.innerHTML='<p style="color:var(--gray-400);font-size:.85rem">Loading lifecycle…</p>';
@@ -2299,7 +2451,13 @@ async function renderDrawerLifecycle(body, appData) {
     const r = await fetch(`/api/appearance/${appData.id}/timeline`);
     const d = await r.json();
     const events = (d.events||[]);
-    if(!events.length){
+
+    // Also get our own appearances for richer display
+    const allApps = (_drData?.matter?.appearances || []).slice().sort((a,b) =>
+      (a.meeting_date||'').localeCompare(b.meeting_date||'')
+    );
+
+    if(!events.length && !allApps.length){
       body.innerHTML = `
         <div style="padding:1rem;background:#fef3c7;border-radius:8px;color:#92400e;font-size:.85rem">
           No lifecycle events yet. Run <b>Backfill URLs + Lifecycle</b> on the
@@ -2308,34 +2466,84 @@ async function renderDrawerLifecycle(body, appData) {
         </div>`;
       return;
     }
+
+    // Build change detection map between consecutive appearances
+    const changeMap = {};
+    for (let i = 1; i < allApps.length; i++) {
+      const prev = allApps[i-1], curr = allApps[i];
+      const notes = (curr.analyst_working_notes||'');
+      const cdChanges = notes.match(/\[(Changes from ([^\]]+) to [^\]]+)\]\s*([\s\S]*?)(?=\n\n\[|$)/);
+      const cdNoChanges = notes.match(/\[(No changes from ([^\]]+) to [^\]]+)\]/);
+      if (cdChanges) {
+        changeMap[curr.id] = { type:'changed', from: cdChanges[2], detail: (cdChanges[3]||'').trim().slice(0,400) };
+      } else if (cdNoChanges) {
+        changeMap[curr.id] = { type:'nochange', from: cdNoChanges[2] };
+      } else if (curr.carried_forward_from_prior) {
+        changeMap[curr.id] = { type:'carried', from: prev.body_name + ' ' + (prev.meeting_date||'') };
+      }
+    }
+
     const rows = events.map(e=>{
       const isOurs = e.source==='agendaiq';
       const color  = isOurs ? '#2563eb' : '#64748b';
       const icon   = isOurs ? '📌' : '•';
+      const isCurrent = e.appearance_id === appData.id;
       const meta = [];
       if(e.committee_item_number) meta.push(`Cmte #${esc(e.committee_item_number)}`);
       if(e.bcc_item_number)       meta.push(`BCC #${esc(e.bcc_item_number)}`);
       if(e.agenda_stage)          meta.push(esc(e.agenda_stage));
       if(e.has_notes)             meta.push('★ notes');
-      return `<div style="display:flex;gap:.75rem;padding:.6rem 0;border-bottom:1px dashed #e2e8f0">
+
+      // Change detection between appearances
+      let changeHtml = '';
+      const chg = changeMap[e.appearance_id];
+      if (chg) {
+        if (chg.type === 'changed') {
+          changeHtml = `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:.35rem .55rem;margin-top:.3rem;font-size:.72rem;color:#991b1b">
+            <strong>⚠ Changes detected</strong> from ${esc(chg.from)}
+            ${chg.detail ? `<div style="margin-top:.2rem;white-space:pre-wrap;color:#7f1d1d">${esc(chg.detail)}</div>` : ''}
+          </div>`;
+        } else if (chg.type === 'nochange') {
+          changeHtml = `<div style="font-size:.72rem;color:#16a34a;margin-top:.2rem">✓ No changes from ${esc(chg.from)}</div>`;
+        } else if (chg.type === 'carried') {
+          changeHtml = `<div style="font-size:.72rem;color:#92400e;margin-top:.2rem">↩ Carried forward from ${esc(chg.from)}</div>`;
+        }
+      }
+
+      // Find matching appearance for "Open Appearance" button
+      const matchApp = isOurs && e.appearance_id ? allApps.find(a => a.id === e.appearance_id) : null;
+      const hasTx = matchApp && (matchApp.transcript_analysis || (matchApp.analyst_working_notes||'').includes('[Meeting Discussion'));
+      const hasPdf = matchApp && (matchApp.item_pdf_url || matchApp.item_pdf_local_path);
+      const hasNotes = matchApp && (matchApp.analyst_working_notes||'').trim();
+
+      return `<div style="display:flex;gap:.75rem;padding:.65rem 0;border-bottom:1px dashed #e2e8f0;
+          ${isCurrent?'background:#eff6ff;margin:0 -.5rem;padding-left:.5rem;padding-right:.5rem;border-radius:6px;border:1px solid #bfdbfe':''}">
         <div style="min-width:90px;color:${color};font-size:.78rem;font-weight:600">${esc(e.event_date||'')}</div>
         <div style="flex:1">
           <div style="font-size:.85rem;color:#1e293b">
             <span style="color:${color}">${icon}</span>
             <b>${esc(e.body_name||'')}</b>
             ${e.body_name && e.action ? ' — ' : ''}${esc(e.action||'')}
+            ${isCurrent ? ' <span style="font-size:.68rem;color:#2563eb;font-weight:600">● CURRENT</span>' : ''}
           </div>
           ${meta.length?`<div style="font-size:.72rem;color:#64748b;margin-top:.15rem">${meta.join(' · ')}</div>`:''}
-          ${e.appearance_id?`<a href="#" onclick="event.preventDefault();openDrawer('${esc(appData.file_number)}',${e.appearance_id})"
-                style="font-size:.72rem;color:#2563eb">open this appearance →</a>`:''}
+          ${changeHtml}
+          ${isOurs && e.appearance_id ? `
+            <div style="margin-top:.35rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+              <a href="#" onclick="event.preventDefault();openDrawer('${esc(appData.file_number)}',${e.appearance_id})"
+                class="btn btn-o btn-xs" style="font-size:.7rem;text-decoration:none">Open Appearance</a>
+              ${hasTx ? '<span style="font-size:.68rem;color:#6d28d9">🎙 transcript</span>' : ''}
+              ${hasPdf ? `<a href="/api/appearance/${e.appearance_id}/pdf" target="_blank" style="font-size:.68rem;color:#2563eb;text-decoration:none">📄 PDF</a>` : ''}
+              ${hasNotes ? '<span style="font-size:.68rem;color:#059669">★ notes</span>' : ''}
+            </div>` : ''}
         </div>
       </div>`;
     }).join('');
     body.innerHTML = `
       <div style="font-size:.78rem;color:#64748b;margin-bottom:.5rem">
-        Full lifecycle for this matter — blue pins are our own agenda appearances,
-        gray dots are parsed from Legistar's legislative history (pre-AgendaIQ
-        activity included).
+        Full lifecycle for this matter — <span style="color:#2563eb">📌 blue pins</span> are our agenda appearances,
+        <span style="color:#64748b">• gray dots</span> are from Legistar legislative history.
+        Click <em>Open Appearance</em> to see that date's analysis, PDF, and transcript.
       </div>
       <div>${rows}</div>`;
   }catch(e){
@@ -2622,11 +2830,17 @@ function _renderTranscriptNotes(notesText) {
 
 function renderDrawerNotes(body, app) {
   const wn = app?.analyst_working_notes || '';
-  const rn = app?.reviewer_notes || '';
   body.innerHTML = `
+    <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
+      padding:.55rem .85rem;margin-bottom:.75rem;font-size:.74rem;color:#1e3a8a;line-height:1.55">
+      <strong>Analyst Notes.</strong> Write your debrief notes here. Use <em>Save Draft</em> to save in progress,
+      or <em>Append Note</em> to add a timestamped entry. These notes feed into the Part 1 deliverable export.
+    </div>
     <div class="ds">
-      <div class="ds-title">WORKFLOW</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.75rem">
+      <div class="ds-title">
+        <span>WORKFLOW</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:.5rem">
         <div>
           <label>Status</label>
           <select id="nw-status" style="margin:0">
@@ -2641,57 +2855,37 @@ function renderDrawerNotes(body, app) {
           </select>
         </div>
         <div>
-          <label>Reviewer</label>
-          <select id="nw-reviewer" style="margin:0">
-            ${memberOptions(app?.reviewer||'')}
-          </select>
-        </div>
-        <div>
-          <label>Due Date (YYYY-MM-DD)</label>
-          <input type="text" id="nw-due" value="${esc(app?.due_date||'')}" placeholder="e.g. 2026-05-01" style="margin:0">
-        </div>
-        <div>
           <label>Priority</label>
           <select id="nw-priority" style="margin:0">
             <option value="">—</option>
             ${['Low','Medium','High','Urgent'].map(p=>`<option${p===(app?.priority||'')?'selected':''}>${p}</option>`).join('')}
           </select>
         </div>
+        <div>
+          <label>Reviewer</label>
+          <select id="nw-reviewer" style="margin:0">
+            ${memberOptions(app?.reviewer||'')}
+          </select>
+        </div>
+        <div>
+          <label>Due Date</label>
+          <input type="date" id="nw-due" value="${esc(app?.due_date||'')}" style="margin:0">
+        </div>
       </div>
-      <button class="btn btn-p btn-sm" onclick="saveWorkflowFromDrawer()">Save Workflow</button>
+      <button class="btn btn-p btn-xs" onclick="saveWorkflowFromDrawer()">Save Workflow</button>
     </div>
-    ${_renderTranscriptNotes(wn)}
-    <hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
+    <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
     <div class="ds">
-      <div class="ds-title">ANALYST WORKING NOTES</div>
-      <textarea id="edit-working-notes" style="min-height:120px;font-size:.78rem;margin-bottom:.4rem"
-        placeholder="Working notes — editable. Changes are saved when you click Save.">${esc(wn)}</textarea>
-      <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.5rem">
-        <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Notes</button>
+      <div class="ds-title">ANALYST NOTES</div>
+      <textarea id="edit-working-notes" style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem"
+        placeholder="Write your debrief analysis, observations, and recommendations here...">${esc(wn)}</textarea>
+      <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Draft</button>
+        <button class="btn btn-s btn-sm" onclick="addNote('working')">+ Append Timestamped Note</button>
         <span id="wn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
       </div>
-      <div style="border-top:1px dashed var(--gray-200);padding-top:.5rem;margin-top:.25rem">
-        <textarea id="new-working-note" rows="2" placeholder="Quick append — add a timestamped note…"></textarea>
-        <button class="btn btn-s btn-sm" onclick="addNote('working')">+ Append Timestamped Note</button>
-      </div>
-    </div>
-    <hr style="border:none;border-top:1px solid var(--gray-200);margin:1rem 0">
-    <div class="ds">
-      <div class="ds-title">REVIEWER NOTES</div>
-      <textarea id="edit-reviewer-notes" style="min-height:80px;font-size:.78rem;margin-bottom:.4rem"
-        placeholder="Reviewer notes — editable.">${esc(rn)}</textarea>
-      <div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.5rem">
-        <button class="btn btn-p btn-sm" onclick="saveFullNotes('reviewer')">Save Notes</button>
-        <span id="rn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
-      </div>
-      <div style="border-top:1px dashed var(--gray-200);padding-top:.5rem;margin-top:.25rem">
-        <textarea id="new-reviewer-note" rows="2" placeholder="Quick append — add a timestamped note…"></textarea>
-        <button class="btn btn-s btn-sm" onclick="addNote('reviewer')">+ Append Timestamped Note</button>
-      </div>
-    </div>
-    <div style="margin-top:1rem;padding:.55rem .75rem;background:#fef3c7;border:1px solid #fde68a;
-      border-radius:7px;font-size:.72rem;color:#78350f">
-      💡 Notes you add here feed into the <strong>Part 1 Deliverable</strong>. For deeper reference research (not exported), use the <strong>Deep Research</strong> tab.
+      <textarea id="new-working-note" rows="2" style="margin-top:.5rem;font-size:.78rem"
+        placeholder="Type a quick note to append with timestamp..."></textarea>
     </div>
   `;
 }
@@ -2702,40 +2896,106 @@ function renderDrawerDeepResearch(body, app) {
   let fb = app?.finalized_brief || '';
   const whenF = app?.finalized_brief_updated_at || '';
   const whoF  = app?.finalized_brief_updated_by || '';
-  // Strip carried-forward prefix for cleaner display
   const drCarried = fb.match(/^\[Carried from ([^\]]+)\]\s*/);
   let drCarriedLabel = '';
-  if (drCarried) {
-    drCarriedLabel = drCarried[1];
-    fb = fb.slice(drCarried[0].length);
-  }
+  if (drCarried) { drCarriedLabel = drCarried[1]; fb = fb.slice(drCarried[0].length); }
   const fmt = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleString('en-US',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'}); };
+
+  // Gather transcript notes from all appearances
+  const allApps = (_drData?.matter?.appearances || []).slice().sort((a,b) =>
+    (b.meeting_date||'').localeCompare(a.meeting_date||'')
+  );
+  let transcriptSections = '';
+  for (const a of allApps) {
+    let txText = a.transcript_analysis || '';
+    if (!txText) {
+      const txMatch = (a.analyst_working_notes||'').match(/(\[Meeting Discussion[\s\S]*?)(?=\n\n\[(?!Meeting)|$)/);
+      if (txMatch) txText = txMatch[1];
+    }
+    if (txText) {
+      const bodyLabel = a.body_name || a.agenda_stage || 'Meeting';
+      const dateLabel = a.meeting_date ? new Date(a.meeting_date).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '';
+      const isCurrent = a.id === app?.id;
+      transcriptSections += `
+        <div style="background:${isCurrent?'#eff6ff':'#f8fafc'};border:1px solid ${isCurrent?'#bfdbfe':'#e2e8f0'};
+          border-radius:8px;padding:.6rem .85rem;margin-bottom:.6rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.35rem">
+            <div style="font-size:.78rem;font-weight:600;color:#1e293b">
+              🎙 ${esc(bodyLabel)} — ${esc(dateLabel)}${isCurrent?' <span style="color:#2563eb;font-size:.68rem">● CURRENT</span>':''}
+            </div>
+            <button class="btn btn-o btn-xs" onclick="appendTranscriptToNotes(${a.id})" title="Copy this transcript to your analyst notes">
+              → Copy to Notes
+            </button>
+          </div>
+          <div style="font-size:.78rem;color:var(--gray-600);line-height:1.5;white-space:pre-wrap;max-height:200px;overflow-y:auto">${esc(txText.trim())}</div>
+        </div>`;
+    }
+  }
+
   body.innerHTML = `
     <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;
       padding:.6rem .85rem;margin-bottom:.85rem;font-size:.74rem;color:#5b21b6;line-height:1.55">
-      <strong>Deep Research Notes — reference only.</strong> Use this space for background material,
-      deeper analysis, source citations, or context a researcher may want to consult later.
-      <span style="display:block;margin-top:.2rem;color:#6d28d9;font-weight:600">⚠ This content is NOT exported and does NOT appear in the Part 1 deliverable.</span>
+      <strong>Deep Research — reference material.</strong> Part 2 notes (background research, memos, precedents)
+      and meeting transcript analyses are gathered here. Use <em>Copy to Notes</em> to pull content into your analyst notes.
+      <span style="display:block;margin-top:.2rem;color:#6d28d9;font-weight:600">⚠ This content is NOT exported in the Part 1 deliverable.</span>
     </div>
     ${drCarriedLabel ? `
     <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;
       padding:.5rem .75rem;margin-bottom:.75rem;font-size:.74rem;color:#92400e">
-      ↩ These notes were carried forward from <strong>${esc(drCarriedLabel)}</strong>. You can edit them for this appearance.
+      ↩ Part 2 notes carried forward from <strong>${esc(drCarriedLabel)}</strong>. You can edit them for this appearance.
     </div>` : ''}
+
+    ${transcriptSections ? `
+    <div class="ds">
+      <div class="ds-title">MEETING TRANSCRIPT ANALYSES</div>
+      ${transcriptSections}
+    </div>
+    <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
+    ` : ''}
+
     <div class="ds">
       <div class="ds-title">
-        <span>DEEP MEETING NOTES</span>
+        <span>PART 2 — DEEP RESEARCH NOTES</span>
         ${whenF ? `<span style="font-size:.68rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
           last updated${whoF?` by ${esc(whoF)}`:''} · ${esc(fmt(whenF))}</span>`:''}
       </div>
-      <textarea id="deep-research-field" style="min-height:260px;font-size:.82rem;line-height:1.55"
+      <textarea id="deep-research-field" style="min-height:220px;font-size:.82rem;line-height:1.55"
         placeholder="Paste or write deeper background research, source notes, prior memos, precedents, etc.">${esc(fb)}</textarea>
       <div style="margin-top:.55rem;display:flex;gap:.5rem;align-items:center">
-        <button class="btn btn-p btn-sm" onclick="saveDeepResearch()">Save Deep Research Notes</button>
+        <button class="btn btn-p btn-sm" onclick="saveDeepResearch()">Save Part 2 Notes</button>
         <span id="deep-save-msg" style="font-size:.72rem;color:var(--green);display:none">✓ Saved</span>
       </div>
     </div>
   `;
+}
+
+function appendTranscriptToNotes(appId) {
+  // Find the transcript text for this appearance
+  const allApps = (_drData?.matter?.appearances || []);
+  const a = allApps.find(x => x.id === appId);
+  if (!a) { toast('Appearance not found', 'err'); return; }
+  let txText = a.transcript_analysis || '';
+  if (!txText) {
+    const txMatch = (a.analyst_working_notes||'').match(/(\[Meeting Discussion[\s\S]*?)(?=\n\n\[(?!Meeting)|$)/);
+    if (txMatch) txText = txMatch[1];
+  }
+  if (!txText) { toast('No transcript to copy', 'err'); return; }
+  const bodyLabel = a.body_name || 'Meeting';
+  const dateLabel = a.meeting_date || '';
+  const block = `\n\n[Transcript from ${bodyLabel} ${dateLabel}]\n${txText.trim()}\n`;
+  // If we're on the Notes tab, append to the textarea
+  const notesField = document.getElementById('edit-working-notes');
+  if (notesField) {
+    notesField.value += block;
+    toast('Transcript copied to notes field — remember to save', 'ok');
+  } else {
+    // Switch to notes tab and append
+    drTab('notes', document.querySelectorAll('.dtab')[1]);
+    setTimeout(() => {
+      const nf = document.getElementById('edit-working-notes');
+      if (nf) { nf.value += block; toast('Transcript copied to notes — remember to save', 'ok'); }
+    }, 100);
+  }
 }
 
 async function saveDeepResearch() {
