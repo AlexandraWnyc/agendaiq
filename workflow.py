@@ -78,6 +78,7 @@ def assign_appearance(appearance_id: int, assigned_to: str, changed_by: str = No
     with get_db() as conn:
         conn.execute(
             """UPDATE appearances SET assigned_to=?, assigned_date=?,
+               reviewer=CASE WHEN reviewer IS NULL OR reviewer='' THEN 'Rolando' ELSE reviewer END,
                workflow_status=CASE WHEN workflow_status='New' THEN 'Assigned' ELSE workflow_status END,
                updated_at=? WHERE id=?""",
             (assigned_to, now, now, appearance_id)

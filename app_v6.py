@@ -282,6 +282,7 @@ tr.clickable:hover td{background:var(--blue-lt)}
 .b-InProgress{background:#ede9fe;color:#5b21b6}
 .b-DraftComplete{background:#dcfce7;color:#166534}
 .b-InReview{background:#fce7f3;color:#9d174d}
+.b-NeedsRevision{background:#fef3c7;color:#92400e}
 .b-Finalized{background:var(--green-lt);color:var(--green)}
 .b-Archived{background:var(--gray-100);color:var(--gray-400)}
 .b-cf{background:var(--orange-lt);color:var(--orange)}
@@ -487,6 +488,7 @@ tr.wf-group-hdr td{background:linear-gradient(90deg,#eef2ff 0%,#f8fafc 60%)!impo
 .b-InProgress{background:#ede9fe;color:#4c1d95;border-color:#ddd6fe}
 .b-DraftComplete{background:#dcfce7;color:#14532d;border-color:#bbf7d0}
 .b-InReview{background:#fce7f3;color:#831843;border-color:#fbcfe8}
+.b-NeedsRevision{background:#fef3c7;color:#78350f;border-color:#fde68a}
 .b-Finalized{background:#dcfce7;color:#064e3b;border-color:#86efac}
 .b-Archived{background:#f1f5f9;color:#475569;border-color:#e2e8f0}
 .b-cf{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
@@ -888,6 +890,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <div class="statdef"><span class="badge b-InProgress">In Progress</span> Actively being worked on.</div>
         <div class="statdef"><span class="badge b-DraftComplete">Draft Complete</span> Researcher finished a first draft.</div>
         <div class="statdef"><span class="badge b-InReview">In Review</span> Reviewer is checking the draft.</div>
+        <div class="statdef"><span class="badge b-NeedsRevision">Needs Revision</span> Reviewer requested changes — sent back to analyst.</div>
         <div class="statdef"><span class="badge b-Finalized">Finalized</span> Ready for delivery / export.</div>
         <div class="statdef"><span class="badge b-Archived">Archived</span> Historical stub or closed-out item. Stays in database for lookup.</div>
 
@@ -1583,6 +1586,13 @@ async function loadDashboard() {
       <span class="count">Review Queue →</span>
     </div>`;
   }
+  if (d.needs_revision_count > 0) {
+    bars.innerHTML += `<div class="alert-bar ab-orange" onclick="document.getElementById('wf-f-status').value='Needs Revision';showPg('workflow');loadWorkflow()">
+      <span class="icon">⚠</span>
+      <span class="txt"><strong>${d.needs_revision_count} item${d.needs_revision_count>1?'s':''} need revision</strong> — reviewer requested changes</span>
+      <span class="count">View →</span>
+    </div>`;
+  }
   if (d.unassigned_count > 0) {
     bars.innerHTML += `<div class="alert-bar ab-gray" onclick="filterWorkflow('unassigned')">
       <span class="icon">⚪</span>
@@ -1829,7 +1839,7 @@ async function doSearch() {
 // Workflow
 // ════════════════════════════════════════════════════════════
 async function populateStatusFilters() {
-  const stats=['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived'];
+  const stats=['New','Assigned','In Progress','Draft Complete','In Review','Needs Revision','Finalized','Archived'];
   const wfs=document.getElementById('wf-f-status');
   stats.forEach(s=>wfs.add(new Option(s,s)));
 }
@@ -1885,7 +1895,7 @@ async function loadWorkflow() {
       <td style="font-size:.72rem">${esc(a.agenda_stage||'')}</td>
       <td onclick="event.stopPropagation()">
         <select class="inline-status" onchange="quickStatus(${a.id},this.value)">
-          ${['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived']
+          ${['New','Assigned','In Progress','Draft Complete','In Review','Needs Revision','Finalized','Archived']
             .map(s=>`<option${s===a.workflow_status?' selected':''}>${s}</option>`).join('')}
         </select>
       </td>
@@ -1996,7 +2006,7 @@ async function bulkAssign() {
 async function bulkStatus() {
   const ids=getSelected();
   if(!ids.length){alert('Select items first.');return;}
-  const statuses=['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived'];
+  const statuses=['New','Assigned','In Progress','Draft Complete','In Review','Needs Revision','Finalized','Archived'];
   const opts=statuses.map(s=>`<option value="${s}">${s}</option>`).join('');
   showBulkModal(
     `Change status for ${ids.length} item(s)`,
@@ -2885,102 +2895,124 @@ function _renderTranscriptNotes(notesText) {
 function renderDrawerNotes(body, app) {
   const wn = app?.analyst_working_notes || '';
   const status = app?.workflow_status || 'New';
-  const isReviewer = currentUser && currentUser === (app?.reviewer || '');
+  const reviewer = app?.reviewer || 'Rolando';
+  const isReviewer = currentUser && currentUser === reviewer;
   const isAnalyst = currentUser && currentUser === (app?.assigned_to || '');
-  const needsReview = status === 'Draft Complete' || status === 'In Review';
   const reviewerNotes = app?.reviewer_notes || '';
 
-  // Determine which mode to show
-  const showReviewerPanel = isReviewer && needsReview;
-  const canSubmitForReview = ['New','Assigned','In Progress'].includes(status);
+  // Workflow state machine — determine what actions are available
+  const analystCanEdit = ['New','Assigned','In Progress','Needs Revision'].includes(status);
+  const canSubmit = ['In Progress','Needs Revision'].includes(status);
+  const canAcceptAssignment = status === 'Assigned' && isAnalyst;
+  const reviewerCanAct = ['Draft Complete','In Review'].includes(status) && isReviewer;
+  const canAcceptReview = status === 'Draft Complete' && isReviewer;
+  const isFinalized = status === 'Finalized' || status === 'Archived';
+
+  // Status badge colors
+  const statusColors = {
+    'New':'#64748b','Assigned':'#2563eb','In Progress':'#7c3aed',
+    'Draft Complete':'#059669','In Review':'#db2777','Needs Revision':'#d97706',
+    'Finalized':'#059669','Archived':'#64748b'
+  };
+  const statusBg = {
+    'New':'#f1f5f9','Assigned':'#eff6ff','In Progress':'#f5f3ff',
+    'Draft Complete':'#f0fdf4','In Review':'#fdf2f8','Needs Revision':'#fffbeb',
+    'Finalized':'#f0fdf4','Archived':'#f1f5f9'
+  };
 
   body.innerHTML = `
-    <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
-      padding:.55rem .85rem;margin-bottom:.75rem;font-size:.74rem;color:#1e3a8a;line-height:1.55">
-      <strong>Analyst Notes.</strong> Write your debrief notes here. Use <em>Save Draft</em> to save in progress,
-      or <em>Append Note</em> to add a timestamped entry. These notes feed into the Part 1 deliverable export.
-      ${canSubmitForReview ? '<br><span style="color:#059669;font-weight:600">When ready, click <em>Submit for Review</em> to send to your reviewer.</span>' : ''}
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem;padding:.6rem .85rem;
+      background:${statusBg[status]||'#f1f5f9'};border:2px solid ${statusColors[status]||'#94a3b8'};border-radius:10px">
+      <div style="flex:1">
+        <div style="font-size:.82rem;font-weight:700;color:${statusColors[status]||'#475569'}">
+          ${esc(status)}
+        </div>
+        <div style="font-size:.72rem;color:#64748b;margin-top:.15rem">
+          ${status==='New' ? 'Waiting for assignment by supervisor' : ''}
+          ${status==='Assigned' ? 'Assigned to <b>'+esc(app?.assigned_to||'')+'</b> — accept to begin work' : ''}
+          ${status==='In Progress' ? 'Being worked on by <b>'+esc(app?.assigned_to||'')+'</b>' : ''}
+          ${status==='Draft Complete' ? 'Submitted for review by <b>'+esc(reviewer)+'</b>' : ''}
+          ${status==='In Review' ? '<b>'+esc(reviewer)+'</b> is reviewing this item' : ''}
+          ${status==='Needs Revision' ? '<b>'+esc(reviewer)+'</b> requested changes — see feedback below' : ''}
+          ${status==='Finalized' ? 'Approved by <b>'+esc(reviewer)+'</b> — ready for export' : ''}
+          ${status==='Archived' ? 'This item has been archived' : ''}
+        </div>
+      </div>
+      <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+        ${canAcceptAssignment ? `<button class="btn btn-sm" style="background:#2563eb;color:#fff;border:none" onclick="acceptAssignment()">✓ Accept Assignment</button>` : ''}
+        ${canSubmit ? `<button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="submitForReview()">📤 Submit for Review</button>` : ''}
+        ${canAcceptReview ? `<button class="btn btn-sm" style="background:#db2777;color:#fff;border:none" onclick="acceptReview()">📋 Begin Review</button>` : ''}
+        ${status==='In Review' && isReviewer ? `
+          <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="reviewerAction('approve')">✓ Approve & Finalize</button>
+          <button class="btn btn-sm" style="background:#d97706;color:#fff;border:none" onclick="reviewerAction('revise')">↩ Request Revision</button>
+        ` : ''}
+      </div>
     </div>
 
-    ${showReviewerPanel ? `
-    <div style="background:#f0fdf4;border:2px solid #22c55e;border-radius:10px;padding:.75rem 1rem;margin-bottom:.85rem">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
-        <div style="font-size:.82rem;font-weight:700;color:#166534">📋 REVIEWER PANEL</div>
-        <span style="font-size:.7rem;color:#16a34a;background:#dcfce7;padding:.15rem .5rem;border-radius:10px;font-weight:600">
-          ${esc(status)}
-        </span>
-      </div>
-      <div style="font-size:.74rem;color:#166534;margin-bottom:.6rem">
-        You are the reviewer for this item. Read the analyst notes below, add feedback, then approve or send back.
-      </div>
-      <div style="font-size:.72rem;font-weight:600;color:#475569;margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.3px">REVIEWER FEEDBACK</div>
-      <textarea id="edit-reviewer-notes" style="min-height:100px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem;border-color:#22c55e"
-        placeholder="Add your review comments, corrections, or feedback here...">${esc(reviewerNotes)}</textarea>
-      <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">
-        <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="reviewerAction('approve')">✓ Approve → Finalized</button>
-        <button class="btn btn-sm" style="background:#d97706;color:#fff;border:none" onclick="reviewerAction('revise')">↩ Send Back for Revision</button>
-        <button class="btn btn-s btn-sm" onclick="saveFullNotes('reviewer')">Save Feedback Only</button>
-        <span id="rn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
-      </div>
+    ${status === 'Needs Revision' && reviewerNotes ? `
+    <div style="background:#fef3c7;border:2px solid #f59e0b;border-radius:10px;padding:.65rem .85rem;margin-bottom:.75rem">
+      <div style="font-size:.78rem;font-weight:700;color:#92400e;margin-bottom:.35rem">⚠ REVISION REQUESTED BY ${esc(reviewer).toUpperCase()}</div>
+      <div style="font-size:.8rem;color:#78350f;line-height:1.5;white-space:pre-wrap">${esc(reviewerNotes)}</div>
     </div>` : ''}
 
-    <div class="ds">
-      <div class="ds-title">
-        <span>WORKFLOW</span>
+    ${reviewerCanAct ? `
+    <div style="background:#f0fdf4;border:2px solid #22c55e;border-radius:10px;padding:.75rem 1rem;margin-bottom:.85rem">
+      <div style="font-size:.82rem;font-weight:700;color:#166534;margin-bottom:.4rem">📋 REVIEWER PANEL</div>
+      <div style="font-size:.74rem;color:#166534;margin-bottom:.6rem">
+        Read the analyst notes below. Add feedback if needed, then approve or request revision.
       </div>
+      <div style="font-size:.72rem;font-weight:600;color:#475569;margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.3px">REVIEWER COMMENT</div>
+      <textarea id="edit-reviewer-notes" style="min-height:100px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem;border-color:#22c55e"
+        placeholder="Add your review comments, corrections, or feedback here...">${esc(reviewerNotes)}</textarea>
+      <span id="rn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
+    </div>` : ''}
+
+    <div class="ds" style="margin-bottom:.5rem">
+      <div class="ds-title"><span>ASSIGNMENT</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.6rem;margin-bottom:.5rem">
         <div>
-          <label>Status</label>
-          <select id="nw-status" style="margin:0">
-            ${['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived']
-              .map(s=>`<option${s===status?' selected':''}>${s}</option>`).join('')}
-          </select>
-        </div>
-        <div>
           <label>Assigned To</label>
-          <select id="nw-assigned" style="margin:0">
+          <select id="nw-assigned" style="margin:0" onchange="saveWorkflowFromDrawer()">
             ${memberOptions(app?.assigned_to||'')}
           </select>
         </div>
         <div>
           <label>Priority</label>
-          <select id="nw-priority" style="margin:0">
+          <select id="nw-priority" style="margin:0" onchange="saveWorkflowFromDrawer()">
             <option value="">—</option>
             ${['Low','Medium','High','Urgent'].map(p=>`<option${p===(app?.priority||'')?'selected':''}>${p}</option>`).join('')}
           </select>
         </div>
         <div>
-          <label>Reviewer</label>
-          <select id="nw-reviewer" style="margin:0">
-            ${memberOptions(app?.reviewer||'')}
-          </select>
-        </div>
-        <div>
           <label>Due Date</label>
-          <input type="date" id="nw-due" value="${esc(app?.due_date||'')}" style="margin:0">
+          <input type="date" id="nw-due" value="${esc(app?.due_date||'')}" style="margin:0" onchange="saveWorkflowFromDrawer()">
         </div>
       </div>
-      <button class="btn btn-p btn-xs" onclick="saveWorkflowFromDrawer()">Save Workflow</button>
+      <div style="font-size:.7rem;color:var(--gray-400)">Reviewer: <strong>${esc(reviewer)}</strong> (auto-assigned)</div>
     </div>
     <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
     <div class="ds">
       <div class="ds-title">
         <span>ANALYST NOTES</span>
-        ${(status === 'Draft Complete' || status === 'In Review') ? '<span style="font-size:.68rem;color:#d97706;font-weight:400;text-transform:none;letter-spacing:0">Submitted for review</span>' : ''}
+        ${['Draft Complete','In Review'].includes(status) ? '<span style="font-size:.68rem;color:#059669;font-weight:400;text-transform:none;letter-spacing:0">✓ Submitted</span>' : ''}
+        ${status==='Needs Revision' ? '<span style="font-size:.68rem;color:#d97706;font-weight:400;text-transform:none;letter-spacing:0">⚠ Revision requested</span>' : ''}
+        ${isFinalized ? '<span style="font-size:.68rem;color:#059669;font-weight:400;text-transform:none;letter-spacing:0">✓ Finalized</span>' : ''}
       </div>
-      <textarea id="edit-working-notes" style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem"
+      <textarea id="edit-working-notes"
+        style="min-height:200px;font-size:.82rem;line-height:1.55;margin-bottom:.5rem${!analystCanEdit?';background:#f8fafc;cursor:default':''}"
+        ${!analystCanEdit ? 'readonly' : ''}
         placeholder="Write your debrief analysis, observations, and recommendations here...">${esc(wn)}</textarea>
+      ${analystCanEdit ? `
       <div style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap">
         <button class="btn btn-p btn-sm" onclick="saveFullNotes('working')">Save Draft</button>
         <button class="btn btn-s btn-sm" onclick="addNote('working')">+ Append Timestamped Note</button>
-        ${canSubmitForReview ? `<button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="submitForReview()">📤 Submit for Review</button>` : ''}
         <span id="wn-save-msg" style="font-size:.72rem;color:#059669;display:none"></span>
       </div>
       <textarea id="new-working-note" rows="2" style="margin-top:.5rem;font-size:.78rem"
-        placeholder="Type a quick note to append with timestamp..."></textarea>
+        placeholder="Type a quick note to append with timestamp..."></textarea>` : ''}
     </div>
 
-    ${reviewerNotes && !showReviewerPanel ? `
+    ${reviewerNotes && !reviewerCanAct && status !== 'Needs Revision' ? `
     <hr style="border:none;border-top:1px solid var(--gray-200);margin:.75rem 0">
     <div class="ds">
       <div class="ds-title" style="color:#059669">REVIEWER FEEDBACK</div>
@@ -2989,21 +3021,44 @@ function renderDrawerNotes(body, app) {
   `;
 }
 
+async function acceptAssignment() {
+  if (!currentAppId) return;
+  await fetch('/api/appearance/' + currentAppId + '/workflow', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({status: 'In Progress', changed_by: currentUser})
+  });
+  toast('Assignment accepted — status changed to In Progress', 'ok');
+  const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
+  _drData.appData = ar.appearance;
+  renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
+  loadDashboard();
+}
+
 async function submitForReview() {
   if (!currentAppId) return;
-  // First save the current notes
   const val = document.getElementById('edit-working-notes')?.value || '';
   await fetch('/api/appearance/' + currentAppId + '/notes', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({analyst_working_notes: val, replace: true, changed_by: currentUser})
   });
-  // Set status to "Draft Complete" — this triggers reviewer notification
   await fetch('/api/appearance/' + currentAppId + '/workflow', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({status: 'Draft Complete', changed_by: currentUser})
   });
-  toast('Submitted for review — reviewer will be notified', 'ok');
-  // Refresh drawer
+  toast('Submitted for review — Rolando will be notified', 'ok');
+  const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
+  _drData.appData = ar.appearance;
+  renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
+  loadDashboard();
+}
+
+async function acceptReview() {
+  if (!currentAppId) return;
+  await fetch('/api/appearance/' + currentAppId + '/workflow', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({status: 'In Review', changed_by: currentUser})
+  });
+  toast('Review started — status changed to In Review', 'ok');
   const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
   _drData.appData = ar.appearance;
   renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
@@ -3011,7 +3066,6 @@ async function submitForReview() {
 
 async function reviewerAction(action) {
   if (!currentAppId) return;
-  // Save reviewer notes first
   const reviewerNotes = document.getElementById('edit-reviewer-notes')?.value || '';
   await fetch('/api/appearance/' + currentAppId + '/notes', {
     method:'POST', headers:{'Content-Type':'application/json'},
@@ -3019,26 +3073,22 @@ async function reviewerAction(action) {
   });
 
   if (action === 'approve') {
-    // Set status to Finalized
     await fetch('/api/appearance/' + currentAppId + '/workflow', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({status: 'Finalized', changed_by: currentUser})
     });
     toast('Item approved and finalized', 'ok');
   } else if (action === 'revise') {
-    // Set status back to In Progress
     await fetch('/api/appearance/' + currentAppId + '/workflow', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({status: 'In Progress', changed_by: currentUser})
+      body: JSON.stringify({status: 'Needs Revision', changed_by: currentUser})
     });
-    toast('Sent back to analyst for revision', 'ok');
+    toast('Sent back for revision — analyst will be notified', 'ok');
   }
 
-  // Refresh drawer
   const ar = await fetch('/api/appearance/' + currentAppId).then(r=>r.json());
   _drData.appData = ar.appearance;
   renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
-  // Refresh workflow pages in background
   loadDashboard(); loadWorkflow();
 }
 
@@ -3306,22 +3356,24 @@ function showReviewQueue() {
 
 async function saveWorkflowFromDrawer() {
   if(!currentAppId)return;
+  const payload = { changed_by: currentUser };
+  const assignedEl = document.getElementById('nw-assigned');
+  const priorityEl = document.getElementById('nw-priority');
+  const dueEl = document.getElementById('nw-due');
+  if(assignedEl) payload.assigned_to = assignedEl.value;
+  if(priorityEl) payload.priority = priorityEl.value;
+  if(dueEl) payload.due_date = dueEl.value;
+  // Reviewer is always Rolando — set automatically
+  payload.reviewer = 'Rolando';
   await fetch(`/api/appearance/${currentAppId}/workflow`,{
     method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      status:    document.getElementById('nw-status').value,
-      assigned_to: document.getElementById('nw-assigned').value,
-      reviewer:  document.getElementById('nw-reviewer').value,
-      due_date:  document.getElementById('nw-due').value,
-      priority:  document.getElementById('nw-priority').value,
-      changed_by: currentUser,
-    })
+    body:JSON.stringify(payload)
   });
-  showSaveMsg();
+  toast('Saved','ok');
   loadDashboard(); loadWorkflow();
-  // Reload drawer data
   const ar=await fetch(`/api/appearance/${currentAppId}`).then(r=>r.json());
   _drData.appData=ar.appearance;
+  renderDrawerNotes(document.getElementById('dr-body'), ar.appearance);
 }
 
 async function saveFullNotes(type) {
@@ -4434,7 +4486,7 @@ function initMyItemsFilters() {
   rs.add(new Option('All Unassigned', '__unassigned__'));
   (_cfg.team_members || []).forEach(m => rs.add(new Option(m.name, m.name)));
   while (st.options.length > 1) st.remove(1);
-  ['New','Assigned','In Progress','Draft Complete','In Review','Finalized','Archived']
+  ['New','Assigned','In Progress','Draft Complete','In Review','Needs Revision','Finalized','Archived']
     .forEach(s => st.add(new Option(s, s)));
 }
 
@@ -4615,6 +4667,7 @@ def api_stats():
     d["unassigned_count"] = len(get_unassigned_appearances())
     # Count items pending review (Draft Complete status)
     d["pending_review_count"] = d.get("by_status", {}).get("Draft Complete", 0)
+    d["needs_revision_count"] = d.get("by_status", {}).get("Needs Revision", 0)
     return jsonify(d)
 
 
@@ -4714,8 +4767,8 @@ def api_workflow_update(app_id):
         if new_status == "Draft Complete" and old_status != "Draft Complete":
             notifications.send_draft_complete_notification(enriched)
 
-        # 3. Status sent back (Draft Complete/In Review → In Progress) → notify analyst
-        if new_status == "In Progress" and old_status in ("Draft Complete", "In Review"):
+        # 3. Status → Needs Revision → notify analyst
+        if new_status == "Needs Revision":
             notifications.send_revision_notification(enriched)
 
         # 4. Status → Finalized → notify analyst of approval

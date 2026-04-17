@@ -326,7 +326,7 @@ ARTIFACT_TYPES = [
 
 WORKFLOW_STATUSES = [
     "New", "Assigned", "In Progress", "Draft Complete",
-    "In Review", "Finalized", "Archived"
+    "In Review", "Needs Revision", "Finalized", "Archived"
 ]
 
 STAGE_ORDER = [
