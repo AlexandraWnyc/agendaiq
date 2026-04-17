@@ -1052,8 +1052,20 @@ def store_transcript_notes(meeting_id: int, segments: dict,
 
         note_block = "\n".join(parts)
 
-        # Append to existing notes
+        # Store in dedicated transcript_analysis column AND append to analyst notes
         with get_db() as conn:
+            now = now_iso()
+
+            # Store in the per-appearance transcript column
+            conn.execute(
+                """UPDATE appearances
+                   SET transcript_analysis=?, transcript_video_url=?,
+                       transcript_updated_at=?, updated_at=?
+                   WHERE id=?""",
+                (note_block, video_url, now, now, app["id"])
+            )
+
+            # Also append to analyst_working_notes for backward compat
             existing = conn.execute(
                 "SELECT analyst_working_notes FROM appearances WHERE id=?",
                 (app["id"],)
@@ -1061,15 +1073,13 @@ def store_transcript_notes(meeting_id: int, segments: dict,
             old = (existing["analyst_working_notes"] or "") if existing else ""
 
             # Don't duplicate if we already stored a transcript note for this meeting
-            if label in old:
-                log.info(f"    Transcript already stored for File# {fn}")
-                continue
+            if label not in old:
+                new_notes = (old + "\n\n" + note_block).strip() if old else note_block
+                conn.execute(
+                    "UPDATE appearances SET analyst_working_notes=? WHERE id=?",
+                    (new_notes, app["id"])
+                )
 
-            new_notes = (old + "\n\n" + note_block).strip() if old else note_block
-            conn.execute(
-                "UPDATE appearances SET analyst_working_notes=?, updated_at=? WHERE id=?",
-                (new_notes, now_iso(), app["id"])
-            )
             updated += 1
             log.info(f"    Stored transcript notes for File# {fn}")
 

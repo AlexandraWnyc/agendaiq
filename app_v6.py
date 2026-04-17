@@ -680,6 +680,32 @@ label{font-size:.72rem;font-weight:600;color:var(--muted);text-transform:upperca
 /* Subtle hint tooltip for column headers */
 th[title]{cursor:help;border-bottom:1px dotted transparent}
 th[title]:hover{border-bottom-color:var(--gray-400)}
+
+/* Appearance timeline and cards */
+.app-timeline{display:flex;flex-direction:column;gap:0;position:relative;margin-top:.75rem}
+.app-timeline::before{content:'';position:absolute;left:14px;top:0;bottom:0;width:2px;background:var(--gray-200)}
+.app-card{position:relative;margin-left:32px;border:1px solid var(--gray-200);border-radius:10px;padding:.75rem 1rem;background:#fff;margin-bottom:.75rem;transition:box-shadow .15s}
+.app-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.app-card.current{border-color:var(--blue2);background:#f8fbff}
+.app-card::before{content:'';position:absolute;left:-24px;top:1rem;width:12px;height:12px;border-radius:50%;background:var(--gray-300);border:2px solid #fff}
+.app-card.current::before{background:var(--blue2)}
+.app-card-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem}
+.app-card-title{font-weight:600;font-size:.82rem;color:var(--ink)}
+.app-card-date{font-size:.72rem;color:var(--gray-500)}
+.app-card-badges{display:flex;gap:.35rem;margin-bottom:.4rem}
+.app-card-badges span{font-size:.62rem;padding:.1rem .4rem;border-radius:10px;font-weight:600}
+.badge-current{background:var(--blue2);color:#fff}
+.badge-transcript{background:#ede9fe;color:#6d28d9}
+.badge-carried{background:#fef3c7;color:#92400e}
+.change-box{border-radius:8px;padding:.55rem .75rem;margin-bottom:.5rem;font-size:.78rem;line-height:1.5}
+.change-box.changed{background:#fef2f2;border:1px solid #fca5a5;color:#991b1b}
+.change-box.nochange{background:#f0fdf4;border:1px solid #86efac;color:#166534}
+.change-box.carried{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+.transcript-box{background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:.55rem .75rem;margin-bottom:.5rem}
+.transcript-box-title{font-weight:600;font-size:.72rem;color:#6d28d9;text-transform:uppercase;letter-spacing:.3px;margin-bottom:.35rem}
+.app-notes-section{margin-top:.5rem}
+.app-notes-section textarea{width:100%;min-height:60px;border:1px solid var(--gray-200);border-radius:6px;padding:.4rem .55rem;font-size:.78rem;font-family:inherit;resize:vertical;line-height:1.5}
+.app-notes-section label{font-size:.68rem;font-weight:600;color:var(--gray-500);text-transform:uppercase;letter-spacing:.3px;display:block;margin-bottom:.2rem;margin-top:.4rem}
 </style>
 </head>
 <body>
@@ -1358,13 +1384,9 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="dr-meta" id="dr-meta"></div>
   </div>
   <div class="dr-tabs">
-    <button class="dtab on" onclick="drTab('summary',this)" title="Part 1 Deliverable: Debrief + Watchpoints + Leg History + Meeting Notes">Part 1 · Debrief</button>
-    <button class="dtab" onclick="drTab('notes',this)">Notes</button>
+    <button class="dtab on" onclick="drTab('overview',this)" title="Item overview + appearance timeline">Overview</button>
     <button class="dtab" onclick="drTab('deep',this)" title="Reference only — not exported">Deep Research</button>
     <button class="dtab" onclick="drTab('chat',this)" title="Private AI chat about this item">AI Chat</button>
-    <button class="dtab" onclick="drTab('history',this)">History</button>
-    <button class="dtab" onclick="drTab('appearances',this)">Appearances</button>
-    <button class="dtab" onclick="drTab('lifecycle',this)">Lifecycle</button>
   </div>
   <div class="dr-body" id="dr-body">
     <div style="color:var(--gray-400);font-size:.85rem">Loading…</div>
@@ -2043,15 +2065,8 @@ async function openDrawer(fileNum, appId) {
       ? `<a target="_blank" href="/api/appearance/${appData.id}/pdf" style="color:#fff;text-decoration:underline">📄 Item PDF</a>` : '',
   ].filter(Boolean).join('');
 
-  // Add 🎙 badge to Notes tab if transcript notes exist
-  const notesTab = document.querySelectorAll('.dtab')[1]; // Notes is 2nd tab
-  if (notesTab) {
-    const hasTranscript = (appData?.analyst_working_notes || '').includes('[Meeting Discussion');
-    notesTab.innerHTML = hasTranscript ? 'Notes <span style="font-size:.65rem" title="Has meeting transcript analysis">🎙</span>' : 'Notes';
-  }
-
-  // Default to summary tab
-  drTab('summary', document.querySelector('.dtab'));
+  // Default to overview tab
+  drTab('overview', document.querySelector('.dtab'));
 }
 
 function closeDrawer() {
@@ -2069,13 +2084,194 @@ function drTab(tab, el) {
   if(!_drData){body.innerHTML='<p style="color:var(--gray-400)">No data.</p>';return;}
   const {matter,appData} = _drData;
 
-  if(tab==='summary') renderDrawerSummary(body,matter,appData,save);
-  if(tab==='notes')   renderDrawerNotes(body,appData);
+  if(tab==='overview') renderDrawerOverview(body,matter,appData,save);
   if(tab==='deep')    renderDrawerDeepResearch(body,appData);
   if(tab==='chat')    renderDrawerChat(body,appData);
-  if(tab==='history') renderDrawerHistory(body,appData);
-  if(tab==='appearances') renderDrawerApps(body,matter);
-  if(tab==='lifecycle')   renderDrawerLifecycle(body,appData);
+}
+
+function renderDrawerOverview(body, matter, app, saveBtn) {
+  const ai = app?.ai_summary_for_appearance || matter?.latest_ai_summary_part1 || '';
+  const wp = app?.watch_points_for_appearance || matter?.latest_watch_points || '';
+
+  // Sort all appearances chronologically (newest first)
+  const allApps = (matter?.appearances||[]).slice().sort((a,b) =>
+    (b.meeting_date||'').localeCompare(a.meeting_date||'')
+  );
+
+  // Build appearance timeline cards
+  let timelineHtml = '';
+  for (let i = 0; i < allApps.length; i++) {
+    const a = allApps[i];
+    const priorApp = i < allApps.length - 1 ? allApps[i + 1] : null;
+    const isCurrent = a.id === app?.id;
+    timelineHtml += renderAppearanceCard(a, matter, isCurrent, priorApp);
+  }
+
+  body.innerHTML = `
+    <div class="ds">
+      <div class="ds-title">
+        <span>AGENDA DEBRIEF</span>
+        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-ai')">Edit</button>
+      </div>
+      <div class="editable-field" id="edit-ai" contenteditable="false">${esc(ai)||'<span style="color:var(--gray-400)">No debrief yet.</span>'}</div>
+    </div>
+    <div class="ds">
+      <div class="ds-title">
+        <span>WATCH POINTS</span>
+        <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-wp')">Edit</button>
+      </div>
+      <div class="editable-field" id="edit-wp" contenteditable="false">${esc(wp)||'<span style="color:var(--gray-400)">None.</span>'}</div>
+    </div>
+    ${renderStatusLadder(matter, app)}
+    <div class="ds">
+      <div class="ds-title">
+        <span>APPEARANCE TIMELINE</span>
+        <span style="font-size:.68rem;color:var(--gray-400);font-weight:400;text-transform:none;letter-spacing:0">
+          ${allApps.length} appearance${allApps.length!==1?'s':''}
+        </span>
+      </div>
+      <div class="app-timeline">
+        ${timelineHtml || '<div style="color:var(--gray-400);font-size:.82rem;font-style:italic;padding:.5rem">No appearances recorded yet.</div>'}
+      </div>
+    </div>
+  `;
+  saveBtn.style.display='';
+}
+
+function renderAppearanceCard(a, matter, isCurrent, priorApp) {
+  const stage = (a.agenda_stage||'').toLowerCase();
+  const stageLabel = stage.includes('committee') ? 'Committee'
+                   : stage.includes('bcc') ? 'BCC'
+                   : (a.agenda_stage||'Appearance');
+  const bodyName = a.body_name || stageLabel;
+
+  // Detect transcript analysis
+  const transcriptNotes = a.transcript_analysis || '';
+  const hasTranscript = !!transcriptNotes || (a.analyst_working_notes||'').includes('[Meeting Discussion');
+
+  // Extract transcript block from analyst_working_notes if no dedicated field
+  let transcriptHtml = '';
+  if (transcriptNotes) {
+    transcriptHtml = _renderTranscriptCard(transcriptNotes);
+  } else if (hasTranscript) {
+    const txMatch = (a.analyst_working_notes||'').match(/(\[Meeting Discussion[\s\S]*?)(?=\n\n\[(?!Meeting)|$)/);
+    if (txMatch) transcriptHtml = _renderTranscriptCard(txMatch[1]);
+  }
+
+  // Change detection
+  let changeHtml = '';
+  const notes = (a.analyst_working_notes||'');
+  const cdChanges = notes.match(/\[(Changes from ([^\]]+) to BCC version)\]\s*([\s\S]*?)(?=\n\n\[|$)/);
+  const cdNoChanges = notes.match(/\[(No changes from ([^\]]+) to BCC version)\]\s*([\s\S]*?)(?=\n\n\[|$)/);
+  if (cdChanges) {
+    changeHtml = `<div class="change-box changed">
+      <strong>⚠ CHANGES DETECTED</strong> from ${esc(cdChanges[2])}
+      <div style="margin-top:.3rem;white-space:pre-wrap;font-size:.75rem">${esc((cdChanges[3]||'').trim()).slice(0,800)}</div>
+    </div>`;
+  } else if (cdNoChanges) {
+    changeHtml = `<div class="change-box nochange">
+      <strong>✓ No changes</strong> from ${esc(cdNoChanges[2])}
+    </div>`;
+  } else if (a.carried_forward_from_prior && priorApp) {
+    changeHtml = `<div class="change-box carried">
+      ↩ Carried forward from ${esc(priorApp.body_name||'')} (${esc(fmtDate(priorApp.meeting_date)||'')})
+    </div>`;
+  }
+
+  // Strip transcript blocks and change detection blocks from notes for clean display
+  let cleanNotes = (a.analyst_working_notes||'').trim();
+  cleanNotes = cleanNotes.replace(/\[Meeting Discussion[\s\S]*?(?=\n\n\[(?!Meeting)|$)/g, '').trim();
+  cleanNotes = cleanNotes.replace(/\[(Changes from[^\]]*|No changes from[^\]]*)\]\s*[\s\S]*?(?=\n\n\[|$)/g, '').trim();
+
+  const reviewer = (a.reviewer_notes||'').trim();
+  const fmt = d => { if(!d) return ''; const x=new Date(d); return isNaN(x)?d:x.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}); };
+  const whoA = a.analyst_notes_updated_by || '';
+  const whoR = a.reviewer_notes_updated_by || '';
+
+  // Vote result from AI analysis or transcript
+  const voteResult = a.vote_result || '';
+
+  return `
+    <div class="app-card ${isCurrent?'current':''}">
+      <div class="app-card-header">
+        <div>
+          <div class="app-card-title">${esc(bodyName)}</div>
+          <div class="app-card-date">${esc(fmt(a.meeting_date))} · ${esc(stageLabel)}</div>
+        </div>
+        <div class="app-card-badges">
+          ${isCurrent ? '<span class="badge-current">● CURRENT</span>' : ''}
+          ${hasTranscript ? '<span class="badge-transcript">🎙 Transcript</span>' : ''}
+          ${a.carried_forward_from_prior ? '<span class="badge-carried">↩ Carried</span>' : ''}
+        </div>
+      </div>
+      ${changeHtml}
+      ${transcriptHtml}
+      <div class="app-notes-section">
+        <label>Analyst Notes ${whoA ? '('+esc(whoA)+')' : ''}</label>
+        <textarea id="app-notes-analyst-${a.id}" onchange="markAppNoteDirty(${a.id},'analyst')">${esc(cleanNotes)}</textarea>
+        <label>Reviewer Notes ${whoR ? '('+esc(whoR)+')' : ''}</label>
+        <textarea id="app-notes-reviewer-${a.id}" onchange="markAppNoteDirty(${a.id},'reviewer')">${esc(reviewer)}</textarea>
+        <button class="btn btn-p btn-xs" style="margin-top:.35rem;display:none" id="app-save-${a.id}"
+          onclick="saveAppearanceNotes(${a.id})">Save Notes</button>
+      </div>
+      ${voteResult ? `<div style="margin-top:.4rem;font-size:.76rem;color:var(--gray-600)"><strong>Vote:</strong> ${esc(voteResult)}</div>` : ''}
+      <div style="margin-top:.3rem;display:flex;gap:.5rem;font-size:.7rem;color:var(--gray-400)">
+        ${a.workflow_status ? `<span>Status: ${esc(a.workflow_status)}</span>` : ''}
+        ${a.assigned_to ? `<span>· ${esc(a.assigned_to)}</span>` : ''}
+        ${a.item_pdf_url || a.item_pdf_local_path ? `<a href="/api/appearance/${a.id}/pdf" target="_blank" style="color:var(--blue2)">📄 PDF</a>` : ''}
+      </div>
+    </div>`;
+}
+
+function _renderTranscriptCard(text) {
+  // Parse structured transcript analysis text into a nice card
+  const lines = text.split('\n');
+  let sentiment = '', tone = '', speakers = '', summary = '';
+  let inSpeakers = false;
+  for (const line of lines) {
+    if (line.startsWith('Sentiment:')) sentiment = line.replace('Sentiment:','').trim();
+    else if (line.startsWith('Tone:')) tone = line.replace('Tone:','').trim();
+    else if (line.startsWith('Speaker Positions:')) { inSpeakers = true; speakers = ''; }
+    else if (inSpeakers && line.trim().startsWith('•')) speakers += line.trim() + '\n';
+    else if (inSpeakers && !line.trim().startsWith('•')) inSpeakers = false;
+    else if (line.startsWith('[Meeting Discussion')) continue;
+    else if (!sentiment && !tone && line.trim()) summary += line.trim() + ' ';
+  }
+  if (!summary) summary = lines.slice(1,4).join(' ').slice(0,300);
+
+  const sentColor = sentiment.toLowerCase().includes('supportive') ? '#16a34a'
+    : sentiment.toLowerCase().includes('opposed') ? '#dc2626'
+    : sentiment.toLowerCase().includes('divided') ? '#ca8a04'
+    : '#6d28d9';
+
+  return `
+    <div class="transcript-box">
+      <div class="transcript-box-title">🎙 Meeting Discussion</div>
+      <div style="font-size:.78rem;color:var(--gray-700);line-height:1.5;margin-bottom:.35rem">${esc(summary.trim()).slice(0,500)}</div>
+      ${sentiment ? `<div style="font-size:.75rem"><strong style="color:${sentColor}">Sentiment:</strong> ${esc(sentiment)}</div>` : ''}
+      ${tone ? `<div style="font-size:.75rem"><strong>Tone:</strong> ${esc(tone)}</div>` : ''}
+      ${speakers ? `<div style="font-size:.75rem;margin-top:.2rem;white-space:pre-wrap">${esc(speakers.trim())}</div>` : ''}
+    </div>`;
+}
+
+function markAppNoteDirty(appId, type) {
+  const btn = document.getElementById('app-save-' + appId);
+  if (btn) btn.style.display = '';
+}
+
+async function saveAppearanceNotes(appId) {
+  const analyst = document.getElementById('app-notes-analyst-' + appId)?.value || '';
+  const reviewer = document.getElementById('app-notes-reviewer-' + appId)?.value || '';
+  try {
+    await fetch('/api/appearance/' + appId + '/notes', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({analyst_working_notes: analyst, reviewer_notes: reviewer, replace: true, changed_by: currentUser || 'analyst'})
+    });
+    const btn = document.getElementById('app-save-' + appId);
+    if (btn) { btn.textContent = '✓ Saved'; setTimeout(() => { btn.textContent = 'Save Notes'; btn.style.display = 'none'; }, 2000); }
+    toast('Notes saved', 'ok');
+  } catch(e) { toast('Failed to save: ' + e.message, 'err'); }
 }
 
 async function renderDrawerLifecycle(body, appData) {

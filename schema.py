@@ -243,6 +243,11 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE appearances ADD COLUMN finalized_brief_updated_at TEXT",
     "ALTER TABLE appearances ADD COLUMN finalized_brief_updated_by TEXT",
 
+    # Per-appearance transcript analysis (separate from analyst notes)
+    "ALTER TABLE appearances ADD COLUMN transcript_analysis TEXT",
+    "ALTER TABLE appearances ADD COLUMN transcript_video_url TEXT",
+    "ALTER TABLE appearances ADD COLUMN transcript_updated_at TEXT",
+
     # ── Matter lifecycle timeline ────────────────────────────
     # Stores parsed legislative history events so we can render the full
     # lifecycle of an item from introduction through committee review to
