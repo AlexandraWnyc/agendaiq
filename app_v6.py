@@ -6876,6 +6876,13 @@ def api_bulk_transcript_backfill():
                 mid = mtg.get("id")
                 label = f"{mtg.get('body_name', '')} — {mtg.get('meeting_date', '')}"
                 pct = int(5 + (90 * i / total))
+
+                # Pre-emptive cleanup: clear leftover temp files from previous iterations
+                import glob as _glob
+                for stale in _glob.glob("/tmp/tmp*/meeting_audio.mp3"):
+                    try: Path(stale).unlink(missing_ok=True)
+                    except: pass
+
                 _bulk_tx_log(f"[{i+1}/{total}] Processing: {label}", pct=pct)
 
                 try:

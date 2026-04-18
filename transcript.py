@@ -1263,6 +1263,12 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                     _emit(f"Transcribing with Whisper ({mp3_path.stat().st_size / 1024 / 1024:.0f} MB)…",
                           phase="transcript", pct=20)
                     transcript = transcribe_with_whisper(mp3_path)
+                    # Delete MP3 immediately — we have the text, free the disk
+                    try:
+                        mp3_path.unlink(missing_ok=True)
+                        log.info(f"  Cleaned up MP3 ({mp3_path.stat().st_size / 1024 / 1024:.0f} MB freed)" if mp3_path.exists() else "  Cleaned up MP3")
+                    except Exception:
+                        pass
                     if transcript:
                         video_title = mp3_info.get("title", body_name)
                         final_url = mp3_info.get("mp3_url", "")
@@ -1270,6 +1276,10 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                         log.info(f"  Granicus+Whisper success: {len(transcript)} chars")
         except Exception as e:
             log.warning(f"  Granicus+Whisper path failed: {e}")
+            # Clean up any downloaded files on error
+            for f in output_dir.glob("*.mp3"):
+                try: f.unlink(missing_ok=True)
+                except: pass
 
     # ── Strategy 2: YouTube captions (fallback — may fail from cloud IPs)
     if not transcript:
