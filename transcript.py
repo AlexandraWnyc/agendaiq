@@ -311,8 +311,9 @@ def _whisper_single(client, audio_path: Path) -> str:
         lines = []
         if hasattr(result, 'segments') and result.segments:
             for seg in result.segments:
-                ts = _seconds_to_timestamp(seg.get("start", seg.start if hasattr(seg, 'start') else 0))
-                text = seg.get("text", seg.text if hasattr(seg, 'text') else "").strip()
+                start = getattr(seg, 'start', None) or (seg.get("start", 0) if isinstance(seg, dict) else 0)
+                ts = _seconds_to_timestamp(start)
+                text = (getattr(seg, 'text', None) or (seg.get("text", "") if isinstance(seg, dict) else "")).strip()
                 if text:
                     lines.append(f"[{ts}] {text}")
         elif hasattr(result, 'text') and result.text:
@@ -384,8 +385,8 @@ def _whisper_chunked(client, audio_path: Path, max_size: int) -> str:
 
             if hasattr(result, 'segments') and result.segments:
                 for seg in result.segments:
-                    start = (seg.get("start", 0) if isinstance(seg, dict) else seg.start) + time_offset
-                    text = (seg.get("text", "") if isinstance(seg, dict) else seg.text).strip()
+                    start = (getattr(seg, 'start', None) or (seg.get("start", 0) if isinstance(seg, dict) else 0)) + time_offset
+                    text = (getattr(seg, 'text', None) or (seg.get("text", "") if isinstance(seg, dict) else "")).strip()
                     if text:
                         all_lines.append(f"[{_seconds_to_timestamp(start)}] {text}")
             elif hasattr(result, 'text') and result.text:
