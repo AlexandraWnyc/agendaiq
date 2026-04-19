@@ -259,11 +259,12 @@ def download_mp3(mp3_url: str, output_dir: Path) -> Path | None:
         return None
 
 
-def transcribe_with_whisper(audio_path: Path, api_key: str = None) -> str:
+def transcribe_with_whisper(audio_path: Path, api_key: str = None,
+                            abort_check=None) -> str:
     """Transcribe an audio file using OpenAI Whisper API.
 
     Handles files > 25MB by splitting into chunks.
-    Returns timestamped transcript string.
+    Returns timestamped transcript string, or "__ABORTED__" if stopped.
     """
     if not api_key:
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -282,7 +283,7 @@ def transcribe_with_whisper(audio_path: Path, api_key: str = None) -> str:
         return _whisper_single(client, audio_path)
     else:
         # Split into chunks and transcribe each
-        return _whisper_chunked(client, audio_path, max_size)
+        return _whisper_chunked(client, audio_path, max_size, abort_check=abort_check)
 
 
 def _whisper_single(client, audio_path: Path) -> str:
@@ -324,8 +325,11 @@ def _whisper_single(client, audio_path: Path) -> str:
         return ""
 
 
-def _whisper_chunked(client, audio_path: Path, max_size: int) -> str:
-    """Split a large audio file into chunks and transcribe each."""
+def _whisper_chunked(client, audio_path: Path, max_size: int,
+                     abort_check=None) -> str:
+    """Split a large audio file into chunks and transcribe each.
+    Returns "__ABORTED__" if abort_check fires mid-transcription."""
+    _abort = abort_check or (lambda: False)
     log.info(f"  Audio too large ({audio_path.stat().st_size / 1024 / 1024:.1f} MB), splitting…")
 
     # Use ffmpeg to split into chunks
@@ -367,8 +371,18 @@ def _whisper_chunked(client, audio_path: Path, max_size: int) -> str:
 
     all_lines = []
     time_offset = 0.0
-    for chunk_path in chunks:
-        log.info(f"    Transcribing chunk {chunk_path.name} (offset={time_offset:.0f}s)…")
+    for ci, chunk_path in enumerate(chunks):
+        # Check abort between every chunk — this is the inner loop that
+        # takes ~90s per chunk, so checking here lets users stop within
+        # ~90s instead of waiting for all 10+ chunks to finish.
+        if _abort():
+            log.info(f"  Abort requested after {ci}/{len(chunks)} chunks — stopping transcription")
+            # Clean up chunk files
+            import shutil as _shutil
+            try: _shutil.rmtree(chunk_dir, ignore_errors=True)
+            except: pass
+            return "__ABORTED__"
+        log.info(f"    Transcribing chunk {ci+1}/{len(chunks)} — {chunk_path.name} (offset={time_offset:.0f}s)…")
         try:
             with open(chunk_path, "rb") as f:
                 result = client.audio.transcriptions.create(
@@ -967,36 +981,76 @@ Guidelines:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
 
-    try:
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=16384,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        text = response.content[0].text.strip()
+    # Retry up to 3 times — Claude sometimes produces malformed JSON
+    # (truncated output, missing commas, trailing commas, etc.)
+    for attempt in range(3):
+        try:
+            response = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=16384,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = response.content[0].text.strip()
 
-        # Extract JSON from response (may be wrapped in markdown)
-        json_match = re.search(r'\[[\s\S]*\]', text)
-        if json_match:
-            segments = json.loads(json_match.group())
-        else:
-            log.warning("  Could not parse AI segmentation response")
-            return {}
+            # Extract JSON from response (may be wrapped in markdown)
+            json_match = re.search(r'\[[\s\S]*\]', text)
+            if not json_match:
+                log.warning(f"  Attempt {attempt+1}: No JSON array found in segmentation response")
+                continue
 
-        # Convert to file_number -> data mapping
-        result = {}
-        for seg in segments:
-            fn = seg.get("file_number", "")
-            if fn:
-                result[fn] = seg
+            raw_json = json_match.group()
 
-        usage = response.usage
-        log.info(f"  Transcript segmentation: {usage.input_tokens} in / {usage.output_tokens} out")
-        return result
+            # Try parsing as-is first
+            try:
+                segments = json.loads(raw_json)
+            except json.JSONDecodeError as je:
+                log.warning(f"  Attempt {attempt+1}: JSON parse error: {je}")
+                # Common fixes for malformed AI output:
+                # 1. Remove trailing commas before ] or }}
+                fixed = re.sub(r',\s*([}\]])', r'\1', raw_json)
+                # 2. Try again
+                try:
+                    segments = json.loads(fixed)
+                    log.info(f"  Fixed JSON with trailing comma removal")
+                except json.JSONDecodeError:
+                    # 3. If output was truncated (hit max_tokens), try to
+                    #    salvage partial results by closing the array
+                    if response.stop_reason == "max_tokens":
+                        log.warning(f"  Output truncated (max_tokens) — salvaging partial results")
+                        # Find last complete object (ends with }})
+                        last_brace = fixed.rfind("}")
+                        if last_brace > 0:
+                            partial = fixed[:last_brace+1] + "]"
+                            try:
+                                segments = json.loads(partial)
+                                log.info(f"  Salvaged {len(segments)} items from truncated output")
+                            except json.JSONDecodeError:
+                                log.warning(f"  Could not salvage truncated output")
+                                continue
+                        else:
+                            continue
+                    else:
+                        continue
 
-    except Exception as e:
-        log.error(f"  Transcript segmentation failed: {e}")
-        return {}
+            # Convert to file_number -> data mapping
+            result = {}
+            for seg in segments:
+                fn = seg.get("file_number", "")
+                if fn:
+                    result[fn] = seg
+
+            usage = response.usage
+            log.info(f"  Transcript segmentation: {usage.input_tokens} in / {usage.output_tokens} out, {len(result)} items")
+            return result
+
+        except Exception as e:
+            log.error(f"  Transcript segmentation attempt {attempt+1} failed: {e}")
+            if attempt < 2:
+                log.info(f"  Retrying segmentation…")
+                time.sleep(2)
+
+    log.error("  Transcript segmentation failed after 3 attempts")
+    return {}
 
 
 # ── Database integration ─────────────────────────────────────
@@ -1158,7 +1212,8 @@ def _ts_to_seconds(ts: str) -> int:
 def backfill_transcript(meeting_id: int, output_dir: Path = None,
                         video_url: str = None,
                         raw_transcript: str = None,
-                        emit=None) -> dict:
+                        emit=None,
+                        abort_check=None) -> dict:
     """Full pipeline: find video → download transcript → segment → store.
 
     Args:
@@ -1167,12 +1222,14 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         video_url: If provided, skip YouTube search and use this URL directly
         raw_transcript: If provided, skip both search AND download — use this text directly
         emit: Optional SSE callback for progress updates
+        abort_check: Optional callable returning True if user requested abort
 
     Returns:
-        {"status": "ok"|"error", "video": {...}, "items_updated": int, ...}
+        {"status": "ok"|"error"|"aborted", "video": {...}, "items_updated": int, ...}
     """
     from repository import get_meeting_by_id, get_appearances_for_meeting
     _emit = emit or (lambda *a, **k: None)
+    _abort = abort_check or (lambda: False)
 
     meeting = get_meeting_by_id(meeting_id)
     if not meeting:
@@ -1249,11 +1306,15 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
 
     # ── Strategy 1: Granicus MP3 → Whisper (preferred — no IP blocks)
     if not video_url:
+        if _abort():
+            return {"status": "aborted", "message": "Stopped by user"}
         _emit(f"Searching county archives for {body_name} {meeting_date}…",
               phase="transcript", pct=5)
         try:
             mp3_info = search_granicus_mp3(body_name, meeting_date)
             if mp3_info:
+                if _abort():
+                    return {"status": "aborted", "message": "Stopped by user"}
                 # Check disk space before downloading
                 free_mb = _disk_free_mb("/tmp")
                 if free_mb < MIN_DISK_FREE_MB:
@@ -1263,9 +1324,16 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                       phase="transcript", pct=10)
                 mp3_path = download_mp3(mp3_info["mp3_url"], output_dir)
                 if mp3_path:
-                    _emit(f"Transcribing with Whisper ({mp3_path.stat().st_size / 1024 / 1024:.0f} MB)…",
+                    if _abort():
+                        # Clean up downloaded file before aborting
+                        try: mp3_path.unlink(missing_ok=True)
+                        except: pass
+                        return {"status": "aborted", "message": "Stopped by user"}
+                    size_mb = mp3_path.stat().st_size / (1024 * 1024)
+                    n_chunks_est = max(1, int(size_mb / 23))  # ~23 MB per Whisper chunk
+                    _emit(f"Transcribing with Whisper ({size_mb:.0f} MB, ~{n_chunks_est} chunks)…",
                           phase="transcript", pct=20)
-                    transcript = transcribe_with_whisper(mp3_path)
+                    transcript = transcribe_with_whisper(mp3_path, abort_check=_abort)
                     # Delete MP3 immediately — we have the text, free the disk
                     try:
                         sz = mp3_path.stat().st_size / (1024*1024) if mp3_path.exists() else 0
@@ -1273,6 +1341,8 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                         log.info(f"  Cleaned up MP3 ({sz:.0f} MB freed)")
                     except Exception:
                         pass
+                    if transcript == "__ABORTED__":
+                        return {"status": "aborted", "message": "Stopped by user during transcription"}
                     if transcript:
                         video_title = mp3_info.get("title", body_name)
                         final_url = mp3_info.get("mp3_url", "")
@@ -1322,6 +1392,14 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
 
     transcript_len = len(transcript)
     log.info(f"  Transcript downloaded: {transcript_len} chars")
+
+    # Check abort before expensive AI segmentation step
+    if _abort():
+        if _created_temp_dir:
+            import shutil
+            shutil.rmtree(output_dir, ignore_errors=True)
+        return {"status": "aborted", "message": "Stopped by user before segmentation"}
+
     _emit(f"Transcript downloaded ({transcript_len:,} chars). Segmenting by item…",
           phase="transcript", pct=50)
 
