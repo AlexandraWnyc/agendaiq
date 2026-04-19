@@ -323,6 +323,53 @@ def get_meeting_package(meeting_id: int) -> dict | None:
             next_step = "—"
             next_step_type = "pending"
 
+        # ── Confidence / completeness flags ──────────────────────
+        # Each flag is a dict: {level: "red"|"yellow", label: str, detail: str}
+        _flags = []
+        _has_pdf = bool(a.get("item_pdf_url") or a.get("item_pdf_local_path"))
+        _has_ai  = bool((a.get("ai_summary_for_appearance") or "").strip())
+        _has_transcript = bool(
+            (a.get("transcript_analysis") or "").strip() or
+            "[Meeting Discussion" in (a.get("analyst_working_notes") or "")
+        )
+        _analysis_at = a.get("analysis_at") or ""
+
+        # Red flags (critical — researcher MUST look deeper)
+        if not _has_pdf:
+            _flags.append({"level": "red", "code": "no_pdf",
+                "label": "No PDF", "detail": "No item PDF available from Legistar — AI analysis was based on title only"})
+        if not _has_ai:
+            _flags.append({"level": "red", "code": "no_ai",
+                "label": "No AI Analysis", "detail": "AI analysis has not been run or returned no results for this item"})
+        elif _has_ai and len((a.get("ai_summary_for_appearance") or "").strip()) < 200:
+            _flags.append({"level": "red", "code": "ai_short",
+                "label": "AI Analysis Incomplete", "detail": "AI analysis is unusually short — likely incomplete or based on insufficient source material"})
+
+        # Yellow flags (warnings — researcher should be aware)
+        if not _has_transcript:
+            _flags.append({"level": "yellow", "code": "no_transcript",
+                "label": "No Transcript", "detail": "No meeting transcript coverage — discussion summary not available for this item"})
+        if _analysis_at:
+            try:
+                from datetime import datetime as _dt
+                analysis_day = _analysis_at[:10]  # "2026-04-10"
+                d1 = _dt.strptime(analysis_day, "%Y-%m-%d").date()
+                age_days = (date.today() - d1).days
+                if age_days > 7:
+                    _flags.append({"level": "yellow", "code": "stale",
+                        "label": f"Stale ({age_days}d)", "detail": f"AI analysis is {age_days} days old — agenda content may have changed since"})
+            except Exception:
+                pass
+
+        # Compute overall confidence: green (no flags), yellow (only warnings), red (critical)
+        _flag_levels = [f["level"] for f in _flags]
+        if "red" in _flag_levels:
+            _confidence = "red"
+        elif "yellow" in _flag_levels:
+            _confidence = "yellow"
+        else:
+            _confidence = "green"
+
         item = {
             **a,
             "short_title":       matter.get("short_title", ""),
@@ -337,6 +384,9 @@ def get_meeting_package(meeting_id: int) -> dict | None:
             "has_reviewer_notes":  bool((a.get("reviewer_notes") or "").strip()),
             "has_finalized_brief": bool((a.get("finalized_brief") or "").strip()),
             "has_ai_summary":      bool((a.get("ai_summary_for_appearance") or "").strip()),
+            # Confidence flags for researcher attention
+            "confidence":          _confidence,
+            "confidence_flags":    _flags,
             "prior_appearance_count": len(prior_other),
             "has_prior_notes": any(
                 (p.get("analyst_working_notes") or "").strip() or

@@ -309,6 +309,7 @@ tr.clickable:hover td{background:var(--blue-lt)}
 .sdot.ok{background:var(--green)}
 .sdot.err{background:var(--red)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@keyframes pulse-flag{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.6;transform:scale(1.25)}}
 
 /* ── Committee checkboxes ── */
 .cmteg{display:flex;flex-direction:column;gap:.28rem;max-height:240px;overflow-y:auto;padding:.05rem}
@@ -1510,6 +1511,8 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <div><label style="margin-bottom:.2rem">Special</label>
           <select id="md-f-special" onchange="renderItemsGrid()" style="margin:0">
             <option value="">All items</option>
+            <option value="attention">⚑ Needs Attention (red/yellow flags)</option>
+            <option value="red">🔴 Critical issues only</option>
             <option value="cf">Carried forward</option>
             <option value="supp">Supplements only</option>
             <option value="notes">Has prior notes</option>
@@ -1522,6 +1525,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <table style="min-width:1600px">
         <thead><tr>
           <th>File #</th>
+          <th title="Analysis confidence: 🟢 = all clear, 🟡 = warnings, 🔴 = needs attention. Click item for details.">⚑</th>
           <th title="Links: ↗ opens Legistar matter page, 📄 downloads the item PDF">Links</th>
           <th>Cmte Date</th><th>Cmte #</th>
           <th>BCC Date</th><th>BCC #</th>
@@ -1657,6 +1661,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="dr-title" id="dr-title">Loading…</div>
     <div class="dr-meta" id="dr-meta"></div>
   </div>
+  <div id="dr-flag-banner" style="display:none;margin:0 .85rem;padding:.6rem .85rem;border-radius:.5rem;border:1px solid #fcd34d;font-size:.82rem"></div>
   <div class="dr-tabs">
     <button class="dtab on" onclick="drTab('overview',this)" title="Debrief + Watchpoints + Legislative Status + Item Evolution">Agenda Debrief</button>
     <button class="dtab" onclick="drTab('notes',this)">Notes</button>
@@ -2393,6 +2398,34 @@ async function openDrawer(fileNum, appId) {
     const hasTranscript = (appData?.analyst_working_notes || '').includes('[Meeting Discussion')
       || (appData?.transcript_analysis || '');
     notesTab.innerHTML = hasTranscript ? 'Notes <span style="font-size:.65rem" title="Has meeting transcript analysis">🎙</span>' : 'Notes';
+  }
+
+  // ── Confidence flag banner ──
+  const flagBanner = document.getElementById('dr-flag-banner');
+  const flags = appData?.confidence_flags || [];
+  if (flags.length > 0) {
+    const hasRed = flags.some(f => f.level === 'red');
+    const bgColor = hasRed ? '#fef2f2' : '#fffbeb';
+    const borderColor = hasRed ? '#fca5a5' : '#fcd34d';
+    const iconColor = hasRed ? '#dc2626' : '#d97706';
+    const headerText = hasRed ? 'Needs Attention' : 'Warnings';
+    flagBanner.style.display = 'block';
+    flagBanner.style.background = bgColor;
+    flagBanner.style.borderColor = borderColor;
+    flagBanner.innerHTML = `
+      <div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.35rem">
+        <span style="color:${iconColor};font-size:1.1rem;font-weight:700">⚑</span>
+        <span style="font-weight:700;color:${iconColor};font-size:.85rem">${headerText} — ${flags.length} issue${flags.length>1?'s':''} found</span>
+      </div>
+      ${flags.map(f => {
+        const dot = f.level === 'red' ? '🔴' : '🟡';
+        return `<div style="font-size:.8rem;color:#374151;margin-left:1.5rem;margin-bottom:.2rem">
+          ${dot} <strong>${esc(f.label)}</strong> — ${esc(f.detail)}
+        </div>`;
+      }).join('')}
+    `;
+  } else {
+    flagBanner.style.display = 'none';
   }
 
   // Default to overview tab
@@ -5105,7 +5138,7 @@ function renderMeetingDetail(pkg) {
   // If the API truly returned zero items, tell the user plainly — otherwise
   // the table just looks "broken".
   if (items.length === 0) {
-    document.getElementById('md-items').innerHTML = `<tr><td colspan="20" style="padding:1.5rem;text-align:center">
+    document.getElementById('md-items').innerHTML = `<tr><td colspan="22" style="padding:1.5rem;text-align:center">
       <div style="font-size:1.4rem;margin-bottom:.3rem">📭</div>
       <div style="font-weight:600;color:var(--ink)">This meeting has no appearances stored yet.</div>
       <div style="font-size:.78rem;color:var(--gray-600);margin-top:.35rem">
@@ -5148,7 +5181,7 @@ function renderItemsGrid() {
   catch (e) {
     console.error('renderItemsGrid failed:', e);
     const tb = document.getElementById('md-items');
-    if (tb) tb.innerHTML = `<tr><td colspan="20" style="padding:1rem;color:var(--red)">
+    if (tb) tb.innerHTML = `<tr><td colspan="22" style="padding:1rem;color:var(--red)">
       <b>Render error:</b> ${(e&&e.message)||e}<br>
       <span style="font-size:.72rem;color:#64748b">Open DevTools → Console for the full stack trace. Items are loaded (${_mdItems.length}) but couldn't render.</span>
     </td></tr>`;
@@ -5179,6 +5212,8 @@ function _renderItemsGrid() {
     if (ft && it.file_type !== ft) return false;
     if (sp && it.sponsor !== sp) return false;
     if (wf && it.workflow_status !== wf) return false;
+    if (sx === 'attention' && it.confidence === 'green') return false;
+    if (sx === 'red' && it.confidence !== 'red') return false;
     if (sx === 'cf' && !it.carried_forward_from_prior) return false;
     if (sx === 'supp' && !it.is_supplement) return false;
     if (sx === 'notes' && !it.has_prior_notes) return false;
@@ -5186,12 +5221,20 @@ function _renderItemsGrid() {
     return true;
   });
 
-  document.getElementById('md-items-count').textContent =
-    `${filtered.length} of ${_mdItems.length} item(s)`;
+  // Confidence summary for the full (unfiltered) set
+  const _redCount = _mdItems.filter(i => i.confidence === 'red').length;
+  const _yellowCount = _mdItems.filter(i => i.confidence === 'yellow').length;
+  const _attentionBadge = _redCount > 0
+    ? ` · <span style="color:#dc2626;font-weight:600;cursor:pointer" onclick="document.getElementById('md-f-special').value='attention';renderItemsGrid()" title="Click to filter">⚑ ${_redCount} need${_redCount===1?'s':''} attention</span>`
+    : _yellowCount > 0
+    ? ` · <span style="color:#d97706;cursor:pointer" onclick="document.getElementById('md-f-special').value='attention';renderItemsGrid()" title="Click to filter">⚑ ${_yellowCount} warning${_yellowCount===1?'':'s'}</span>`
+    : '';
+  document.getElementById('md-items-count').innerHTML =
+    `${filtered.length} of ${_mdItems.length} item(s)${_attentionBadge}`;
 
   const tbody = document.getElementById('md-items');
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="18" style="padding:1rem;color:var(--gray-400)">No items match these filters.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="22" style="padding:1rem;color:var(--gray-400)">No items match these filters.</td></tr>';
     return;
   }
 
@@ -5255,8 +5298,19 @@ function _renderItemsGrid() {
       ? `<span title="Prior analyst/reviewer notes exist for this matter" style="color:var(--green);font-weight:700;font-size:1rem">✓</span>`
       : `<span style="color:var(--gray-400)">—</span>`;
 
+    // Confidence flag dot
+    const _conf = it.confidence || 'green';
+    const _flagCount = (it.confidence_flags || []).length;
+    const _flagTitles = (it.confidence_flags || []).map(f => f.label).join(', ');
+    const _confDot = _conf === 'green'
+      ? '<span title="All clear — analysis complete" style="color:#16a34a;font-size:.9rem">●</span>'
+      : _conf === 'yellow'
+      ? `<span title="${_flagCount} warning${_flagCount>1?'s':''}: ${esc(_flagTitles)}" style="color:#d97706;font-size:.9rem;cursor:help">●</span>`
+      : `<span title="${_flagCount} issue${_flagCount>1?'s':''}: ${esc(_flagTitles)}" style="color:#dc2626;font-size:.9rem;cursor:help;animation:pulse-flag 1.5s ease-in-out infinite">●</span>`;
+
     return `<tr class="clickable" onclick="openDrawer('${esc(it.file_number)}',${it.id})">
       <td><span class="file-link">${it.file_number||''}</span></td>
+      <td style="text-align:center;padding:0 .3rem">${_confDot}</td>
       <td onclick="event.stopPropagation()">${linksCell}</td>
       <td style="white-space:nowrap;font-size:.73rem">${cdSrc}</td>
       <td style="font-size:.73rem">${esc(cn)||'—'}</td>
@@ -6953,7 +7007,6 @@ def api_bulk_transcript_backfill():
         try:
             import transcript as tx
             import meeting_service
-            import concurrent.futures
             meetings = meeting_service.list_saved_meetings()
             total = len(meetings)
             with _bulk_tx_lock:
@@ -6998,16 +7051,31 @@ def api_bulk_transcript_backfill():
                 _bulk_tx_log(f"[{i+1}/{total}] Processing: {label}", pct=pct)
 
                 try:
-                    # 5-minute timeout per meeting to prevent hanging
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            tx.backfill_transcript,
-                            meeting_id=mid,
-                            emit=lambda msg, **kw: None,
-                        )
-                        result = future.result(timeout=300)  # 5 min max
+                    # No hard timeout — large BCC meetings (219 MB, 10+ Whisper
+                    # chunks) legitimately need 15-20 min.  The abort flag lets
+                    # users stop at any time, and we pass a progress callback +
+                    # abort checker into the pipeline so it can bail mid-chunk.
+                    def _abort_check():
+                        with _bulk_tx_lock:
+                            return _bulk_tx_state["abort"]
 
-                    if result and result.get("status") == "ok":
+                    def _bulk_emit(msg, **kw):
+                        _bulk_tx_log(f"    {msg}")
+
+                    result = tx.backfill_transcript(
+                        meeting_id=mid,
+                        emit=_bulk_emit,
+                        abort_check=_abort_check,
+                    )
+
+                    if result and result.get("status") == "aborted":
+                        _bulk_tx_log(f"  ⛔ {label}: stopped by user")
+                        with _bulk_tx_lock:
+                            _bulk_tx_state["msg"] = f"Stopped by user — {processed} processed, {updated} updated"
+                            _bulk_tx_state["done"] = True
+                            _bulk_tx_state["running"] = False
+                        return
+                    elif result and result.get("status") == "ok":
                         items_up = result.get("items_updated", 0)
                         updated += items_up
                         _bulk_tx_log(f"  ✓ {label}: {items_up} items updated")
@@ -7022,9 +7090,6 @@ def api_bulk_transcript_backfill():
                     else:
                         skipped += 1
                         _bulk_tx_log(f"  ⏭ {label}: no transcript available")
-                except concurrent.futures.TimeoutError:
-                    skipped += 1
-                    _bulk_tx_log(f"  ⏱ {label}: timed out after 5 min — skipping")
                 except OSError as e:
                     skipped += 1
                     _bulk_tx_log(f"  ❌ {label}: disk error — {e} (check free space)")
