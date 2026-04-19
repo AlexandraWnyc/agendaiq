@@ -322,6 +322,29 @@ MIGRATION_STATEMENTS = [
     "ALTER TABLE appearances ADD COLUMN debrief_snapshot_on_submit TEXT",
     # analyst_notes_snapshot: snapshot of analyst notes at submission time
     "ALTER TABLE appearances ADD COLUMN analyst_notes_snapshot_on_submit TEXT",
+
+    # ── Notifications: alerts for agenda changes, new items, auto-processing
+    """CREATE TABLE IF NOT EXISTS notifications (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        type          TEXT NOT NULL,
+        title         TEXT NOT NULL,
+        body          TEXT,
+        meeting_id    INTEGER,
+        appearance_id INTEGER,
+        metadata      TEXT,
+        is_read       INTEGER DEFAULT 0,
+        dismissed     INTEGER DEFAULT 0,
+        created_at    TEXT NOT NULL,
+        FOREIGN KEY (meeting_id)    REFERENCES meetings(id),
+        FOREIGN KEY (appearance_id) REFERENCES appearances(id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_notif_read    ON notifications(is_read)",
+    "CREATE INDEX IF NOT EXISTS idx_notif_created ON notifications(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_notif_type    ON notifications(type)",
+
+    # ── Agenda monitoring: track last scan fingerprint per meeting
+    "ALTER TABLE meetings ADD COLUMN last_scan_at TEXT",
+    "ALTER TABLE meetings ADD COLUMN item_count INTEGER",
 ]
 
 # Meeting package status values

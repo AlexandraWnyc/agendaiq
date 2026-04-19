@@ -389,3 +389,121 @@ class AgendaAnalyzer:
             msg, max_tokens=600, use_web_search=False, cache_system=False,
         )
         return clean_markdown(text), usage
+
+    # ─────────────────────────────────────────────────────────
+    # Synthesized Debrief
+    # ─────────────────────────────────────────────────────────
+
+    SYNTHESIS_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
+
+You are being given ALL research that has been gathered on a single agenda item from multiple analysts, tools, and processes. Your job is to synthesize everything into one authoritative, comprehensive debrief that the Commission Auditor will read before the meeting.
+
+OUTPUT FORMAT RULES — MANDATORY:
+- Do NOT use markdown. No **, no ##, no *, no _, no ``` anywhere.
+- Do NOT add meta-commentary like "Based on the provided documents..." or "I'll analyze..."
+- Write in clean professional prose. Use plain text only.
+- For emphasis, use CAPS for section headers.
+- For bullet points, start lines with a dash and space: "- "
+- Never start your response with a preamble. Go straight into the formatted output.
+
+REQUIRED SECTIONS:
+
+EXECUTIVE SUMMARY
+[2-3 sentences. What this item does, why it matters, and the bottom line for the Commission Auditor.]
+
+KEY ISSUES AND CONCERNS
+[Bullet list of the most important issues, risks, or concerns identified across ALL research sources. Each bullet should be 1-2 sentences. Prioritize by importance.]
+
+FISCAL IMPACT
+[Dollar amounts, funding sources, budget implications. Cross-reference numbers from the PDF against analyst notes. Flag any discrepancies.]
+
+MEETING DISCUSSION SUMMARY
+[If transcript analysis is available, summarize what was discussed at committee. Key arguments, questions raised, votes, amendments. If no transcript, note "No committee discussion available."]
+
+LEGISLATIVE HISTORY
+[Timeline of this item through committees and prior meetings. Note any changes between versions.]
+
+RECOMMENDATION AND WATCH POINTS
+[What should the Commission Auditor tell Commissioners to watch for? 3-5 specific, actionable watch points.]
+
+---WATCH_POINTS---
+[Repeat ONLY the watch points as a clean bullet list here, one per line starting with "- ". This section will be extracted separately.]
+
+RULES:
+- Reconcile conflicting information across sources. If sources disagree, note the discrepancy.
+- Do not repeat the same information in multiple sections.
+- If a section has no relevant information from any source, write "No information available." for that section.
+- Prefer specifics (dollar amounts, dates, names) over generalities.
+- Be factual, concise, and non-interpretive."""
+
+    def synthesize_debrief(self, sources: dict) -> tuple:
+        """Synthesize all research into a single comprehensive debrief.
+
+        Args:
+            sources: dict with keys like 'ai_summary', 'watch_points',
+                     'analyst_notes', 'reviewer_notes', 'transcript_analysis',
+                     'chat_insights', 'legislative_history', 'pdf_text',
+                     'item_title', 'file_number', 'body_name', 'meeting_date'
+
+        Returns:
+            (debrief_text, watch_points_text, usage_dict)
+        """
+        # Build context message from all available sources
+        parts = []
+        parts.append(f"ITEM: {sources.get('item_title', 'Unknown')}")
+        parts.append(f"FILE: {sources.get('file_number', 'N/A')}")
+        parts.append(f"BODY: {sources.get('body_name', 'N/A')}")
+        parts.append(f"DATE: {sources.get('meeting_date', 'N/A')}")
+        parts.append("")
+
+        budgets = {
+            'ai_summary': 6000,
+            'analyst_notes': 4000,
+            'reviewer_notes': 4000,
+            'watch_points': 2000,
+            'transcript_analysis': 5000,
+            'chat_insights': 4000,
+            'legislative_history': 3000,
+            'pdf_text': 6000,
+        }
+
+        labels = {
+            'ai_summary': 'AI ANALYSIS (from initial agenda scan)',
+            'analyst_notes': 'ANALYST WORKING NOTES',
+            'reviewer_notes': 'REVIEWER NOTES',
+            'watch_points': 'CURRENT WATCH POINTS',
+            'transcript_analysis': 'COMMITTEE TRANSCRIPT ANALYSIS',
+            'chat_insights': 'CHAT-BASED RESEARCH INSIGHTS',
+            'legislative_history': 'LEGISLATIVE HISTORY',
+            'pdf_text': 'SOURCE PDF TEXT',
+        }
+
+        for key, label in labels.items():
+            val = sources.get(key, '') or ''
+            val = val.strip()
+            if val:
+                budget = budgets.get(key, 4000)
+                if len(val) > budget:
+                    val = val[:budget] + "\n... [truncated]"
+                parts.append(f"--- {label} ---")
+                parts.append(val)
+                parts.append(f"--- END {label} ---")
+                parts.append("")
+
+        msg = "\n".join(parts)
+
+        text, usage = self._call_api(
+            self.SYNTHESIS_PROMPT,
+            msg, max_tokens=3000, use_web_search=False, cache_system=True,
+        )
+
+        text = clean_markdown(text)
+
+        # Extract watch points from separator
+        watch_points = ""
+        if "---WATCH_POINTS---" in text:
+            idx = text.index("---WATCH_POINTS---")
+            watch_points = text[idx + len("---WATCH_POINTS---"):].strip()
+            text = text[:idx].strip()
+
+        return text, watch_points, usage

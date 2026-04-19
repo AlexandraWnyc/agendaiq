@@ -793,6 +793,35 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:999px;
       width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;
       font-weight:700;font-size:.85rem">?</button>
+    <div style="position:relative">
+      <button id="notif-bell" onclick="toggleNotifPanel()" title="Notifications"
+        style="background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:999px;
+        width:30px;height:30px;padding:0;display:flex;align-items:center;justify-content:center;
+        font-size:.9rem;cursor:pointer;position:relative">🔔
+        <span id="notif-badge" style="display:none;position:absolute;top:-4px;right:-4px;
+          background:#ef4444;color:#fff;font-size:.55rem;font-weight:700;min-width:16px;height:16px;
+          border-radius:99px;display:none;align-items:center;justify-content:center;padding:0 3px">0</span>
+      </button>
+      <div id="notif-panel" style="display:none;position:absolute;top:38px;right:0;width:380px;
+        max-height:480px;overflow-y:auto;background:#fff;border-radius:10px;
+        box-shadow:0 12px 40px rgba(0,0,0,.25);z-index:9999;border:1px solid #e2e8f0">
+        <div style="padding:.7rem 1rem;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:700;font-size:.85rem;color:#1e293b">Notifications</div>
+          <div style="display:flex;gap:.4rem">
+            <button class="btn btn-o btn-xs" onclick="markAllNotifRead()">Mark all read</button>
+            <button class="btn btn-o btn-xs" onclick="dismissAllNotif()">Clear</button>
+          </div>
+        </div>
+        <div id="notif-list" style="padding:.3rem 0">
+          <div style="padding:1rem;text-align:center;color:#94a3b8;font-size:.8rem">No notifications</div>
+        </div>
+        <div style="padding:.5rem 1rem;border-top:1px solid #e2e8f0;display:flex;gap:.4rem;align-items:center">
+          <button class="btn btn-sm" style="background:#6d28d9;color:#fff;border:none;font-size:.72rem"
+            onclick="runAgendaCheck()">🔍 Check Now</button>
+          <span id="notif-scan-status" style="font-size:.68rem;color:#94a3b8"></span>
+        </div>
+      </div>
+    </div>
     <select id="current-user-sel" onchange="setCurrentUser(this.value)"
       style="margin:0;width:auto;font-size:.75rem;padding:.22rem .5rem;background:rgba(255,255,255,.15);
       border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:6px">
@@ -1661,29 +1690,15 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           <option value="30">Due in 30 days</option>
         </select>
       </div>
+      <div>
+        <input type="text" id="mi-search" placeholder="Search items…" oninput="loadMyItems()"
+          style="margin:0;padding:.3rem .5rem;font-size:.8rem;border:1px solid var(--gray-200);border-radius:4px;width:180px">
+      </div>
       <div style="margin-left:auto;font-size:.8rem;color:var(--gray-600)" id="mi-count"></div>
     </div>
   </div>
-  <div class="card">
-    <div class="ch"><div class="ch-left"><div class="cicon">👤</div>Assigned Items</div></div>
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr>
-          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','file')">File # <span id="sort-mi-file" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
-          <th title="Analysis confidence flags">⚑</th>
-          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','title')">Title <span id="sort-mi-title" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
-          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','meeting')">Meeting <span id="sort-mi-meeting" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
-          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','body')">Body <span id="sort-mi-body" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
-          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','status')">Status <span id="sort-mi-status" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
-          <th>Notes</th>
-          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','due')">Due Date <span id="sort-mi-due" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
-          <th></th>
-        </tr></thead>
-        <tbody id="mi-tbody">
-          <tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">Select a researcher to view their items.</td></tr>
-        </tbody>
-      </table>
-    </div>
+  <div id="mi-tree-container">
+    <div style="padding:1.25rem;color:var(--gray-400);text-align:center">Select a researcher to view their items.</div>
   </div>
 </div>
 
@@ -1809,6 +1824,8 @@ let currentFileNum = null;
   loadWorkflow();
   // Auto-reattach to any running job (e.g. after browser reload)
   checkActiveJobs();
+  // Start notification polling
+  _startNotifPolling();
 })();
 
 // ════════════════════════════════════════════════════════════
@@ -2624,6 +2641,21 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
       </div>
       <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
     </div>
+    <div class="ds" style="border:2px solid #6d28d9;background:#faf5ff">
+      <div class="ds-title" style="color:#6d28d9">
+        <span>SYNTHESIZE DEBRIEF</span>
+      </div>
+      <div style="font-size:.74rem;color:var(--gray-500);margin-bottom:.5rem">
+        Gather ALL research (AI analysis, analyst notes, reviewer notes, transcript, chat insights, legislative history, PDF text) and synthesize into one comprehensive debrief. This replaces the current Agenda Debrief and Watch Points above.
+      </div>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <button class="btn btn-sm" style="background:#6d28d9;color:#fff;border:none;font-weight:600"
+          onclick="synthesizeDebrief()" id="synth-btn">
+          🧠 Synthesize All Sources
+        </button>
+        <span id="synth-status" style="font-size:.72rem;color:var(--gray-400)"></span>
+      </div>
+    </div>
   `;
   saveBtn.style.display='';
 }
@@ -2954,6 +2986,53 @@ async function reanalyzeAppearance() {
   } catch(e) {
     if(prog) prog.textContent='❌ Failed: ' + (e.message||e);
     if(btn){ btn.disabled=false; btn.textContent='🤖 Re-run AI Analysis'; }
+  }
+}
+
+async function synthesizeDebrief() {
+  if (!currentAppId) { toast('No appearance selected','err'); return; }
+  const btn = document.getElementById('synth-btn');
+  const status = document.getElementById('synth-status');
+  if(btn){ btn.disabled=true; btn.textContent='Synthesizing…'; }
+  if(status) status.textContent='Gathering all sources and sending to AI…';
+  try {
+    const r = await fetch('/api/appearance/' + currentAppId + '/synthesize', {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) {
+      if(status) status.textContent='❌ ' + (d.error||'Failed');
+      if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
+      return;
+    }
+    // Poll for completion
+    if(status) status.textContent='🧠 Synthesizing — this may take 30-60 seconds…';
+    const poll = setInterval(async () => {
+      try {
+        const sr = await fetch('/api/appearance/' + currentAppId + '/synthesize/status').then(r=>r.json());
+        if (sr.status === 'done') {
+          clearInterval(poll);
+          if(status) status.textContent='✓ Synthesis complete!';
+          if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
+          toast('Debrief synthesized from all sources', 'ok');
+          // Refresh drawer to show new debrief
+          if(currentFileNum) openDrawer(currentFileNum, currentAppId);
+        } else if (sr.status === 'error') {
+          clearInterval(poll);
+          if(status) status.textContent='❌ ' + (sr.error||'Synthesis failed');
+          if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
+        }
+      } catch(e) { /* keep polling */ }
+    }, 4000);
+    // Timeout after 3 minutes
+    setTimeout(() => {
+      clearInterval(poll);
+      if(btn && btn.disabled){
+        btn.disabled=false; btn.textContent='🧠 Synthesize All Sources';
+        if(status) status.textContent='⏳ Still running — refresh to check results';
+      }
+    }, 180000);
+  } catch(e) {
+    if(status) status.textContent='❌ ' + (e.message||e);
+    if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
   }
 }
 
@@ -5707,51 +5786,21 @@ function initMyItemsFilters() {
     .forEach(s => st.add(new Option(s, s)));
 }
 
-async function loadMyItems() {
-  const who = document.getElementById('mi-researcher').value;
-  const status = document.getElementById('mi-status').value;
-  const due = document.getElementById('mi-due').value;
-  if (!who) {
-    document.getElementById('mi-tbody').innerHTML =
-      '<tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">Pick a researcher (top-right user menu) to view your assigned items.</td></tr>';
-    document.getElementById('mi-count').textContent = '';
-    return;
-  }
-  let url = `/api/workflow?assigned=${encodeURIComponent(who)}`;
-  if (status) url += `&status=${encodeURIComponent(status)}`;
-  if (due) url += `&due=${encodeURIComponent(due)}`;
-  const r = await fetch(url);
-  let rows = await r.json();
-  // Apply sort
-  rows = getSortedRows('mi', rows, {
-    file: a => a.file_number || '',
-    title: a => a.short_title || '',
-    meeting: a => a.meeting_date || '',
-    body: a => a.body_name || '',
-    status: a => a.workflow_status || '',
-    due: a => a.due_date || '',
-  });
-  document.getElementById('mi-count').textContent = `${rows.length} item(s)`;
-  const tb = document.getElementById('mi-tbody');
-  if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">No items match these filters.</td></tr>';
-    return;
-  }
-  tb.innerHTML = rows.map(a => {
+function _renderMiRows(items) {
+  return items.map(a => {
     const due_cls = a._due_class||'due-none';
-    const due_lbl = a._due_label||a.due_date||'—';
-    const hasNotes = (a.analyst_working_notes||'').trim() ? '📝' : '';
-    // Confidence flags
+    const due_lbl = a._due_label||a.due_date||'\u2014';
+    const hasNotes = (a.analyst_working_notes||'').trim() ? '\ud83d\udcdd' : '';
+    const itemNum = a.committee_item_number || a.bcc_item_number || a.raw_agenda_item_number || '';
     const _fl = a.confidence_flags || [];
     const _fDots = _fl.length === 0
-      ? '<span style="color:#16a34a;font-size:.7rem">●</span>'
+      ? '<span style="color:#16a34a;font-size:.7rem">\u25CF</span>'
       : _fl.map(f => `<span title="${esc(f.label)}: ${esc(f.detail)}" style="color:${f.color||'#dc2626'};font-size:.7rem;cursor:help${f.level==='red'?';animation:pulse-flag 1.5s ease-in-out infinite':''}">\u25CF</span>`).join('');
     return `<tr class="clickable" onclick="openDrawer('${esc(a.file_number)}',${a.id})">
+      <td style="font-size:.75rem;font-weight:600;color:var(--gray-600)">${esc(itemNum)}</td>
       <td><span class="file-link">${a.file_number}</span></td>
       <td style="text-align:center;white-space:nowrap;padding:0 .3rem">${_fDots}</td>
       <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.short_title||'')}</td>
-      <td style="white-space:nowrap;font-size:.75rem">${fmtDate(a.meeting_date)}</td>
-      <td style="font-size:.72rem">${esc(a.body_name||'')}</td>
       <td>${badge(a.workflow_status)}</td>
       <td style="font-size:.78rem">${hasNotes}</td>
       <td class="due-cell ${due_cls}">${due_lbl}</td>
@@ -5760,6 +5809,101 @@ async function loadMyItems() {
       </td>
     </tr>`;
   }).join('');
+}
+
+async function loadMyItems() {
+  const who = document.getElementById('mi-researcher').value;
+  const status = document.getElementById('mi-status').value;
+  const due = document.getElementById('mi-due').value;
+  const search = (document.getElementById('mi-search')?.value||'').trim().toLowerCase();
+  const container = document.getElementById('mi-tree-container');
+  if (!who) {
+    container.innerHTML = '<div style="padding:1.25rem;color:var(--gray-400);text-align:center">Pick a researcher (top-right user menu) to view your assigned items.</div>';
+    document.getElementById('mi-count').textContent = '';
+    return;
+  }
+  let url = `/api/workflow?assigned=${encodeURIComponent(who)}`;
+  if (status) url += `&status=${encodeURIComponent(status)}`;
+  if (due) url += `&due=${encodeURIComponent(due)}`;
+  const r = await fetch(url);
+  let rows = await r.json();
+
+  // Keyword search across all fields
+  if (search) {
+    rows = rows.filter(a => {
+      const hay = [a.file_number, a.short_title, a.appearance_title,
+        a.bcc_item_number, a.committee_item_number, a.raw_agenda_item_number,
+        a.body_name, a.workflow_status, a.assigned_to, a.sponsor,
+        a.ai_summary_for_appearance, a.analyst_working_notes, a.reviewer_notes,
+        a.watch_points_for_appearance, a.current_status].join(' ').toLowerCase();
+      return hay.includes(search);
+    });
+  }
+
+  // Sort within groups
+  rows = getSortedRows('mi', rows, {
+    file: a => a.file_number || '',
+    item: a => a.committee_item_number || a.bcc_item_number || a.raw_agenda_item_number || '',
+    title: a => a.short_title || '',
+    status: a => a.workflow_status || '',
+    due: a => a.due_date || '',
+  });
+  document.getElementById('mi-count').textContent = `${rows.length} item(s)`;
+  if (!rows.length) {
+    container.innerHTML = '<div style="padding:1.25rem;color:var(--gray-400);text-align:center">No items match these filters.</div>';
+    return;
+  }
+
+  // Group by meeting (body_name + meeting_date)
+  const groups = new Map();
+  for (const a of rows) {
+    const key = `${a.body_name||'Unknown'}|||${a.meeting_date||''}|||${a.meeting_id||0}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(a);
+  }
+
+  // Sort groups by meeting date descending
+  const sortedGroups = [...groups.entries()].sort((a,b) => {
+    const da = a[0].split('|||')[1], db = b[0].split('|||')[1];
+    return db.localeCompare(da);
+  });
+
+  let html = '';
+  for (const [key, items] of sortedGroups) {
+    const [bodyName, meetingDate, meetingId] = key.split('|||');
+    const gid = 'mi-grp-' + (meetingId||Math.random().toString(36).slice(2));
+    const dateLabel = fmtDate(meetingDate);
+
+    html += `
+    <div class="card" style="margin-bottom:.75rem">
+      <div class="ch" style="cursor:pointer;user-select:none" onclick="document.getElementById('${gid}').style.display=document.getElementById('${gid}').style.display==='none'?'':'none';this.querySelector('.mi-arrow').textContent=document.getElementById('${gid}').style.display==='none'?'▶':'▼'">
+        <div class="ch-left" style="gap:.5rem">
+          <span class="mi-arrow" style="font-size:.7rem;color:var(--gray-400);width:1rem;text-align:center">▼</span>
+          <div style="font-size:.82rem;font-weight:700;color:var(--gray-800)">${esc(bodyName)}</div>
+          <div style="font-size:.75rem;color:var(--gray-500)">${dateLabel}</div>
+          <div style="font-size:.7rem;color:var(--gray-400);background:var(--gray-100);padding:.1rem .4rem;border-radius:9px">${items.length} item${items.length>1?'s':''}</div>
+        </div>
+      </div>
+      <div id="${gid}">
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr>
+              <th style="cursor:pointer;user-select:none;width:50px" onclick="tblSort('mi','item')">Item # <span id="sort-mi-item" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+              <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','file')">File # <span id="sort-mi-file" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+              <th title="Analysis confidence flags">⚑</th>
+              <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','title')">Title <span id="sort-mi-title" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+              <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','status')">Status <span id="sort-mi-status" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+              <th>Notes</th>
+              <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','due')">Due Date <span id="sort-mi-due" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+              <th></th>
+            </tr></thead>
+            <tbody>${_renderMiRows(items)}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+  }
+  container.innerHTML = html;
 }
 
 // ════════════════════════════════════════════════════════════
@@ -5875,6 +6019,155 @@ function fmtDate(d){
   const m=d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if(!m) return d;
   return parseInt(m[2])+'/'+parseInt(m[3])+'/'+m[1];
+}
+
+// ════════════════════════════════════════════════════════════
+// Notifications
+// ════════════════════════════════════════════════════════════
+
+let _notifOpen = false;
+let _notifPollTimer = null;
+
+function toggleNotifPanel() {
+  const panel = document.getElementById('notif-panel');
+  _notifOpen = !_notifOpen;
+  panel.style.display = _notifOpen ? 'block' : 'none';
+  if (_notifOpen) loadNotifications();
+}
+
+// Close panel when clicking outside
+document.addEventListener('click', e => {
+  const panel = document.getElementById('notif-panel');
+  const bell = document.getElementById('notif-bell');
+  if (_notifOpen && panel && !panel.contains(e.target) && !bell.contains(e.target)) {
+    _notifOpen = false;
+    panel.style.display = 'none';
+  }
+});
+
+async function loadNotifications() {
+  try {
+    const r = await fetch('/api/notifications');
+    const d = await r.json();
+    const list = document.getElementById('notif-list');
+    const badge = document.getElementById('notif-badge');
+    const unread = d.filter(n => !n.is_read).length;
+
+    // Update badge
+    if (unread > 0) {
+      badge.style.display = 'flex';
+      badge.textContent = unread > 99 ? '99+' : unread;
+    } else {
+      badge.style.display = 'none';
+    }
+
+    if (!d.length) {
+      list.innerHTML = '<div style="padding:1rem;text-align:center;color:#94a3b8;font-size:.8rem">No notifications</div>';
+      return;
+    }
+
+    list.innerHTML = d.map(n => {
+      const icon = n.type === 'new_agenda' ? '📋' : n.type === 'agenda_changed' ? '🔄' : n.type === 'auto_processed' ? '🤖' : '🔔';
+      const ago = _timeAgo(n.created_at);
+      const unreadDot = !n.is_read ? '<span style="width:8px;height:8px;border-radius:50%;background:#3b82f6;flex-shrink:0"></span>' : '';
+      const meta = n.metadata ? JSON.parse(n.metadata) : {};
+      const meetingLink = n.meeting_id
+        ? ` <button class="btn btn-o btn-xs" style="font-size:.6rem;padding:1px 5px" onclick="event.stopPropagation();openMeeting(${n.meeting_id})">View</button>`
+        : '';
+      return `<div style="padding:.6rem 1rem;border-bottom:1px solid #f1f5f9;cursor:pointer;
+        background:${n.is_read?'#fff':'#f0f9ff'};display:flex;gap:.5rem;align-items:flex-start"
+        onclick="markNotifRead(${n.id})">
+        ${unreadDot}
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:.3rem">
+            <span style="font-size:.85rem">${icon}</span>
+            <span style="font-size:.78rem;font-weight:600;color:#1e293b">${esc(n.title)}</span>
+          </div>
+          <div style="font-size:.72rem;color:#64748b;margin-top:.15rem;line-height:1.4">${esc(n.body)}${meetingLink}</div>
+          <div style="font-size:.65rem;color:#94a3b8;margin-top:.2rem">${ago}</div>
+        </div>
+        <button onclick="event.stopPropagation();dismissNotif(${n.id})" title="Dismiss"
+          style="background:none;border:none;cursor:pointer;color:#94a3b8;font-size:.75rem;padding:2px">✕</button>
+      </div>`;
+    }).join('');
+  } catch(e) {
+    console.error('Notification load failed:', e);
+  }
+}
+
+function _timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr + 'Z');
+  const now = new Date();
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+async function markNotifRead(id) {
+  await fetch('/api/notifications/' + id + '/read', {method:'POST'});
+  loadNotifications();
+}
+
+async function markAllNotifRead() {
+  await fetch('/api/notifications/read-all', {method:'POST'});
+  loadNotifications();
+}
+
+async function dismissNotif(id) {
+  await fetch('/api/notifications/' + id + '/dismiss', {method:'POST'});
+  loadNotifications();
+}
+
+async function dismissAllNotif() {
+  await fetch('/api/notifications/dismiss-all', {method:'POST'});
+  loadNotifications();
+}
+
+async function runAgendaCheck() {
+  const status = document.getElementById('notif-scan-status');
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = 'Scanning…';
+  if(status) status.textContent = 'Checking Legistar for changes…';
+  try {
+    const r = await fetch('/api/monitor/scan', {method:'POST'});
+    const d = await r.json();
+    if (d.error) {
+      if(status) status.textContent = '❌ ' + d.error;
+    } else {
+      if(status) status.textContent = 'Scan started — polling…';
+      // Poll for completion
+      const poll = setInterval(async () => {
+        const sr = await fetch('/api/monitor/status').then(r=>r.json());
+        if (!sr.running) {
+          clearInterval(poll);
+          const res = sr.last_result || {};
+          if(status) status.textContent = `✓ ${res.new_agendas||0} new, ${res.changed_agendas||0} changed`;
+          btn.disabled = false;
+          btn.textContent = '🔍 Check Now';
+          loadNotifications();
+        }
+      }, 3000);
+      setTimeout(() => { clearInterval(poll); btn.disabled=false; btn.textContent='🔍 Check Now'; }, 300000);
+    }
+  } catch(e) {
+    if(status) status.textContent = '❌ ' + (e.message||'Failed');
+  }
+  btn.disabled = false;
+  btn.textContent = '🔍 Check Now';
+}
+
+// Poll for new notifications every 2 minutes
+function _startNotifPolling() {
+  if (_notifPollTimer) return;
+  // Initial load
+  loadNotifications();
+  _notifPollTimer = setInterval(() => {
+    loadNotifications();
+  }, 120000);
 }
 
 // Toast helper — used for backfill / export feedback
@@ -6995,6 +7288,135 @@ def api_appearance_reanalyze(app_id):
     t = threading.Thread(target=_run_reanalysis, daemon=True)
     t.start()
     return jsonify({"ok": True, "message": "Reanalysis started in background"})
+
+
+# ── Synthesized Debrief ──────────────────────────────────────
+_synth_status = {}  # app_id -> {status, error}
+
+@app.route("/api/appearance/<int:app_id>/synthesize", methods=["POST"])
+def api_synthesize_debrief(app_id):
+    """Gather ALL research sources and synthesize a comprehensive debrief.
+    Runs in background thread — poll /api/appearance/<id>/synthesize/status."""
+    from repository import get_appearance_by_id
+    a = get_appearance_by_id(app_id)
+    if not a:
+        return jsonify({"error": "not found"}), 404
+
+    if _synth_status.get(app_id, {}).get("status") == "running":
+        return jsonify({"ok": False, "error": "Synthesis already running"}), 409
+
+    _synth_status[app_id] = {"status": "running", "error": None}
+
+    def _run_synthesis():
+        try:
+            from analyzer import AgendaAnalyzer
+            from repository import (get_matter_by_file_number, get_meeting_by_id,
+                                    get_all_appearances_for_matter)
+            import db as _db
+
+            matter = get_matter_by_file_number(a["file_number"]) or {}
+            meeting = get_meeting_by_id(a["meeting_id"]) or {}
+
+            # Gather all sources
+            sources = {
+                'item_title': a.get("appearance_title") or matter.get("short_title") or "",
+                'file_number': a.get("file_number") or "",
+                'body_name': meeting.get("body_name") or "",
+                'meeting_date': meeting.get("meeting_date") or "",
+                'ai_summary': a.get("ai_summary_for_appearance") or "",
+                'watch_points': a.get("watch_points_for_appearance") or "",
+                'analyst_notes': a.get("analyst_working_notes") or "",
+                'reviewer_notes': a.get("reviewer_notes") or "",
+                'transcript_analysis': a.get("transcript_analysis") or "",
+            }
+
+            # Get PDF text
+            pdf_text = ""
+            pdf_path = a.get("item_pdf_local_path") or ""
+            if pdf_path and Path(pdf_path).exists():
+                try:
+                    import fitz
+                    doc = fitz.open(pdf_path)
+                    pdf_text = "\n".join(page.get_text() for page in doc)
+                    doc.close()
+                except Exception as e:
+                    app.logger.warning(f"PDF read for synthesis: {e}")
+            sources['pdf_text'] = pdf_text
+
+            # Gather chat insights (assistant messages that were appended)
+            chat_insights = ""
+            try:
+                with _db.get_db() as conn:
+                    chats = conn.execute(
+                        """SELECT content FROM chat_messages
+                           WHERE appearance_id=? AND role='assistant'
+                           ORDER BY created_at ASC""",
+                        (app_id,)
+                    ).fetchall()
+                    if chats:
+                        chat_insights = "\n\n".join(
+                            c["content"][:1500] for c in chats[:5]
+                        )
+            except Exception:
+                pass
+            sources['chat_insights'] = chat_insights
+
+            # Legislative history from prior appearances
+            leg_history = ""
+            all_apps = get_all_appearances_for_matter(matter.get("id", 0))
+            for pa in sorted(all_apps, key=lambda x: x.get("meeting_date", "")):
+                if pa["id"] == app_id:
+                    continue
+                body = pa.get("body_name", "")
+                date = pa.get("meeting_date", "")
+                summ = (pa.get("ai_summary_for_appearance") or "").strip()[:800]
+                tx = (pa.get("transcript_analysis") or "").strip()[:600]
+                if summ or tx:
+                    leg_history += f"\n[{body} — {date}]\n"
+                    if summ:
+                        leg_history += f"Summary: {summ}\n"
+                    if tx:
+                        leg_history += f"Discussion: {tx}\n"
+            # Also include the stored leg history summary
+            if a.get("leg_history_summary"):
+                leg_history = a["leg_history_summary"] + "\n\n" + leg_history
+            sources['legislative_history'] = leg_history
+
+            # Run synthesis
+            analyzer = AgendaAnalyzer()
+            debrief, watch_points, usage = analyzer.synthesize_debrief(sources)
+
+            # Save to DB
+            now = now_iso()
+            with _db.get_db() as conn:
+                conn.execute("""UPDATE appearances SET
+                    ai_summary_for_appearance=?,
+                    watch_points_for_appearance=?,
+                    updated_at=? WHERE id=?""",
+                    (debrief, watch_points, now, app_id))
+
+            # Log workflow
+            import workflow as wf
+            wf.log_history(app_id, "synthesize",
+                note=f"Synthesized debrief from all sources ({usage.get('in',0)} in / {usage.get('out',0)} out tokens)")
+
+            _synth_status[app_id] = {"status": "done", "error": None}
+            app.logger.info(f"Synthesis complete for appearance {app_id}: "
+                          f"{usage.get('in',0)} in / {usage.get('out',0)} out tokens")
+        except Exception as e:
+            _synth_status[app_id] = {"status": "error", "error": str(e)}
+            app.logger.error(f"Synthesis failed for appearance {app_id}: {e}")
+
+    import threading as _threading
+    t = _threading.Thread(target=_run_synthesis, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "message": "Synthesis started"})
+
+
+@app.route("/api/appearance/<int:app_id>/synthesize/status")
+def api_synthesize_status(app_id):
+    s = _synth_status.get(app_id, {"status": "idle", "error": None})
+    return jsonify(s)
 
 
 # ── Batch reanalysis: all appearances for a matter ────────────
@@ -9040,11 +9462,104 @@ def api_export_meeting_prep_excel(meeting_id):
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
+# ── Notifications API ──────────────────────────────────────────
+
+@app.route("/api/notifications")
+def api_notifications():
+    """Return recent non-dismissed notifications, newest first."""
+    with get_db() as conn:
+        rows = conn.execute(
+            """SELECT id, type, title, body, meeting_id, appearance_id,
+                      metadata, is_read, created_at
+               FROM notifications
+               WHERE dismissed=0
+               ORDER BY created_at DESC
+               LIMIT 50"""
+        ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/notifications/<int:nid>/read", methods=["POST"])
+def api_notification_read(nid):
+    with get_db() as conn:
+        conn.execute("UPDATE notifications SET is_read=1 WHERE id=?", (nid,))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notifications/read-all", methods=["POST"])
+def api_notifications_read_all():
+    with get_db() as conn:
+        conn.execute("UPDATE notifications SET is_read=1 WHERE is_read=0")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notifications/<int:nid>/dismiss", methods=["POST"])
+def api_notification_dismiss(nid):
+    with get_db() as conn:
+        conn.execute("UPDATE notifications SET dismissed=1 WHERE id=?", (nid,))
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notifications/dismiss-all", methods=["POST"])
+def api_notifications_dismiss_all():
+    with get_db() as conn:
+        conn.execute("UPDATE notifications SET dismissed=1 WHERE dismissed=0")
+    return jsonify({"ok": True})
+
+
+# ── Agenda Monitor API ────────────────────────────────────────
+
+@app.route("/api/monitor/scan", methods=["POST"])
+def api_monitor_scan():
+    """Trigger an agenda change detection scan. Runs in background."""
+    import agenda_monitor as am
+    import threading as _threading
+
+    status = am.get_scan_status()
+    if status["running"]:
+        return jsonify({"ok": False, "error": "Scan already running"}), 409
+
+    def _run():
+        am.run_full_scan(auto_process=True)
+
+    t = _threading.Thread(target=_run, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "message": "Scan started"})
+
+
+@app.route("/api/monitor/status")
+def api_monitor_status():
+    import agenda_monitor as am
+    return jsonify(am.get_scan_status())
+
+
+@app.route("/api/monitor/start-background", methods=["POST"])
+def api_monitor_start():
+    import agenda_monitor as am
+    am.start_background_monitor()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/monitor/stop-background", methods=["POST"])
+def api_monitor_stop():
+    import agenda_monitor as am
+    am.stop_background_monitor()
+    return jsonify({"ok": True})
+
+
 # ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     init_db()
     notifications.start_background_checker(interval_hours=1)
+
+    # Start the agenda monitor background thread
+    try:
+        import agenda_monitor as am
+        am.start_background_monitor()
+    except Exception as e:
+        log.warning(f"Agenda monitor failed to start: {e}")
+
     print(f"\n  AgendaIQ v6 → http://localhost:{port}\n")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)

@@ -143,6 +143,20 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
             # Get or create the meeting record
             meeting_id = repo.get_or_create_meeting(cname, adate, meeting_type=_mtype)
 
+            # Set agenda_version fingerprint and agenda_status
+            try:
+                from agenda_monitor import _compute_agenda_fingerprint
+                _fp = _compute_agenda_fingerprint(items)
+                import db as _fpdb
+                with _fpdb.get_db() as _fpc:
+                    _fpc.execute(
+                        """UPDATE meetings SET agenda_version=?, agenda_status=?,
+                           item_count=?, last_scan_at=? WHERE id=?""",
+                        (_fp, "Analyzed", len(items),
+                         datetime.now().strftime("%Y-%m-%d %H:%M:%S"), meeting_id))
+            except Exception:
+                pass  # Non-critical — don't block processing
+
             # Check which file numbers are already processed for this meeting
             processed_ids = repo.get_processed_file_numbers_for_meeting(meeting_id)
 
