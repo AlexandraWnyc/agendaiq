@@ -30,7 +30,7 @@ def _disk_free_mb(path="/tmp"):
     except Exception:
         return 9999  # assume OK if check fails
 
-MIN_DISK_FREE_MB = 200  # don't download if less than 200MB free
+MIN_DISK_FREE_MB = 100  # don't download if less than 100MB free
 
 # ── Constants ────────────────────────────────────────────────
 YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
@@ -422,6 +422,14 @@ def _whisper_chunked(client, audio_path: Path, max_size: int) -> str:
         except Exception as e:
             log.warning(f"    Chunk {chunk_path.name} failed: {e}")
             time_offset += chunk_duration
+
+    # Clean up ALL chunk files immediately
+    import shutil as _shutil
+    try:
+        _shutil.rmtree(chunk_dir, ignore_errors=True)
+        log.info(f"  Cleaned up {len(chunks)} chunk files")
+    except Exception:
+        pass
 
     transcript = "\n".join(all_lines)
     log.info(f"  Full transcription: {len(all_lines)} segments, {len(transcript)} chars")
