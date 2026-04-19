@@ -6657,7 +6657,7 @@ function renderMeetingPrepTable() {
     html += `<tr class="${rowClass}" onclick="mpToggleExpand(${item.id})">
       <td style="text-align:center"><span style="font-size:.7rem;color:var(--gray-400);transition:transform .2s;display:inline-block;${isExpanded?'transform:rotate(90deg)':''}">▶</span></td>
       <td style="text-align:center;white-space:nowrap">${_mpFlagDots}</td>
-      <td><span class="mp-risk mp-risk-${risk}">${risk}</span></td>
+      <td><span class="mp-risk mp-risk-${risk}" title="${esc(item.ai_risk_reason||'')}" style="${item.ai_risk_reason?'cursor:help':''}">${risk}</span></td>
       <td><span class="mp-researcher ${researcher?'':'mp-none'}">${esc(researcher||'—')}</span></td>
       <td style="font-weight:700;color:var(--blue);font-size:.85rem">${esc(pos)}</td>
       <td style="font-family:monospace;font-size:.75rem;color:var(--gray-600)">${esc(item.file_number||'')}</td>
@@ -7534,6 +7534,8 @@ def api_appearance_reanalyze(app_id):
                     analysis_tokens_out=?,
                     analysis_cached_tokens=?,
                     analysis_at=?,
+                    ai_risk_level=?,
+                    ai_risk_reason=?,
                     updated_at=? WHERE id=?""",
                     (part1,
                      "",  # watch points extracted separately if needed
@@ -7542,7 +7544,10 @@ def api_appearance_reanalyze(app_id):
                      meta.get("usage",{}).get("in",0),
                      meta.get("usage",{}).get("out",0),
                      meta.get("usage",{}).get("cached",0),
-                     now, now, app_id))
+                     now,
+                     meta.get("ai_risk_level",""),
+                     meta.get("ai_risk_reason",""),
+                     now, app_id))
 
             # Extract watch points from part1 if present
             import re
@@ -7755,12 +7760,15 @@ def api_matter_reanalyze_all(matter_id):
                             finalized_brief=CASE WHEN finalized_brief IS NULL OR finalized_brief='' THEN ? ELSE finalized_brief END,
                             analysis_input_hash=?, analysis_tokens_in=?,
                             analysis_tokens_out=?, analysis_cached_tokens=?,
-                            analysis_at=?, updated_at=? WHERE id=?""",
+                            analysis_at=?, ai_risk_level=?, ai_risk_reason=?,
+                            updated_at=? WHERE id=?""",
                             (part1, "", part2, meta.get("input_hash",""),
                              meta.get("usage",{}).get("in",0),
                              meta.get("usage",{}).get("out",0),
                              meta.get("usage",{}).get("cached",0),
-                             now, now, aid))
+                             now, meta.get("ai_risk_level",""),
+                             meta.get("ai_risk_reason",""),
+                             now, aid))
 
                     # Update the in-memory copy for subsequent prior_context
                     ap["ai_summary_for_appearance"] = part1
@@ -7856,10 +7864,14 @@ def api_meeting_reanalyze_all(meeting_id):
                         ai_summary_for_appearance=?, watch_points_for_appearance=?,
                         finalized_brief=CASE WHEN finalized_brief IS NULL OR finalized_brief='' THEN ? ELSE finalized_brief END,
                         analysis_input_hash=?, analysis_tokens_in=?, analysis_tokens_out=?,
-                        analysis_cached_tokens=?, analysis_at=?, updated_at=? WHERE id=?""",
+                        analysis_cached_tokens=?, analysis_at=?,
+                        ai_risk_level=?, ai_risk_reason=?,
+                        updated_at=? WHERE id=?""",
                         (part1, "", part2, meta.get("input_hash",""),
                          meta.get("usage",{}).get("in",0), meta.get("usage",{}).get("out",0),
-                         meta.get("usage",{}).get("cached",0), now, now, aid))
+                         meta.get("usage",{}).get("cached",0), now,
+                         meta.get("ai_risk_level",""), meta.get("ai_risk_reason",""),
+                         now, aid))
 
                 app.logger.info(f"Meeting batch reanalysis: appearance {aid} done")
             except Exception as e:
@@ -9280,71 +9292,59 @@ def api_meeting_prep(meeting_id):
 
 
 def _classify_risk(item):
-    """Classify an item's risk level based on content indicators.
+    """Classify an item's risk level. Uses AI-provided classification when
+    available (stored during analysis), falls back to conservative keyword
+    matching for unanalyzed items.
 
-    Levels:
-      HIGH   - Large fiscal (>$1M), sole source/no-bid contracts, bond issuances,
-               eminent domain, tax/rate increases, veto overrides. Items that
-               Commissioners WILL be asked about by media or constituents.
-      MEDIUM - Policy changes (ordinance amendments, new interlocal agreements),
-               moderate procurement, change orders. Items with substantive impact
-               but lower controversy risk.
-      LOW    - Routine items: renewals, standard resolutions, reports, consent
-               agenda items with no fiscal or policy change.
-      INFO   - Ceremonial: proclamations, recognitions, honorary resolutions.
+    AI criteria (defined in SOP_PROMPT):
+      HIGH       - Sole source/no-bid procurement, rejected bidders with sole-source
+                   fallback, contracts extended 3+ times without rebid, non-compete in
+                   public contracts, eminent domain, tax/rate increases, veto overrides,
+                   countywide policy changes, complex tech implementations, prior audit
+                   findings or IG investigations, controversial vendor history, items
+                   deferred multiple times.
+      MEDIUM     - New ordinances with policy substance, interlocal agreements, change
+                   orders, new procurements (standard process), zoning, fiscal >$5M
+                   (proper process), district-level service changes.
+      LOW        - Contract renewals, standard resolutions, consent agenda (no policy
+                   change), routine reports, budget allocations within authority, street
+                   namings, appointment confirmations.
+      CEREMONIAL - Proclamations, recognitions, honorary resolutions, commendations.
 
-    Threshold principle: If in doubt, classify DOWN not up. A list of 134
-    HIGH items is useless. HIGH should be ~5-15% of an agenda.
+    Threshold: HIGH should be ~5-15% of an agenda. If in doubt, classify DOWN.
     """
-    summary = (item.get("ai_summary_for_appearance") or "").lower()
-    title = (item.get("appearance_title") or "").lower()
-    watch = (item.get("watch_points_for_appearance") or "").lower()
-    notes = (item.get("analyst_working_notes") or "").lower()
-    combined = f"{title} {summary} {watch} {notes}"
+    # ── PRIMARY: Use AI classification if available ──
+    ai_risk = (item.get("ai_risk_level") or "").upper().strip()
+    if ai_risk in ("HIGH", "MEDIUM", "LOW", "CEREMONIAL"):
+        # Map CEREMONIAL → INFO for display consistency
+        return "INFO" if ai_risk == "CEREMONIAL" else ai_risk
 
-    # ── INFO: ceremonial/recognition items — check first ──
-    info_signals = [
-        "proclamation", "recognition", "presentation of", "commend",
-        "ceremonial", "honorary", "certificate", "poster contest",
-        "appreciation", "tribute", "congratulat"
-    ]
-    if any(s in combined for s in info_signals):
+    # ── FALLBACK: Conservative keyword matching for unanalyzed items ──
+    title = (item.get("appearance_title") or "").lower()
+    summary = (item.get("ai_summary_for_appearance") or "").lower()
+    combined = f"{title} {summary}"
+
+    # Ceremonial — always check first
+    if any(s in combined for s in [
+        "proclamation", "recognition", "commend", "ceremonial",
+        "honorary", "certificate", "poster contest", "tribute"
+    ]):
         return "INFO"
 
-    # ── HIGH: must meet STRONG criteria ──
-    # Large fiscal: "million" or "billion" in context of spending/contracts
-    has_large_fiscal = any(s in combined for s in ["million", "billion"])
-    # High-controversy triggers (any one of these = HIGH regardless of amount)
-    high_controversy = [
+    # HIGH — only the strongest signals (fallback is intentionally narrow)
+    if any(s in combined for s in [
         "sole source", "no-bid", "eminent domain", "tax increase",
-        "rate increase", "override", "veto", "bond issu"
-    ]
-    has_controversy = any(s in combined for s in high_controversy)
-    # Contract awards over $1M
-    has_contract_award = "contract award" in combined and has_large_fiscal
-
-    if has_controversy:
-        return "HIGH"
-    if has_contract_award:
-        return "HIGH"
-    if has_large_fiscal and any(s in combined for s in [
-        "appropriat", "contract", "bond", "capital", "construction",
-        "procurement", "award", "sole source"
+        "rate increase", "veto override"
     ]):
         return "HIGH"
 
-    # ── MEDIUM: policy changes, moderate procurement ──
-    med_signals = [
-        "ordinance", "amend", "interlocal", "change order",
-        "supplement", "new contract", "professional service"
-    ]
-    if any(s in combined for s in med_signals):
-        return "MEDIUM"
-    # Items with substantive watch points (not just boilerplate)
-    if watch.strip() and len(watch.strip()) > 100:
+    # MEDIUM — policy changes only
+    if any(s in combined for s in [
+        "ordinance", "interlocal agreement", "change order"
+    ]):
         return "MEDIUM"
 
-    # ── LOW: everything else (routine, consent agenda, reports, renewals) ──
+    # Everything else is LOW until AI analyzes it
     return "LOW"
 
 

@@ -345,6 +345,10 @@ MIGRATION_STATEMENTS = [
     # ── Agenda monitoring: track last scan fingerprint per meeting
     "ALTER TABLE meetings ADD COLUMN last_scan_at TEXT",
     "ALTER TABLE meetings ADD COLUMN item_count INTEGER",
+
+    # ── AI risk classification: stored from AI analysis output
+    "ALTER TABLE appearances ADD COLUMN ai_risk_level TEXT",
+    "ALTER TABLE appearances ADD COLUMN ai_risk_reason TEXT",
 ]
 
 # Meeting package status values

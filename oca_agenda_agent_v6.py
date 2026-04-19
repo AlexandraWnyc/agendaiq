@@ -634,6 +634,8 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                     input_hash=_hash,
                     tokens_in=_tokens_in, tokens_out=_tokens_out,
                     cached_tokens=_tokens_cached,
+                    ai_risk_level=(analysis_meta or {}).get("ai_risk_level", ""),
+                    ai_risk_reason=(analysis_meta or {}).get("ai_risk_reason", ""),
                 )
                 repo.update_matter_ai_fields(matter_id, part1_clean, watch)
 

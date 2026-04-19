@@ -52,6 +52,15 @@ Additional Notes: [1-3 short bullets if applicable, each starting with "- "]
 
 WATCH POINTS: [1-2 sentences: what should Commissioners pay attention to on this item?]
 
+RISK LEVEL: [Classify as exactly one of: HIGH / MEDIUM / LOW / CEREMONIAL]
+Apply these criteria:
+- HIGH: Sole source or no-bid procurement. Rejected bidders with sole-source fallback. Contracts extended 3+ times without re-bid. Non-compete clauses in public contracts. Eminent domain. Tax or rate increases. Veto overrides. Policy changes affecting countywide services. Complex technology implementations with countywide impact. Items with prior audit findings or IG investigations. Controversial vendor history. Items deferred multiple times.
+- MEDIUM: New ordinances or ordinance amendments with policy substance. Interlocal agreements. Change orders on existing contracts. New procurements following standard process. Zoning changes. Items with fiscal impact over $5M that followed proper process. Service changes affecting specific districts.
+- LOW: Contract renewals following standard terms. Standard resolutions. Consent agenda items with no policy change. Routine reports. Budget allocations within existing authority. Street namings. Appointment confirmations.
+- CEREMONIAL: Proclamations, recognitions, honorary resolutions, commendations, certificates, poster contests.
+
+RISK REASON: [One sentence explaining WHY this risk level. Example: "Sole-source contract extended for the 4th time without competitive rebid since 2019."]
+
 PART 2 - RESEARCH INTELLIGENCE
 
 RESEARCH CONTEXT:
@@ -334,10 +343,34 @@ class AgendaAnalyzer:
             part1 = full
             part2 = ""
 
+        # Extract AI risk classification from output and strip from display text
+        ai_risk_level = ""
+        ai_risk_reason = ""
+        for line in full.split("\n"):
+            line_upper = line.strip().upper()
+            if line_upper.startswith("RISK LEVEL:"):
+                val = line.split(":", 1)[1].strip().upper()
+                for lvl in ["HIGH", "MEDIUM", "LOW", "CEREMONIAL"]:
+                    if lvl in val:
+                        ai_risk_level = lvl
+                        break
+            elif line_upper.startswith("RISK REASON:"):
+                ai_risk_reason = line.split(":", 1)[1].strip()
+
+        # Remove RISK LEVEL and RISK REASON lines from part1 (metadata, not display)
+        part1_lines = part1.split("\n")
+        part1 = "\n".join(
+            l for l in part1_lines
+            if not l.strip().upper().startswith("RISK LEVEL:")
+            and not l.strip().upper().startswith("RISK REASON:")
+        ).strip()
+
         meta = {
             "input_hash":         input_hash,
             "model":              MODEL,
             "usage":              usage,
+            "ai_risk_level":      ai_risk_level,
+            "ai_risk_reason":     ai_risk_reason,
             **trim_meta,
         }
         return part1, part2, full, meta

@@ -382,7 +382,9 @@ def update_appearance_ai(appearance_id: int, part1: str, part2: str,
                           input_hash: str | None = None,
                           tokens_in: int | None = None,
                           tokens_out: int | None = None,
-                          cached_tokens: int | None = None):
+                          cached_tokens: int | None = None,
+                          ai_risk_level: str = "",
+                          ai_risk_reason: str = ""):
     """Save AI analysis results to an appearance row.
 
     If input_hash is provided, it is stored alongside the token counts so
@@ -404,11 +406,14 @@ def update_appearance_ai(appearance_id: int, part1: str, part2: str,
                    analysis_tokens_out         = ?,
                    analysis_cached_tokens      = ?,
                    analysis_at                 = ?,
+                   ai_risk_level               = ?,
+                   ai_risk_reason              = ?,
                    updated_at                  = ?
                    WHERE id = ?""",
                 (part1, watch_points, leg_summary, part2,
                  input_hash, tokens_in or 0, tokens_out or 0, cached_tokens or 0,
-                 ts, ts, appearance_id)
+                 ts, ai_risk_level or "", ai_risk_reason or "",
+                 ts, appearance_id)
             )
         else:
             conn.execute(
@@ -417,9 +422,13 @@ def update_appearance_ai(appearance_id: int, part1: str, part2: str,
                    watch_points_for_appearance = ?,
                    leg_history_summary         = ?,
                    finalized_brief             = ?,
+                   ai_risk_level               = ?,
+                   ai_risk_reason              = ?,
                    updated_at                  = ?
                    WHERE id = ?""",
-                (part1, watch_points, leg_summary, part2, ts, appearance_id)
+                (part1, watch_points, leg_summary, part2,
+                 ai_risk_level or "", ai_risk_reason or "",
+                 ts, appearance_id)
             )
 
 
