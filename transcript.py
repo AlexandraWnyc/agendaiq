@@ -194,9 +194,24 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
             log.info(f"  Found MP3: {best_match['mp3_url'][:80]}…")
             return best_match
 
-        # Log total MP3 links found on page for diagnostics
+        # Diagnostic: show rows that matched the DATE but failed name matching
         all_mp3 = [a["href"] for a in soup.find_all("a", href=True) if ".mp3" in a.get("href", "").lower()]
-        log.info(f"  No match on page ({len(all_mp3)} MP3 links found, none matched)")
+        date_matched_rows = []
+        for link in soup.find_all("a", href=True):
+            if ".mp3" not in link.get("href", "").lower():
+                continue
+            row = link.find_parent("tr")
+            if not row:
+                continue
+            row_text = row.get_text(" ", strip=True)
+            if any(dp.lower() in row_text.lower() for dp in date_patterns):
+                date_matched_rows.append(row_text[:120])
+        if date_matched_rows:
+            log.info(f"  Date-matched rows on page (name didn't match):")
+            for r in date_matched_rows[:5]:
+                log.info(f"    -> {r}")
+        else:
+            log.info(f"  No match on page ({len(all_mp3)} MP3 links, none had date {meeting_date})")
 
     log.info(f"  No MP3 found for '{committee_name}' {meeting_date}")
     return None
@@ -1269,26 +1284,20 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                 try: f.unlink(missing_ok=True)
                 except: pass
 
-    # ── Strategy 2: YouTube captions (fallback — may fail from cloud IPs)
-    if not transcript:
-        _emit(f"Trying YouTube for {body_name} {meeting_date}…",
+    # ── Strategy 2: YouTube captions (only if video_url manually provided)
+    # NOTE: YouTube is permanently blocked from Render cloud IPs (429 errors).
+    # We skip automatic YouTube search entirely to avoid wasting 3+ minutes
+    # per meeting on timeouts. Only use YouTube if a video URL was given.
+    if not transcript and video_url:
+        _emit(f"Trying provided YouTube URL…",
               phase="transcript", pct=30)
 
-        if video_url:
-            m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', video_url)
-            if m:
-                video_id = m.group(1)
-            else:
-                video_id = video_url.split("/")[-1]
-            video_title = f"(manually provided: {video_url})"
+        m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', video_url)
+        if m:
+            video_id = m.group(1)
         else:
-            candidates = search_youtube_videos(body_name, meeting_date)
-            if candidates:
-                best = candidates[0]
-                if best["match_score"] >= 0.4:
-                    video_id = best["video_id"]
-                    video_title = best["title"]
-                    final_url = best["url"]
+            video_id = video_url.split("/")[-1]
+        video_title = f"(manually provided: {video_url})"
 
         if video_id:
             _emit(f"Downloading YouTube captions…",
