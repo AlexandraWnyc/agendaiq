@@ -1149,7 +1149,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div><label style="margin-bottom:.2rem">Meeting</label>
       <select id="wf-f-meeting" onchange="loadWorkflow()" style="margin:0"><option value="">All Meetings</option></select></div>
     <div style="flex:1;min-width:140px"><label style="margin-bottom:.2rem">Search</label>
-      <input type="text" id="wf-f-search" placeholder="File #, title, BCC #…" oninput="loadWorkflow()" style="margin:0;font-size:.82rem"></div>
+      <input type="text" id="wf-f-search" placeholder="Search all fields…" oninput="loadWorkflow()" style="margin:0;font-size:.82rem"></div>
     <div style="margin-left:auto;display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap">
       <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="showReviewQueue()" title="Items awaiting your review">📋 My Review Queue</button>
       <button class="btn btn-o btn-sm" onclick="bulkAssign()">Bulk Assign</button>
@@ -1534,7 +1534,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:flex-end">
         <div style="flex:1;min-width:160px">
           <label style="margin-bottom:.2rem">Search title / file #</label>
-          <input type="text" id="md-f-q" placeholder="zoning, 251862…" oninput="renderItemsGrid()" style="margin:0">
+          <input type="text" id="md-f-q" placeholder="Search all fields…" oninput="renderItemsGrid()" style="margin:0">
         </div>
         <div><label style="margin-bottom:.2rem">Leg Status</label>
           <select id="md-f-legstatus" onchange="renderItemsGrid()" style="margin:0"><option value="">Any</option></select></div>
@@ -2261,12 +2261,15 @@ async function loadWorkflow() {
     d=d.filter(a=>a.meeting_date===fdt&&a.body_name===fbn);
   }
 
-  // Client-side search filter
+  // Client-side keyword search — searches across all meaningful fields
   const q=(document.getElementById('wf-f-search').value||'').toLowerCase().trim();
   if(q){
     d=d.filter(a=>{
       const hay=[a.file_number,a.short_title,a.appearance_title,a.bcc_item_number,
-        a.committee_item_number,a.raw_agenda_item_number,a.assigned_to,a.sponsor,a.body_name].join(' ').toLowerCase();
+        a.committee_item_number,a.raw_agenda_item_number,a.assigned_to,a.sponsor,a.body_name,
+        a.ai_summary_for_appearance,a.analyst_working_notes,a.reviewer_notes,
+        a.watch_points_for_appearance,a.current_status,a.file_type,a.workflow_status,
+        a.reviewer,a.agenda_stage].join(' ').toLowerCase();
       return hay.includes(q);
     });
   }
@@ -5218,7 +5221,7 @@ function filterMeetingsTable() {
 }
 
 async function deleteMeeting(meetingId, label, btn) {
-  if (!confirm(`Delete "${label}" and ALL its items?\\n\\nThis cannot be undone.`)) return;
+  if (!confirm(`Delete "${label}" and ALL its items, chat history, and workflow data?\\n\\nThis cannot be undone.`)) return;
   const prev = btn.textContent;
   btn.disabled = true; btn.textContent = '…';
   try {
@@ -5228,7 +5231,7 @@ async function deleteMeeting(meetingId, label, btn) {
       toast(`Deleted meeting — ${d.appearances_removed} items removed`, 'ok');
       loadMeetings();
     } else {
-      toast(`Error: ${d.error}`, 'err');
+      toast(`Error: ${d.error || r.status}`, 'err');
       btn.disabled = false; btn.textContent = prev;
     }
   } catch(e) {
@@ -5472,13 +5475,15 @@ function _renderItemsGrid() {
   const isBCC = bodyLower.includes('bcc') || bodyLower.includes('board of county');
 
   let filtered = _mdItems.filter(it => {
-    if (q && !((it.file_number||'').toLowerCase().includes(q) ||
-               (it.short_title||it.appearance_title||'').toLowerCase().includes(q) ||
-               (it.bcc_item_number||'').toLowerCase().includes(q) ||
-               (it.committee_item_number||'').toLowerCase().includes(q) ||
-               (it.raw_agenda_item_number||'').toLowerCase().includes(q) ||
-               (it.sponsor||'').toLowerCase().includes(q) ||
-               (it.assigned_to||'').toLowerCase().includes(q))) return false;
+    if (q) {
+      const hay = [it.file_number, it.short_title, it.appearance_title,
+        it.bcc_item_number, it.committee_item_number, it.raw_agenda_item_number,
+        it.sponsor, it.assigned_to, it.reviewer, it.current_status, it.file_type,
+        it.ai_summary_for_appearance, it.analyst_working_notes, it.reviewer_notes,
+        it.watch_points_for_appearance, it.workflow_status, it.agenda_stage
+      ].join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
     if (ls && it.current_status !== ls) return false;
     if (ft && it.file_type !== ft) return false;
     if (sp && it.sponsor !== sp) return false;
@@ -6685,21 +6690,59 @@ def api_fix_meeting_dates():
 
 @app.route("/api/meetings/<int:meeting_id>", methods=["DELETE"])
 def api_delete_meeting(meeting_id):
-    """Delete a phantom/duplicate meeting and all its appearances."""
+    """Delete a meeting and all its appearances, cleaning up all FK dependencies."""
     import db as _db
-    with _db.get_db() as conn:
-        # Count appearances that will be removed
-        app_count = conn.execute(
-            "SELECT COUNT(*) FROM appearances WHERE meeting_id=?", (meeting_id,)
-        ).fetchone()[0]
-        # Remove related data
-        conn.execute("DELETE FROM workflow_history WHERE appearance_id IN "
-                     "(SELECT id FROM appearances WHERE meeting_id=?)", (meeting_id,))
-        conn.execute("DELETE FROM appearances WHERE meeting_id=?", (meeting_id,))
-        conn.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
-        deleted = conn.execute("SELECT changes()").fetchone()[0]
-    return jsonify({"ok": True, "meeting_deleted": deleted > 0,
-                    "appearances_removed": app_count})
+    try:
+        with _db.get_db() as conn:
+            # Get appearance IDs for this meeting
+            app_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM appearances WHERE meeting_id=?", (meeting_id,)
+            ).fetchall()]
+            app_count = len(app_ids)
+
+            if app_ids:
+                placeholders = ",".join("?" * len(app_ids))
+                # Clean up ALL FK dependencies on these appearances
+                for tbl in ["workflow_history", "chat_messages"]:
+                    try:
+                        conn.execute(
+                            f"DELETE FROM {tbl} WHERE appearance_id IN ({placeholders})",
+                            app_ids)
+                    except Exception:
+                        pass
+                # Clean up artifacts referencing these appearances or this meeting
+                try:
+                    conn.execute(
+                        f"DELETE FROM artifacts WHERE appearance_id IN ({placeholders})",
+                        app_ids)
+                except Exception:
+                    pass
+                # Clear prior_appearance_id references from other appearances
+                try:
+                    conn.execute(
+                        f"UPDATE appearances SET prior_appearance_id=NULL "
+                        f"WHERE prior_appearance_id IN ({placeholders})",
+                        app_ids)
+                except Exception:
+                    pass
+                # Delete the appearances themselves
+                conn.execute(
+                    f"DELETE FROM appearances WHERE id IN ({placeholders})",
+                    app_ids)
+
+            # Clean up artifacts referencing this meeting directly
+            try:
+                conn.execute("DELETE FROM artifacts WHERE meeting_id=?", (meeting_id,))
+            except Exception:
+                pass
+            # Delete the meeting
+            conn.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
+            deleted = conn.execute("SELECT changes()").fetchone()[0]
+
+        return jsonify({"ok": True, "meeting_deleted": deleted > 0,
+                        "appearances_removed": app_count})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/appearance/<int:app_id>/notes", methods=["POST"])
@@ -7733,7 +7776,7 @@ def api_workflow():
                 JOIN meetings mt ON mt.id=a.meeting_id
                 WHERE {' AND '.join(where)}
                 ORDER BY mt.meeting_date DESC, a.id DESC
-                LIMIT 200""",
+                LIMIT 500""",
             params
         ).fetchall()
 

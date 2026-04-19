@@ -253,14 +253,22 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                             from repository import _normalize_date as _nd
                             if ev_date == _nd(adate):
                                 continue
-                            # Skip if we already have an appearance at that meeting
+                            # Skip if we already have an appearance for this
+                            # matter at a committee meeting on/near this date.
+                            # Use fuzzy body match (LIKE) since lifecycle names
+                            # may differ from Legistar committee names.
                             try:
                                 from db import get_db as _gdb
                                 from repository import _date_variants
                                 _ev_variants = _date_variants(ev_date)
+                                # Extract a keyword from the body name for fuzzy match
+                                # e.g. "Infrastructure" from "Infrastructure, Operations..."
+                                _body_kw = ev_body.split(",")[0].split(" and ")[0].strip()
+                                _body_kw = _body_kw.replace("County ", "").strip()
                                 with _gdb() as _c:
                                     existing = None
                                     for _dv in _ev_variants:
+                                        # Try exact match first
                                         existing = _c.execute(
                                             """SELECT a.id FROM appearances a
                                                JOIN meetings m ON m.id=a.meeting_id
@@ -270,14 +278,49 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                                         ).fetchone()
                                         if existing:
                                             break
+                                        # Fuzzy: body name contains the keyword
+                                        if _body_kw and len(_body_kw) > 4:
+                                            existing = _c.execute(
+                                                """SELECT a.id FROM appearances a
+                                                   JOIN meetings m ON m.id=a.meeting_id
+                                                   WHERE a.matter_id=? AND m.meeting_date=?
+                                                     AND LOWER(m.body_name) LIKE ?""",
+                                                (matter_id, _dv,
+                                                 f"%{_body_kw.lower()}%")
+                                            ).fetchone()
+                                            if existing:
+                                                break
                                 if existing:
                                     continue
                             except Exception:
                                 pass
                             try:
-                                stub_mtg_id = repo.get_or_create_meeting(
-                                    ev_body, ev_date, meeting_type="committee"
-                                )
+                                # Before creating a new meeting for the stub,
+                                # check if a meeting with a similar body name
+                                # already exists on this date (avoids phantom
+                                # duplicates from body name mismatches between
+                                # lifecycle parser and Legistar committee names).
+                                from db import get_db as _gdb2
+                                _stub_body_kw = ev_body.split(",")[0].split(" and ")[0].strip()
+                                _stub_body_kw = _stub_body_kw.replace("County ", "").strip()
+                                _found_mtg = None
+                                if _stub_body_kw and len(_stub_body_kw) > 4:
+                                    for _sdv in _date_variants(ev_date):
+                                        with _gdb2() as _sc:
+                                            _found_mtg = _sc.execute(
+                                                """SELECT id, body_name FROM meetings
+                                                   WHERE meeting_date=?
+                                                     AND LOWER(body_name) LIKE ?""",
+                                                (_sdv, f"%{_stub_body_kw.lower()}%")
+                                            ).fetchone()
+                                        if _found_mtg:
+                                            break
+                                if _found_mtg:
+                                    stub_mtg_id = _found_mtg["id"]
+                                else:
+                                    stub_mtg_id = repo.get_or_create_meeting(
+                                        ev_body, ev_date, meeting_type="committee"
+                                    )
                                 ag_item = ev.get("agenda_item", "") or ""
                                 stub_fields = {
                                     "agenda_stage": "committee",
