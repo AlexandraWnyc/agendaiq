@@ -189,7 +189,7 @@ def search_granicus_mp3(committee_name: str, meeting_date: str,
 
             # Check committee name match
             name_score = _committee_match_score(committee_name, row_text)
-            if name_score < 0.20:
+            if name_score < 0.50:
                 continue
 
             log.info(f"  Match: score={name_score:.2f} date_diff={date_diff}d '{row_text[:100]}'")
