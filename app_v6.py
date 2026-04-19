@@ -1464,19 +1464,27 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <span id="mtg-count" style="font-size:.75rem;color:var(--gray-400)"></span>
       <div style="margin-left:auto;display:flex;gap:.5rem;align-items:center">
         <span id="bf-msg" style="font-size:.72rem;color:#64748b"></span>
-        <button class="btn btn-o btn-sm" id="bf-btn" onclick="runBackfill(true)"
-          title="Re-hit Legistar for every matter with a missing Item PDF / Legistar link and rebuild lifecycle timelines from legislative history">
-          ⟳ Fill missing links + lifecycle
-        </button>
-        <button class="btn btn-o btn-sm" onclick="runBackfill(false)"
-          title="Re-process EVERY matter in the DB (slower)">
-          ⟳ Full refresh
-        </button>
-        <button class="btn btn-o btn-sm" id="bulk-tx-btn" onclick="runBulkTranscriptBackfill()"
-          title="Search for recordings for all saved meetings and backfill transcript discussion summaries"
-          style="border-color:#7c3aed;color:#7c3aed">
-          🎙 Backfill All Transcripts
-        </button>
+        <div style="position:relative;display:inline-block">
+          <button class="btn btn-o btn-sm" id="bf-btn" onclick="document.getElementById('mtg-process-menu').classList.toggle('show');this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'block':'none'"
+            title="Run data processing operations across all meetings">
+            ⚙ Process All ▾
+          </button>
+          <div id="mtg-process-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:320px;padding:.4rem 0">
+            <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Bulk Data Operations</div>
+            <button onclick="runBackfill(true);this.closest('[id]').style.display='none'"
+              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+              ⟳ Fill Missing Data — Fetch URLs and lifecycle for items missing them
+            </button>
+            <button onclick="runBackfill(false);this.closest('[id]').style.display='none'"
+              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+              ⟳ Full Refresh — Re-process every item in the database (slower)
+            </button>
+            <button id="bulk-tx-btn" onclick="runBulkTranscriptBackfill();this.closest('[id]').style.display='none'"
+              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+              🎙 Fetch All Transcripts — Find recordings and generate discussion summaries
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <div style="padding:.5rem .75rem;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap;border-bottom:1px solid var(--border)">
@@ -1528,26 +1536,35 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
   <div class="card" style="margin-bottom:1.1rem">
     <div class="ch">
       <div class="ch-left"><div class="cicon">⬇</div>Exports</div>
-      <div style="display:flex;gap:.4rem">
-        <button class="btn btn-o btn-sm" id="md-regen-btn" onclick="regenDraft()">↻ Regenerate Draft</button>
-        <button class="btn btn-s btn-sm" id="md-final-btn" onclick="genFinal()" disabled>✓ Generate Final Export</button>
-        <button class="btn btn-o btn-sm" id="md-transcript-btn" onclick="backfillTranscript()"
-          title="Search for this meeting's recording and add per-item discussion summaries to notes">
-          🎙 Backfill Transcript
-        </button>
-        <button class="btn btn-o btn-sm" id="md-urls-btn" onclick="backfillMeetingUrls()"
-          title="Fetch Legistar URLs and lifecycle history for all items in this meeting">
-          🔗 Backfill URLs + Lifecycle
-        </button>
-        <button class="btn btn-o btn-sm" id="md-reanalyze-btn" onclick="reanalyzeMeetingItems()"
-          title="Re-run AI analysis on all items in this meeting">
-          🤖 Re-analyze All Items
-        </button>
+      <div style="display:flex;gap:.4rem;align-items:center">
         <button class="btn btn-p btn-sm" onclick="openMeetingPrep(currentMeetingId)"
           style="background:#059669;border-color:#059669;font-weight:700"
-          title="Open the Meeting Prep view — comprehensive table for Director briefing">
+          title="Open the Meeting Prep view for Director briefing">
           📊 Meeting Prep
         </button>
+        <button class="btn btn-s btn-sm" id="md-final-btn" onclick="genFinal()" disabled>✓ Generate Final Export</button>
+        <button class="btn btn-o btn-sm" id="md-regen-btn" onclick="regenDraft()">↻ Regenerate Draft</button>
+        <div style="position:relative;display:inline-block" id="md-process-wrap">
+          <button class="btn btn-o btn-sm" onclick="document.getElementById('md-process-menu').classList.toggle('show')"
+            title="Run data processing operations on this meeting">
+            ⚙ Process ▾
+          </button>
+          <div id="md-process-menu" class="dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:280px;padding:.4rem 0">
+            <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Data Operations</div>
+            <button class="dropdown-item" onclick="backfillMeetingUrls();document.getElementById('md-process-menu').style.display='none'" id="md-urls-btn"
+              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+              🔗 Fetch URLs & Lifecycle — Pull Legistar links and legislative history for all items
+            </button>
+            <button class="dropdown-item" onclick="backfillTranscript();document.getElementById('md-process-menu').style.display='none'" id="md-transcript-btn"
+              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+              🎙 Fetch Transcripts — Find recordings and generate per-item discussion summaries
+            </button>
+            <button class="dropdown-item" onclick="reanalyzeMeetingItems();document.getElementById('md-process-menu').style.display='none'" id="md-reanalyze-btn"
+              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+              🤖 Re-analyze All Items — Re-run AI analysis using latest data
+            </button>
+          </div>
+        </div>
       </div>
     </div>
     <div id="md-operation-progress" style="display:none;margin:0 1rem .5rem;padding:.5rem .75rem;border-radius:.5rem;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem"></div>
@@ -1721,6 +1738,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
         <div id="mp-stats" style="display:flex;gap:1.5rem;flex:1"></div>
         <div style="display:flex;gap:.4rem;align-items:center">
+          <button class="btn btn-o btn-sm" onclick="autoAssignMeeting()" title="AI distributes items fairly across team based on complexity, fiscal impact, and workload">🎯 Auto-Assign</button>
           <button class="btn btn-o btn-sm" onclick="exportMeetingPrepExcel()">📋 Export Excel</button>
           <button class="btn btn-p btn-sm" id="mp-compile-btn" onclick="compileFinalAnalysis()"
             style="background:#059669;border-color:#059669">✨ Compile Final Analysis</button>
@@ -1734,11 +1752,21 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <div style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">
         <span style="font-size:.72rem;font-weight:600;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Filter:</span>
         <button class="btn btn-o btn-xs mp-filter on" data-filter="all" onclick="mpFilter(this,'all')">All</button>
-        <button class="btn btn-o btn-xs mp-filter" data-filter="watch" onclick="mpFilter(this,'watch')">👁️ Watch</button>
-        <button class="btn btn-o btn-xs mp-filter" data-filter="HIGH" onclick="mpFilter(this,'HIGH')">🔴 High Risk</button>
-        <button class="btn btn-o btn-xs mp-filter" data-filter="fiscal" onclick="mpFilter(this,'fiscal')">💰 Fiscal</button>
-        <button class="btn btn-o btn-xs mp-filter" data-filter="pending" onclick="mpFilter(this,'pending')">⏳ Pending</button>
-        <div style="margin-left:auto">
+        <button class="btn btn-o btn-xs mp-filter" data-filter="HIGH" onclick="mpFilter(this,'HIGH')" title="Sole source, no-bid, eminent domain, tax increases, large contracts over $1M, bond issuances">🔴 High Risk</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="MEDIUM" onclick="mpFilter(this,'MEDIUM')" title="Ordinance amendments, interlocal agreements, change orders, moderate procurement">🟡 Policy</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="LOW" onclick="mpFilter(this,'LOW')" title="Routine: renewals, standard resolutions, consent agenda, reports">⚪ Routine</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="INFO" onclick="mpFilter(this,'INFO')" title="Ceremonial: proclamations, recognitions, honorary resolutions">ℹ️ Ceremonial</button>
+        <button class="btn btn-o btn-xs mp-filter" data-filter="pending" onclick="mpFilter(this,'pending')" title="Items not yet analyzed or assigned">⏳ Pending</button>
+        <span style="margin-left:.6rem;border-left:1px solid var(--gray-200);padding-left:.6rem">
+          <select id="mp-analyst-filter" onchange="mpFilterByAnalyst(this.value)"
+            style="font-size:.76rem;padding:.25rem .5rem;border:1px solid var(--gray-200);border-radius:5px;outline:none;min-width:120px">
+            <option value="">All Analysts</option>
+          </select>
+        </span>
+        <div style="margin-left:auto;display:flex;gap:.4rem;align-items:center">
+          <button class="btn btn-o btn-xs" onclick="downloadFilteredView()" title="Download all items in the current filtered view as a single Excel file">
+            ⬇ Download View
+          </button>
           <input type="text" id="mp-search" placeholder="Search items… (title, item #, file #)"
             oninput="mpSearchItems()"
             style="padding:.35rem .7rem;border:1px solid var(--gray-200);border-radius:6px;font-size:.78rem;width:240px;outline:none">
@@ -2591,21 +2619,191 @@ function drTab(tab, el) {
   if(tab==='lifecycle')   renderDrawerLifecycle(body,appData,matter);
 }
 
+function _parseDebriefSections(text) {
+  // Parse synthesized debrief into structured sections from the SOP format
+  // Looks for: ITEM, Sponsor, 1-sentence summary/Summary/What this does, District(s),
+  //            Purpose and Background/Key Facts, Fiscal Impact/Money,
+  //            Additional Notes, WATCH POINTS/Questions
+  if (!text || !text.trim()) return null;
+
+  const sections = {};
+  // Normalize bullet chars
+  const lines = text.replace(/\u2022/g, '•').split('\n');
+
+  let currentKey = null;
+  let currentLines = [];
+
+  const headerMap = {
+    'item': 'item',
+    'sponsor': 'sponsor',
+    '1-sentence summary': 'summary',
+    'summary': 'summary',
+    'what this does': 'summary',
+    'district': 'district',
+    'purpose and background': 'background',
+    'key facts': 'background',
+    'fiscal impact': 'fiscal',
+    'money': 'fiscal',
+    'additional notes': 'notes',
+    'watch points': 'watch',
+    'questions for department': 'watch',
+    'what to ask': 'watch',
+    'legislative history': 'leghistory',
+  };
+
+  function flushSection() {
+    if (currentKey && currentLines.length) {
+      sections[currentKey] = currentLines.join('\n').trim();
+    }
+  }
+
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    // Check if this line is a section header: "• HEADER:" or "• HEADER –"
+    const headerMatch = line.match(/^•?\s*(.+?)(?::\s*$|:\s+|–\s*)/i);
+    if (headerMatch) {
+      const candidate = headerMatch[1].replace(/^•\s*/, '').trim().toLowerCase();
+      let matched = null;
+      for (const [pattern, key] of Object.entries(headerMap)) {
+        if (candidate.startsWith(pattern) || candidate.includes(pattern)) {
+          matched = key;
+          break;
+        }
+      }
+      if (matched) {
+        flushSection();
+        currentKey = matched;
+        // Grab inline content after the header
+        const afterHeader = line.replace(/^•?\s*.+?(?::\s*|–\s*)/, '').trim();
+        currentLines = afterHeader ? [afterHeader] : [];
+        continue;
+      }
+    }
+    // Continuation of current section
+    if (currentKey) {
+      currentLines.push(line);
+    }
+  }
+  flushSection();
+
+  return Object.keys(sections).length > 0 ? sections : null;
+}
+
+function _renderBullets(text) {
+  // Convert bullet text into styled HTML
+  if (!text) return '';
+  return esc(text).split('\n').map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return '';
+    // Sub-bullet (indented)
+    if (trimmed.match(/^\s*•\s/) || line.startsWith('  ')) {
+      const content = trimmed.replace(/^•\s*/, '');
+      // Check for label pattern "Label: content"
+      const labelMatch = content.match(/^([A-Z][^:]{2,30}):\s+(.+)/);
+      if (labelMatch) {
+        return '<div style="padding:.2rem 0 .2rem 1rem;font-size:.82rem;line-height:1.5"><strong style="color:#334155">' +
+          labelMatch[1] + ':</strong> ' + labelMatch[2] + '</div>';
+      }
+      return '<div style="padding:.2rem 0 .2rem 1rem;font-size:.82rem;line-height:1.5">• ' + content + '</div>';
+    }
+    // Top-level line
+    const content = trimmed.replace(/^•\s*/, '');
+    return '<div style="padding:.2rem 0;font-size:.82rem;line-height:1.5">' + content + '</div>';
+  }).join('');
+}
+
 function renderDrawerOverview(body, matter, app, saveBtn) {
   const ai = app?.ai_summary_for_appearance || matter?.latest_ai_summary_part1 || '';
   const wp = app?.watch_points_for_appearance || matter?.latest_watch_points || '';
-  // Sort all appearances chronologically (newest first)
   const allApps = (matter?.appearances||[]).slice().sort((a,b) =>
     (b.meeting_date||'').localeCompare(a.meeting_date||'')
   );
 
-  body.innerHTML = `
+  // Try to parse structured sections from synthesis
+  const parsed = _parseDebriefSections(ai);
+
+  let debriefHTML = '';
+  if (parsed) {
+    // ── Structured debrief display ──
+    // Header card with item title + sponsor + summary
+    const itemTitle = parsed.item || app?.appearance_title || matter?.matter_name || '';
+    const sponsor = parsed.sponsor || '';
+    const summary = parsed.summary || '';
+    const district = parsed.district || '';
+
+    debriefHTML += `
+      <div class="ds" style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe);border:1px solid #bae6fd;border-radius:8px;padding:1rem">
+        <div style="font-size:.92rem;font-weight:700;color:#0c4a6e;margin-bottom:.4rem">${esc(itemTitle)}</div>
+        ${sponsor ? '<div style="font-size:.78rem;color:#475569;margin-bottom:.25rem"><strong>Sponsor:</strong> ' + esc(sponsor) + '</div>' : ''}
+        ${district ? '<div style="font-size:.78rem;color:#475569;margin-bottom:.4rem"><strong>District:</strong> ' + esc(district) + '</div>' : ''}
+        ${summary ? '<div style="font-size:.84rem;color:#1e293b;line-height:1.5;padding:.5rem .6rem;background:#fff;border-radius:6px;border-left:3px solid #0ea5e9">' + esc(summary) + '</div>' : ''}
+      </div>`;
+
+    // Purpose and Background
+    if (parsed.background) {
+      debriefHTML += `
+      <div class="ds" style="border-radius:8px">
+        <div class="ds-title" style="color:#0f766e"><span>PURPOSE & BACKGROUND</span>
+          <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-bg')">Edit</button></div>
+        <div class="editable-field" id="edit-bg" contenteditable="false">${_renderBullets(parsed.background)}</div>
+      </div>`;
+    }
+
+    // Fiscal Impact
+    if (parsed.fiscal) {
+      debriefHTML += `
+      <div class="ds" style="border-radius:8px;border-left:3px solid #f59e0b">
+        <div class="ds-title" style="color:#b45309"><span>FISCAL IMPACT</span>
+          <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-fi')">Edit</button></div>
+        <div class="editable-field" id="edit-fi" contenteditable="false">${_renderBullets(parsed.fiscal)}</div>
+      </div>`;
+    }
+
+    // Additional Notes
+    if (parsed.notes && !parsed.notes.toLowerCase().includes('none beyond above')) {
+      debriefHTML += `
+      <div class="ds" style="border-radius:8px">
+        <div class="ds-title"><span>ADDITIONAL NOTES</span>
+          <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-an')">Edit</button></div>
+        <div class="editable-field" id="edit-an" contenteditable="false">${_renderBullets(parsed.notes)}</div>
+      </div>`;
+    }
+
+    // Watch Points / Questions for Department
+    if (parsed.watch || wp) {
+      const watchContent = parsed.watch || wp;
+      debriefHTML += `
+      <div class="ds" style="border-radius:8px;background:#fefce8;border:1px solid #fde68a">
+        <div class="ds-title" style="color:#92400e"><span>WATCH POINTS</span>
+          <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-wp')">Edit</button></div>
+        <div class="editable-field" id="edit-wp" contenteditable="false">${_renderBullets(watchContent)}</div>
+      </div>`;
+    }
+
+    // Legislative History (AI)
+    if (parsed.leghistory || app?.leg_history_summary) {
+      const legContent = parsed.leghistory || app.leg_history_summary;
+      debriefHTML += `
+      <div class="ds" style="border-radius:8px">
+        <div class="ds-title"><span>LEGISLATIVE HISTORY</span></div>
+        <div style="font-size:.82rem;line-height:1.55;color:#475569">${esc(legContent)}</div>
+      </div>`;
+    }
+
+    // Hidden raw fields for save functionality — keeps the original text editable
+    debriefHTML += `<input type="hidden" id="raw-ai-text" value="${esc(ai).replace(/"/g,'&quot;')}">`;
+
+  } else {
+    // ── Fallback: unparsed raw text (pre-synthesis or manual notes) ──
+    debriefHTML += `
     <div class="ds">
       <div class="ds-title">
         <span>AGENDA DEBRIEF</span>
         <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-ai')">Edit</button>
       </div>
-      <div class="editable-field" id="edit-ai" contenteditable="false">${esc(ai)||'<span style="color:var(--gray-400)">No debrief yet. Run AI analysis or write one manually.</span>'}</div>
+      <div class="editable-field" id="edit-ai" contenteditable="false">${esc(ai)||'<span style="color:var(--gray-400)">No debrief yet. Click Synthesize below or run AI analysis.</span>'}</div>
     </div>
     <div class="ds">
       <div class="ds-title">
@@ -2613,40 +2811,46 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
         <button class="btn btn-o btn-xs" onclick="toggleEdit('edit-wp')">Edit</button>
       </div>
       <div class="editable-field" id="edit-wp" contenteditable="false">${esc(wp)||'<span style="color:var(--gray-400)">None.</span>'}</div>
-    </div>
-    ${app?.leg_history_summary ? `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
-      <div class="editable-field" style="cursor:default;font-size:.82rem;line-height:1.55">${esc(app.leg_history_summary)}</div></div>` : ''}
+    </div>`;
+
+    if (app?.leg_history_summary) {
+      debriefHTML += `<div class="ds"><div class="ds-title">LEGISLATIVE HISTORY (AI Summary)</div>
+        <div style="font-size:.82rem;line-height:1.55;color:#475569">${esc(app.leg_history_summary)}</div></div>`;
+    }
+  }
+
+  body.innerHTML = `
+    ${debriefHTML}
     ${renderItemEvolution(allApps, app)}
-    <div class="ds" id="debrief-backfill-section">
-      <div class="ds-title">BACKFILL</div>
+    <div class="ds" id="debrief-backfill-section" style="border-radius:8px;background:#f8fafc">
+      <div class="ds-title"><span>DATA & ANALYSIS</span></div>
       <div style="font-size:.74rem;color:var(--gray-400);margin-bottom:.5rem">
-        Fetch missing data for this item — URLs, lifecycle history, transcripts, and AI analysis.
+        Fetch missing data or re-run analysis for this item.
       </div>
       <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('urls')" id="bf-urls-btn">
-          🔗 Backfill URLs + Lifecycle
+        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('all')" id="bf-all-btn"
+          title="Fetch URLs, lifecycle history, transcripts, then run AI analysis">
+          ⚡ Process Item
         </button>
-        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('transcript')" id="bf-tx-btn">
-          🎙 Backfill Transcript
-        </button>
-        <button class="btn btn-s btn-sm" onclick="reanalyzeAppearance()" id="bf-ai-btn">
-          🤖 Re-run AI Analysis
-        </button>
-        <button class="btn btn-s btn-sm" onclick="reanalyzeAllAppearances()" id="bf-ai-all-btn">
-          🤖 Re-analyze ALL Appearances
-        </button>
-        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('all')" id="bf-all-btn">
-          ⚡ Backfill Everything
+        <button class="btn btn-s btn-sm" onclick="reanalyzeAppearance()" id="bf-ai-btn"
+          title="Re-run AI analysis on this item using latest data">
+          🤖 Re-analyze
         </button>
       </div>
+      <details style="margin-top:.4rem">
+        <summary style="font-size:.72rem;color:var(--gray-400);cursor:pointer">More options</summary>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem">
+          <button class="btn btn-s btn-sm" onclick="runBackfillForItem('urls')" id="bf-urls-btn">🔗 Backfill URLs</button>
+          <button class="btn btn-s btn-sm" onclick="runBackfillForItem('transcript')" id="bf-tx-btn">🎙 Backfill Transcript</button>
+          <button class="btn btn-s btn-sm" onclick="reanalyzeAllAppearances()" id="bf-ai-all-btn">🤖 Re-analyze All Appearances</button>
+        </div>
+      </details>
       <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
     </div>
-    <div class="ds" style="border:2px solid #6d28d9;background:#faf5ff">
-      <div class="ds-title" style="color:#6d28d9">
-        <span>SYNTHESIZE DEBRIEF</span>
-      </div>
+    <div class="ds" style="border:2px solid #6d28d9;background:#faf5ff;border-radius:8px">
+      <div class="ds-title" style="color:#6d28d9"><span>SYNTHESIZE DEBRIEF</span></div>
       <div style="font-size:.74rem;color:var(--gray-500);margin-bottom:.5rem">
-        Gather ALL research (AI analysis, analyst notes, reviewer notes, transcript, chat insights, legislative history, PDF text) and synthesize into one comprehensive debrief. This replaces the current Agenda Debrief and Watch Points above.
+        Gather all research sources and produce the final structured debrief.
       </div>
       <div style="display:flex;gap:.5rem;align-items:center">
         <button class="btn btn-sm" style="background:#6d28d9;color:#fff;border:none;font-weight:600"
@@ -6043,6 +6247,13 @@ document.addEventListener('click', e => {
     _notifOpen = false;
     panel.style.display = 'none';
   }
+  // Close process dropdown menus on outside click
+  ['md-process-menu','mtg-process-menu'].forEach(id => {
+    const m = document.getElementById(id);
+    if (m && m.style.display !== 'none' && !m.contains(e.target) && !m.previousElementSibling?.contains(e.target)) {
+      m.style.display = 'none';
+    }
+  });
 });
 
 async function loadNotifications() {
@@ -6205,6 +6416,7 @@ let mpSortCol = 'position';
 let mpSortAsc = true;
 let mpExpandedId = null;   // Currently expanded item ID
 let mpCurrentFilter = 'all';
+let mpAnalystFilter = '';
 
 function openMeetingPrep(meetingId) {
   if (!meetingId) return;
@@ -6230,6 +6442,14 @@ async function loadMeetingPrep(meetingId) {
     document.querySelectorAll('.mp-filter').forEach(b => b.classList.remove('on'));
     document.querySelector('.mp-filter[data-filter="all"]').classList.add('on');
     document.getElementById('mp-search').value = '';
+
+    // Populate analyst filter dropdown
+    const analysts = [...new Set(mpData.items.map(i=>i.assigned_to).filter(Boolean))].sort();
+    const analystSel = document.getElementById('mp-analyst-filter');
+    if (analystSel) {
+      analystSel.innerHTML = '<option value="">All Analysts</option>' +
+        analysts.map(a => `<option value="${esc(a)}">${esc(a)}</option>`).join('');
+    }
 
     renderMeetingPrepHeader();
     renderMeetingPrepTable();
@@ -6282,23 +6502,50 @@ function mpSearchItems() {
   renderMeetingPrepTable();
 }
 
+function mpFilterByAnalyst(analyst) {
+  mpAnalystFilter = analyst;
+  mpExpandedId = null;
+  renderMeetingPrepTable();
+}
+
+async function downloadFilteredView() {
+  // Download all items in current filtered view as Excel
+  const items = getFilteredItems();
+  if (!items.length) { alert('No items in current view to download.'); return; }
+  const ids = items.map(i => i.appearance_id || i.id);
+  try {
+    const r = await fetch(`/api/meeting-prep/${currentMeetingId}/export-filtered`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({appearance_ids: ids, filter_label: mpCurrentFilter + (mpAnalystFilter ? ' / ' + mpAnalystFilter : '')})
+    });
+    if (!r.ok) throw new Error('Export failed');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `meeting_prep_${mpCurrentFilter || 'all'}${mpAnalystFilter ? '_' + mpAnalystFilter : ''}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert('Export failed: ' + e.message);
+  }
+}
+
 function getFilteredItems() {
   let items = [...mpData.items];
   const search = (document.getElementById('mp-search').value || '').trim().toLowerCase();
 
-  // Apply filter
-  if (mpCurrentFilter === 'watch') {
-    items = items.filter(i => (i.sources && i.sources.watch_points));
-  } else if (mpCurrentFilter === 'HIGH') {
-    items = items.filter(i => i.risk_level === 'HIGH');
-  } else if (mpCurrentFilter === 'fiscal') {
-    const fiscalRe = /\$|million|billion|fiscal|budget|fund|appropriat/i;
-    items = items.filter(i => {
-      const text = (i.ai_summary_for_appearance||'') + (i.appearance_title||'') + (i.watch_points_for_appearance||'');
-      return fiscalRe.test(text);
-    });
+  // Apply risk filter
+  if (mpCurrentFilter === 'HIGH' || mpCurrentFilter === 'MEDIUM' || mpCurrentFilter === 'LOW' || mpCurrentFilter === 'INFO') {
+    items = items.filter(i => i.risk_level === mpCurrentFilter);
   } else if (mpCurrentFilter === 'pending') {
     items = items.filter(i => !i.sources || !i.sources.ai_debrief);
+  }
+
+  // Apply analyst filter
+  if (mpAnalystFilter) {
+    items = items.filter(i => (i.assigned_to || '') === mpAnalystFilter);
   }
 
   // Apply search — search across multiple fields including BCC numbers
@@ -6597,6 +6844,33 @@ async function compileFinalAnalysis() {
     }
   } catch(e) {
     statusEl.textContent = '❌ Error: ' + e.message;
+  }
+}
+
+async function autoAssignMeeting() {
+  // Get the list of team members from current assignment data
+  const analysts = [...new Set(mpData.items.map(i=>i.assigned_to).filter(Boolean))];
+  if (!analysts.length) {
+    const name = prompt('No analysts assigned yet. Enter comma-separated analyst names for auto-assignment:');
+    if (!name) return;
+    name.split(',').map(n=>n.trim()).filter(Boolean).forEach(n=>analysts.push(n));
+    if (!analysts.length) return;
+  }
+  const confirmMsg = `Auto-assign ${mpData.items.filter(i=>!i.assigned_to).length} unassigned items across ${analysts.length} analyst(s): ${analysts.join(', ')}?\\n\\nItems already assigned will not be changed. The AI will distribute by complexity and workload.`;
+  if (!confirm(confirmMsg)) return;
+
+  try {
+    const r = await fetch(`/api/meeting-prep/${currentMeetingId}/auto-assign`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({analysts: analysts, changed_by: currentUser})
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || 'Auto-assign failed');
+    toast(`Assigned ${d.assigned_count} items across ${analysts.length} analysts`, 'ok');
+    loadMeetingPrep(currentMeetingId);
+  } catch(e) {
+    alert('Auto-assign failed: ' + e.message);
   }
 }
 
@@ -9006,42 +9280,173 @@ def api_meeting_prep(meeting_id):
 
 
 def _classify_risk(item):
-    """Classify an item's risk level based on content indicators."""
+    """Classify an item's risk level based on content indicators.
+
+    Levels:
+      HIGH   - Large fiscal (>$1M), sole source/no-bid contracts, bond issuances,
+               eminent domain, tax/rate increases, veto overrides. Items that
+               Commissioners WILL be asked about by media or constituents.
+      MEDIUM - Policy changes (ordinance amendments, new interlocal agreements),
+               moderate procurement, change orders. Items with substantive impact
+               but lower controversy risk.
+      LOW    - Routine items: renewals, standard resolutions, reports, consent
+               agenda items with no fiscal or policy change.
+      INFO   - Ceremonial: proclamations, recognitions, honorary resolutions.
+
+    Threshold principle: If in doubt, classify DOWN not up. A list of 134
+    HIGH items is useless. HIGH should be ~5-15% of an agenda.
+    """
     summary = (item.get("ai_summary_for_appearance") or "").lower()
     title = (item.get("appearance_title") or "").lower()
     watch = (item.get("watch_points_for_appearance") or "").lower()
     notes = (item.get("analyst_working_notes") or "").lower()
     combined = f"{title} {summary} {watch} {notes}"
 
-    # HIGH: large fiscal impact, contract awards, bond issuances, zoning changes
-    high_signals = [
-        "million", "billion", "$", "contract award", "bond", "appropriat",
-        "tax increase", "rate increase", "eminent domain", "sole source",
-        "no-bid", "override", "veto"
-    ]
-    # MEDIUM: moderate fiscal, policy changes, ordinance amendments
-    med_signals = [
-        "ordinance", "resolution approving", "amend", "lease", "grant",
-        "interlocal", "procurement", "change order", "supplement"
-    ]
-    # Ceremonial/Informational keywords
+    # ── INFO: ceremonial/recognition items — check first ──
     info_signals = [
         "proclamation", "recognition", "presentation of", "commend",
-        "ceremonial", "honorary", "certificate", "poster contest"
+        "ceremonial", "honorary", "certificate", "poster contest",
+        "appreciation", "tribute", "congratulat"
     ]
-
-    # Check informational first
     if any(s in combined for s in info_signals):
         return "INFO"
 
-    # Check watch points — having them suggests elevated importance
-    has_watch = bool(watch.strip())
+    # ── HIGH: must meet STRONG criteria ──
+    # Large fiscal: "million" or "billion" in context of spending/contracts
+    has_large_fiscal = any(s in combined for s in ["million", "billion"])
+    # High-controversy triggers (any one of these = HIGH regardless of amount)
+    high_controversy = [
+        "sole source", "no-bid", "eminent domain", "tax increase",
+        "rate increase", "override", "veto", "bond issu"
+    ]
+    has_controversy = any(s in combined for s in high_controversy)
+    # Contract awards over $1M
+    has_contract_award = "contract award" in combined and has_large_fiscal
 
-    if any(s in combined for s in high_signals):
+    if has_controversy:
         return "HIGH"
-    if any(s in combined for s in med_signals) or has_watch:
+    if has_contract_award:
+        return "HIGH"
+    if has_large_fiscal and any(s in combined for s in [
+        "appropriat", "contract", "bond", "capital", "construction",
+        "procurement", "award", "sole source"
+    ]):
+        return "HIGH"
+
+    # ── MEDIUM: policy changes, moderate procurement ──
+    med_signals = [
+        "ordinance", "amend", "interlocal", "change order",
+        "supplement", "new contract", "professional service"
+    ]
+    if any(s in combined for s in med_signals):
         return "MEDIUM"
+    # Items with substantive watch points (not just boilerplate)
+    if watch.strip() and len(watch.strip()) > 100:
+        return "MEDIUM"
+
+    # ── LOW: everything else (routine, consent agenda, reports, renewals) ──
     return "LOW"
+
+
+@app.route("/api/meeting-prep/<int:meeting_id>/auto-assign", methods=["POST"])
+def api_auto_assign(meeting_id):
+    """Smart round-robin assignment: distributes unassigned items fairly
+    across the given analysts based on item complexity (risk level, text length,
+    fiscal keywords)."""
+    data = request.get_json() or {}
+    analysts = data.get("analysts", [])
+    changed_by = data.get("changed_by", "system")
+    if not analysts:
+        return jsonify({"error": "No analysts provided"}), 400
+
+    import meeting_service
+    pkg = meeting_service.get_meeting_package(meeting_id)
+    items = pkg.get("items", [])
+
+    # Only assign items that don't already have an assignee
+    unassigned = [i for i in items if not i.get("assigned_to")]
+    if not unassigned:
+        return jsonify({"error": "All items are already assigned", "assigned_count": 0}), 200
+
+    # Score each item for complexity (higher = more work)
+    def complexity_score(item):
+        score = 1  # base
+        risk = _classify_risk(item)
+        if risk == "HIGH":
+            score += 3
+        elif risk == "MEDIUM":
+            score += 2
+        elif risk == "INFO":
+            score -= 0.5  # Ceremonial items are easy
+
+        # Text length as proxy for item density
+        text = (item.get("ai_summary_for_appearance") or "") + (item.get("appearance_title") or "")
+        if len(text) > 2000:
+            score += 1
+        if len(text) > 5000:
+            score += 1
+
+        # Fiscal complexity
+        fiscal_terms = ["million", "billion", "contract", "bond", "appropriat"]
+        combined = text.lower()
+        fiscal_count = sum(1 for t in fiscal_terms if t in combined)
+        score += min(fiscal_count, 2)
+
+        return max(score, 0.5)
+
+    # Sort by complexity (hardest first) for fair distribution
+    scored = [(complexity_score(i), i) for i in unassigned]
+    scored.sort(key=lambda x: -x[0])
+
+    # Track workload per analyst (include already-assigned items)
+    workload = {a: 0.0 for a in analysts}
+    for item in items:
+        assignee = item.get("assigned_to")
+        if assignee in workload:
+            workload[assignee] += complexity_score(item)
+
+    # Assign each item to the analyst with the lowest current workload
+    assignments = []
+    for score, item in scored:
+        # Pick analyst with minimum workload
+        target = min(analysts, key=lambda a: workload[a])
+        workload[target] += score
+        assignments.append((item, target))
+
+    # Persist assignments
+    with get_db() as conn:
+        for item, analyst in assignments:
+            aid = item.get("appearance_id") or item.get("id")
+            conn.execute(
+                "UPDATE appearances SET assigned_to=? WHERE id=?",
+                (analyst, aid)
+            )
+            # Create/update workflow record
+            existing = conn.execute(
+                "SELECT id FROM workflow WHERE appearance_id=?", (aid,)
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE workflow SET assigned_to=?, changed_by=?, updated_at=datetime('now') WHERE appearance_id=?",
+                    (analyst, changed_by, aid)
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO workflow (appearance_id, assigned_to, changed_by, workflow_status, created_at, updated_at)
+                       VALUES (?, ?, ?, 'assigned', datetime('now'), datetime('now'))""",
+                    (aid, analyst, changed_by)
+                )
+
+    # Build summary
+    summary = {a: 0 for a in analysts}
+    for _, analyst in assignments:
+        summary[analyst] += 1
+
+    return jsonify({
+        "assigned_count": len(assignments),
+        "distribution": summary,
+        "method": "complexity-weighted round robin"
+    })
 
 
 @app.route("/api/meeting-prep/<int:meeting_id>/compile", methods=["POST"])
@@ -9457,6 +9862,94 @@ def api_export_meeting_prep_excel(meeting_id):
     output_path = Path(app.root_path) / "exports" / filename
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(str(output_path))
+
+    return send_file(str(output_path), as_attachment=True, download_name=filename,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+# ── Filtered View Export ───────────────────────────────────────
+
+@app.route("/api/meeting-prep/<int:meeting_id>/export-filtered", methods=["POST"])
+def api_export_filtered_view(meeting_id):
+    """Export a filtered subset of meeting prep items as Excel."""
+    from repository import get_meeting_by_id
+
+    m = get_meeting_by_id(meeting_id)
+    if not m:
+        return jsonify({"error": "not found"}), 404
+
+    data = request.get_json() or {}
+    appearance_ids = data.get("appearance_ids", [])
+    filter_label = data.get("filter_label", "filtered")
+
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return jsonify({"error": "openpyxl not installed"}), 500
+
+    import meeting_service
+    pkg = meeting_service.get_meeting_package(meeting_id)
+    all_items = pkg.get("items", [])
+
+    # Filter to requested IDs
+    id_set = set(appearance_ids)
+    if id_set:
+        items = [i for i in all_items if i.get("appearance_id") in id_set or i.get("id") in id_set]
+    else:
+        items = all_items
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Items"
+
+    header_font = Font(name="Arial", bold=True, color="FFFFFF", size=10)
+    header_fill = PatternFill(start_color="1B3A5C", end_color="1B3A5C", fill_type="solid")
+    body_font = Font(name="Arial", size=10)
+    wrap_align = Alignment(wrap_text=True, vertical="top")
+    thin_border = Border(
+        left=Side(style="thin", color="CCCCCC"), right=Side(style="thin", color="CCCCCC"),
+        top=Side(style="thin", color="CCCCCC"), bottom=Side(style="thin", color="CCCCCC"),
+    )
+
+    # Title
+    ws.merge_cells("A1:H1")
+    t = ws["A1"]
+    t.value = f"{m.get('body_name','')} — {m.get('meeting_date','')} — {filter_label}"
+    t.font = Font(name="Arial", bold=True, size=13, color="1B3A5C")
+    ws.row_dimensions[1].height = 28
+
+    headers = ["Item #", "File #", "Title", "Risk", "Assigned To", "Debrief", "Watch Points", "Status"]
+    widths = [10, 12, 45, 10, 14, 80, 50, 12]
+    for ci, (h, w) in enumerate(zip(headers, widths), 1):
+        c = ws.cell(row=3, column=ci, value=h)
+        c.font = header_font; c.fill = header_fill; c.border = thin_border
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(ci)].width = w
+
+    for ri, item in enumerate(items, 4):
+        pos = item.get("bcc_item_number") or item.get("committee_item_number") or item.get("raw_agenda_item_number") or ""
+        vals = [
+            pos,
+            item.get("file_number", ""),
+            item.get("appearance_title") or item.get("short_title", ""),
+            _classify_risk(item),
+            item.get("assigned_to", ""),
+            item.get("ai_summary_for_appearance", ""),
+            item.get("watch_points_for_appearance", ""),
+            item.get("workflow_status") or item.get("current_status", ""),
+        ]
+        for ci, v in enumerate(vals, 1):
+            c = ws.cell(row=ri, column=ci, value=v)
+            c.font = body_font; c.alignment = wrap_align; c.border = thin_border
+
+    import tempfile
+    from pathlib import Path
+    output_path = Path(tempfile.mkdtemp()) / "filtered_export.xlsx"
+    wb.save(str(output_path))
+    safe_label = "".join(c for c in filter_label if c.isalnum() or c in "_ -").strip()[:30]
+    filename = f"{m.get('body_name','meeting')}_{m.get('meeting_date','')}_{safe_label}.xlsx"
 
     return send_file(str(output_path), as_attachment=True, download_name=filename,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
