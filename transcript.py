@@ -112,20 +112,37 @@ def _granicus_headers():
     return {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 
-def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
+def _parse_granicus_row_date(row_text: str) -> datetime | None:
+    """Extract a date from Granicus row text like 'Housing Committee Mar 10, 2026 01h 06m ...'"""
+    m = re.search(
+        r'(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),?\s+(\d{4})',
+        row_text, re.I
+    )
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(1)[:3]} {m.group(2)} {m.group(3)}", "%b %d %Y")
+        except ValueError:
+            pass
+    return None
+
+
+def search_granicus_mp3(committee_name: str, meeting_date: str,
+                        date_window_days: int = 7) -> dict | None:
     """Search Granicus archive pages for an MP3 matching committee + date.
 
     Scrapes two Granicus ViewPublisher pages that have direct MP3 links:
       - view_id=3: BCC meetings, BCC Zoning, special meetings
       - view_id=4: All other committee meetings
 
-    Each page lists meetings in table rows with format:
-      Meeting Name | Timestamp | Date | Duration | Video | ... | MP3 Audio | MP4 Video
+    Uses a ±date_window_days window because the DB often stores the
+    agenda/scheduled date (e.g. Mar 16) while the actual meeting happened
+    on a different day that week (e.g. Mar 10).
 
     Returns: {"mp3_url": str, "title": str, "page_url": str} or None
     """
     import requests
     from bs4 import BeautifulSoup
+    from datetime import timedelta
 
     try:
         target_dt = datetime.strptime(meeting_date, "%Y-%m-%d")
@@ -133,15 +150,7 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
         log.warning(f"  Invalid meeting date: {meeting_date}")
         return None
 
-    # Date patterns that appear in Granicus row text
-    # Format: "Apr 15, 2026" or "Apr  7, 2026" (double space for single-digit days)
-    date_patterns = [
-        target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}",   # "Apr 7, 2026"
-        target_dt.strftime("%b %d, %Y"),                                     # "Apr 07, 2026"
-        target_dt.strftime("%b") + f"  {target_dt.day}, {target_dt.year}",  # "Apr  7, 2026"
-    ]
-
-    log.info(f"  Searching for '{committee_name}' on {meeting_date}")
+    log.info(f"  Searching for '{committee_name}' on {meeting_date} (±{date_window_days} days)")
 
     # Search both Granicus pages
     for page_url in [GRANICUS_COMMITTEES_URL, GRANICUS_BCC_URL]:
@@ -157,6 +166,7 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
 
         best_match = None
         best_score = 0
+        best_date_diff = 999
 
         for link in soup.find_all("a", href=True):
             href = link.get("href", "")
@@ -169,8 +179,12 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
                 continue
             row_text = row.get_text(" ", strip=True)
 
-            # Check date match
-            if not any(dp.lower() in row_text.lower() for dp in date_patterns):
+            # Parse date from row and check if within window
+            row_date = _parse_granicus_row_date(row_text)
+            if not row_date:
+                continue
+            date_diff = abs((row_date - target_dt).days)
+            if date_diff > date_window_days:
                 continue
 
             # Check committee name match
@@ -178,10 +192,12 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
             if name_score < 0.20:
                 continue
 
-            log.info(f"  Match: score={name_score:.2f} '{row_text[:100]}'")
+            log.info(f"  Match: score={name_score:.2f} date_diff={date_diff}d '{row_text[:100]}'")
 
-            if name_score > best_score:
+            # Prefer: best name score, then closest date
+            if name_score > best_score or (name_score == best_score and date_diff < best_date_diff):
                 best_score = name_score
+                best_date_diff = date_diff
                 mp3_url = href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
                 best_match = {
                     "mp3_url": mp3_url,
@@ -194,24 +210,9 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
             log.info(f"  Found MP3: {best_match['mp3_url'][:80]}…")
             return best_match
 
-        # Diagnostic: show rows that matched the DATE but failed name matching
+        # Diagnostic logging
         all_mp3 = [a["href"] for a in soup.find_all("a", href=True) if ".mp3" in a.get("href", "").lower()]
-        date_matched_rows = []
-        for link in soup.find_all("a", href=True):
-            if ".mp3" not in link.get("href", "").lower():
-                continue
-            row = link.find_parent("tr")
-            if not row:
-                continue
-            row_text = row.get_text(" ", strip=True)
-            if any(dp.lower() in row_text.lower() for dp in date_patterns):
-                date_matched_rows.append(row_text[:120])
-        if date_matched_rows:
-            log.info(f"  Date-matched rows on page (name didn't match):")
-            for r in date_matched_rows[:5]:
-                log.info(f"    -> {r}")
-        else:
-            log.info(f"  No match on page ({len(all_mp3)} MP3 links, none had date {meeting_date})")
+        log.info(f"  No match on page ({len(all_mp3)} MP3 links, no name+date match within ±{date_window_days}d)")
 
     log.info(f"  No MP3 found for '{committee_name}' {meeting_date}")
     return None
