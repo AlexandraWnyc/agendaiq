@@ -413,9 +413,20 @@ a.dlbtn:hover{background:var(--blue)}
 .chat-input-row textarea{flex:1;font-size:.82rem;border:1px solid var(--gray-300);border-radius:8px;padding:.45rem .6rem;
   resize:none;min-height:38px;max-height:100px;font-family:inherit;line-height:1.4}
 .chat-input-row textarea:focus{border-color:var(--blue2);outline:none;box-shadow:0 0 0 2px rgba(37,99,235,.12)}
+.chat-attach-btn{padding:.4rem .5rem;border-radius:8px;background:transparent;color:var(--gray-500);
+  font-size:1rem;border:1px solid var(--gray-300);cursor:pointer;height:38px;display:flex;align-items:center;
+  transition:all .15s}
+.chat-attach-btn:hover{border-color:var(--blue2);color:var(--blue2);background:var(--blue-lt,#eff6ff)}
 .chat-send-btn{padding:.4rem .75rem;border-radius:8px;background:var(--blue2);color:#fff;
   font-size:.8rem;font-weight:600;border:none;cursor:pointer;white-space:nowrap;height:38px}
 .chat-send-btn:disabled{opacity:.5;cursor:not-allowed}
+.chat-attachments{display:flex;flex-wrap:wrap;gap:.3rem;padding:.3rem 0}
+.chat-att-chip{display:inline-flex;align-items:center;gap:.25rem;background:#eff6ff;border:1px solid #bfdbfe;
+  border-radius:6px;padding:2px 8px;font-size:.7rem;color:#1e40af;max-width:200px}
+.chat-att-chip .att-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-att-chip .att-remove{cursor:pointer;font-weight:700;color:#93c5fd;margin-left:2px;font-size:.8rem}
+.chat-att-chip .att-remove:hover{color:#dc2626}
+.chat-msg .att-label{font-size:.68rem;color:#6b7280;font-style:italic;margin-bottom:.2rem}
 .chat-ws-toggle{display:flex;align-items:center;gap:.35rem;font-size:.72rem;color:var(--gray-500);padding:.25rem 0}
 .chat-ws-toggle input{margin:0}
 
@@ -3706,7 +3717,11 @@ async function renderDrawerChat(body, app) {
         </label>
         <span style="color:var(--gray-400)">(AI will search the web for current info)</span>
       </div>
+      <div class="chat-attachments" id="chat-attachments" style="display:none"></div>
       <div class="chat-input-row">
+        <input type="file" id="chat-file-input" multiple accept=".pdf,.docx,.doc,.txt,.csv,.tsv,.png,.jpg,.jpeg,.gif,.webp,.xlsx,.xls" style="display:none"
+          onchange="handleChatFiles(this.files)"/>
+        <button class="chat-attach-btn" onclick="document.getElementById('chat-file-input').click()" title="Attach files (PDF, Word, Excel, images, text)">📎</button>
         <textarea id="chat-input" placeholder="Ask about this item..." rows="1"
           onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMsg();}"></textarea>
         <button class="chat-send-btn" id="chat-send-btn" onclick="sendChatMsg()">Send</button>
@@ -3740,17 +3755,52 @@ function _appendChatBubble(container, msg) {
   container.appendChild(div);
 }
 
+// ── Chat file attachments ──
+let _chatFiles = [];  // Array of File objects queued for next message
+
+function handleChatFiles(fileList) {
+  const maxSize = 20 * 1024 * 1024; // 20MB per file
+  const maxFiles = 5;
+  for(let i=0; i<fileList.length && _chatFiles.length < maxFiles; i++) {
+    const f = fileList[i];
+    if(f.size > maxSize) { alert(`File "${f.name}" exceeds 20MB limit.`); continue; }
+    _chatFiles.push(f);
+  }
+  if(fileList.length + _chatFiles.length > maxFiles) alert('Maximum 5 files per message.');
+  _renderAttachmentChips();
+  document.getElementById('chat-file-input').value = '';
+}
+
+function _renderAttachmentChips() {
+  const wrap = document.getElementById('chat-attachments');
+  if(!_chatFiles.length) { wrap.style.display='none'; wrap.innerHTML=''; return; }
+  wrap.style.display = 'flex';
+  wrap.innerHTML = _chatFiles.map((f,i) =>
+    `<span class="chat-att-chip"><span class="att-name">${esc(f.name)}</span><span class="att-remove" onclick="removeChatFile(${i})">×</span></span>`
+  ).join('');
+}
+
+function removeChatFile(idx) {
+  _chatFiles.splice(idx, 1);
+  _renderAttachmentChips();
+}
+
 async function sendChatMsg() {
   if(_chatLoading || !currentAppId) return;
   const input = document.getElementById('chat-input');
   const msg = input.value.trim();
-  if(!msg) return;
+  if(!msg && !_chatFiles.length) return;
   const ws = document.getElementById('chat-ws')?.checked || false;
   const container = document.getElementById('chat-msgs');
   const btn = document.getElementById('chat-send-btn');
 
-  // Show user bubble immediately
-  _appendChatBubble(container, {role:'user', content:msg});
+  // Show user bubble with attachment info
+  let displayMsg = msg;
+  if(_chatFiles.length) {
+    const names = _chatFiles.map(f => f.name).join(', ');
+    displayMsg = (msg ? msg + '\n' : '') + '📎 ' + names;
+  }
+  _appendChatBubble(container, {role:'user', content:displayMsg});
   input.value = '';
   container.scrollTop = container.scrollHeight;
 
@@ -3758,18 +3808,29 @@ async function sendChatMsg() {
   const typing = document.createElement('div');
   typing.className = 'chat-msg assistant';
   typing.style.opacity = '.5';
-  typing.textContent = 'Thinking...';
+  typing.textContent = _chatFiles.length ? 'Reading attachments & thinking...' : 'Thinking...';
   container.appendChild(typing);
   container.scrollTop = container.scrollHeight;
 
   _chatLoading = true;
   btn.disabled = true;
+
   try {
-    const r = await fetch(`/api/chat/${currentAppId}/send`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ message: msg, web_search: ws })
-    });
+    // Use FormData if we have files, otherwise JSON
+    let r;
+    if(_chatFiles.length) {
+      const fd = new FormData();
+      fd.append('message', msg);
+      fd.append('web_search', ws ? '1' : '0');
+      _chatFiles.forEach(f => fd.append('files', f));
+      r = await fetch(`/api/chat/${currentAppId}/send`, { method: 'POST', body: fd });
+    } else {
+      r = await fetch(`/api/chat/${currentAppId}/send`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ message: msg, web_search: ws })
+      });
+    }
     const d = await r.json();
     typing.remove();
     if(d.error) {
@@ -3782,6 +3843,8 @@ async function sendChatMsg() {
     typing.remove();
     _appendChatBubble(container, {role:'assistant', content:'Connection error.'});
   }
+  _chatFiles = [];
+  _renderAttachmentChips();
   _chatLoading = false;
   btn.disabled = false;
   input.focus();
@@ -7330,15 +7393,97 @@ def api_chat_history(appearance_id):
 
 @app.route("/api/chat/<int:appearance_id>/send", methods=["POST"])
 def api_chat_send(appearance_id):
-    """Send a user message and get an AI response. Optionally use web search."""
+    """Send a user message and get an AI response. Optionally use web search. Supports file attachments."""
     import httpx
     from anthropic import Anthropic
 
     user = _current_user()
-    data = request.get_json(force=True)
-    user_msg = (data.get("message") or "").strip()
-    use_web  = bool(data.get("web_search", False))
-    if not user_msg:
+
+    # Handle both JSON and multipart/form-data (when files attached)
+    attached_texts = []  # extracted text from uploaded files
+    attached_images = []  # base64 image data for vision
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        user_msg = (request.form.get("message") or "").strip()
+        use_web = request.form.get("web_search") == "1"
+        files = request.files.getlist("files")
+        for f in files[:5]:  # max 5 files
+            fname = f.filename or "unnamed"
+            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+            f_bytes = f.read()
+            if ext in ("png", "jpg", "jpeg", "gif", "webp"):
+                # Image — use Claude vision
+                import base64
+                mime = f.content_type or f"image/{ext}"
+                if ext == "jpg": mime = "image/jpeg"
+                b64 = base64.b64encode(f_bytes).decode()
+                attached_images.append({"mime": mime, "data": b64, "name": fname})
+            elif ext == "pdf":
+                # Extract text from PDF
+                try:
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+                        tmp.write(f_bytes)
+                        tmp_path = tmp.name
+                    from scraper import extract_pdf_text, IMAGE_ONLY_SENTINEL
+                    raw = extract_pdf_text(Path(tmp_path))
+                    Path(tmp_path).unlink(missing_ok=True)
+                    if raw and raw != IMAGE_ONLY_SENTINEL:
+                        attached_texts.append(f"[Attached PDF: {fname}]\n{raw[:15000]}")
+                    else:
+                        attached_texts.append(f"[Attached PDF: {fname}] (could not extract text — may be scanned/image-only)")
+                except Exception as e:
+                    attached_texts.append(f"[Attached PDF: {fname}] (error reading: {e})")
+            elif ext in ("docx", "doc"):
+                # Extract text from Word doc using python-docx
+                try:
+                    import tempfile, io
+                    from docx import Document as DocxDocument
+                    doc = DocxDocument(io.BytesIO(f_bytes))
+                    paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+                    # Also grab table content
+                    for table in doc.tables:
+                        for row in table.rows:
+                            cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                            if cells:
+                                paragraphs.append(" | ".join(cells))
+                    doc_text = "\n".join(paragraphs)[:15000]
+                    attached_texts.append(f"[Attached Document: {fname}]\n{doc_text}")
+                except Exception as e:
+                    attached_texts.append(f"[Attached Document: {fname}] (error reading: {e})")
+            elif ext in ("xlsx", "xls", "csv", "tsv"):
+                # Spreadsheet / CSV
+                try:
+                    if ext in ("csv", "tsv"):
+                        text = f_bytes.decode("utf-8", errors="replace")[:15000]
+                    else:
+                        import io
+                        from openpyxl import load_workbook
+                        wb = load_workbook(io.BytesIO(f_bytes), read_only=True, data_only=True)
+                        lines = []
+                        for ws_name in wb.sheetnames[:5]:  # max 5 sheets
+                            ws = wb[ws_name]
+                            lines.append(f"--- Sheet: {ws_name} ---")
+                            for row in ws.iter_rows(max_row=200, values_only=True):
+                                vals = [str(c) if c is not None else "" for c in row]
+                                if any(v.strip() for v in vals):
+                                    lines.append(" | ".join(vals))
+                        wb.close()
+                        text = "\n".join(lines)[:15000]
+                    attached_texts.append(f"[Attached Spreadsheet: {fname}]\n{text}")
+                except Exception as e:
+                    attached_texts.append(f"[Attached Spreadsheet: {fname}] (error reading: {e})")
+            else:
+                # Plain text fallback
+                try:
+                    text = f_bytes.decode("utf-8", errors="replace")[:15000]
+                    attached_texts.append(f"[Attached File: {fname}]\n{text}")
+                except Exception:
+                    attached_texts.append(f"[Attached File: {fname}] (could not read)")
+    else:
+        data = request.get_json(force=True)
+        user_msg = (data.get("message") or "").strip()
+        use_web = bool(data.get("web_search", False))
+    if not user_msg and not attached_texts and not attached_images:
         return jsonify({"error": "Empty message"}), 400
 
     # Single DB query: fetch item context + history together
@@ -7362,10 +7507,15 @@ def api_chat_send(appearance_id):
         ).fetchall()
         history = [dict(r) for r in history][-20:]
 
-        # Save user message immediately (same transaction)
+        # Save user message immediately (same transaction) — include attachment names in saved text
+        saved_msg = user_msg
+        if attached_texts or attached_images:
+            att_names = [t.split(']')[0].split(': ')[-1] for t in attached_texts]
+            att_names += [img['name'] for img in attached_images]
+            saved_msg = (user_msg + "\n" if user_msg else "") + "📎 " + ", ".join(att_names)
         conn.execute(
             "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at) VALUES (?,?,?,?,?,?)",
-            (appearance_id, user, "user", user_msg, 0, now_iso())
+            (appearance_id, user, "user", saved_msg, 0, now_iso())
         )
 
     # Build system prompt with full item context including PDF text
@@ -7408,15 +7558,35 @@ def api_chat_send(appearance_id):
 
     # Build messages array
     messages = [{"role": h["role"], "content": h["content"]} for h in history]
-    messages.append({"role": "user", "content": user_msg})
+
+    # Build current user message content — may include text attachments and images
+    if attached_images or attached_texts:
+        # Use multi-part content for this message
+        content_parts = []
+        # Add images first (Claude vision)
+        for img in attached_images:
+            content_parts.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": img["mime"], "data": img["data"]}
+            })
+        # Combine user text + attachment text
+        full_text = user_msg or ""
+        if attached_texts:
+            full_text += ("\n\n" if full_text else "") + "\n\n".join(attached_texts)
+        if full_text:
+            content_parts.append({"type": "text", "text": full_text})
+        messages.append({"role": "user", "content": content_parts})
+    else:
+        messages.append({"role": "user", "content": user_msg})
 
     # Call Claude
     try:
         api_key = load_api_key()
         client = Anthropic(api_key=api_key, http_client=httpx.Client(verify=False))
+        has_attachments = bool(attached_texts or attached_images)
         kw = {
             "model": "claude-haiku-4-5-20251001",
-            "max_tokens": 1500,
+            "max_tokens": 3000 if has_attachments else 1500,
             "system": sys_prompt,
             "messages": messages,
         }
