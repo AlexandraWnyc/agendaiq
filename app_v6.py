@@ -1521,6 +1521,18 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <button class="btn btn-o btn-xs" onclick="clearItemFilters()" style="margin-bottom:.75rem">Reset</button>
       </div>
     </div>
+    <!-- Confidence Flag Key -->
+    <div id="flag-key" style="padding:.4rem 1.1rem .5rem;background:#f8fafc;border-bottom:1px solid var(--gray-200);
+      display:flex;align-items:center;gap:1rem;flex-wrap:wrap;font-size:.73rem;color:#475569">
+      <span style="font-weight:700;color:#334155">⚑ Flag Key:</span>
+      <span><span style="color:#16a34a;font-size:.8rem">●</span> All Clear</span>
+      <span><span style="color:#dc2626;font-size:.8rem">●</span> No PDF</span>
+      <span><span style="color:#7c3aed;font-size:.8rem">●</span> No AI Analysis</span>
+      <span><span style="color:#ea580c;font-size:.8rem">●</span> AI Incomplete</span>
+      <span><span style="color:#d97706;font-size:.8rem">●</span> No Transcript</span>
+      <span><span style="color:#0891b2;font-size:.8rem">●</span> Stale Analysis</span>
+      <span style="color:#94a3b8;margin-left:.5rem">| Multiple circles = multiple issues</span>
+    </div>
     <div class="tbl-wrap">
       <table style="min-width:1600px">
         <thead><tr>
@@ -2418,9 +2430,9 @@ async function openDrawer(fileNum, appId) {
         <span style="font-weight:700;color:${iconColor};font-size:.85rem">${headerText} — ${flags.length} issue${flags.length>1?'s':''} found</span>
       </div>
       ${flags.map(f => {
-        const dot = f.level === 'red' ? '🔴' : '🟡';
-        return `<div style="font-size:.8rem;color:#374151;margin-left:1.5rem;margin-bottom:.2rem">
-          ${dot} <strong>${esc(f.label)}</strong> — ${esc(f.detail)}
+        return `<div style="font-size:.8rem;color:#374151;margin-left:1.5rem;margin-bottom:.25rem;display:flex;align-items:center;gap:.4rem">
+          <span style="color:${f.color||'#dc2626'};font-size:.9rem">●</span>
+          <strong>${esc(f.label)}</strong> <span style="color:#6b7280">— ${esc(f.detail)}</span>
         </div>`;
       }).join('')}
     `;
@@ -5224,11 +5236,11 @@ function _renderItemsGrid() {
   // Confidence summary for the full (unfiltered) set
   const _redCount = _mdItems.filter(i => i.confidence === 'red').length;
   const _yellowCount = _mdItems.filter(i => i.confidence === 'yellow').length;
-  const _attentionBadge = _redCount > 0
-    ? ` · <span style="color:#dc2626;font-weight:600;cursor:pointer" onclick="document.getElementById('md-f-special').value='attention';renderItemsGrid()" title="Click to filter">⚑ ${_redCount} need${_redCount===1?'s':''} attention</span>`
-    : _yellowCount > 0
-    ? ` · <span style="color:#d97706;cursor:pointer" onclick="document.getElementById('md-f-special').value='attention';renderItemsGrid()" title="Click to filter">⚑ ${_yellowCount} warning${_yellowCount===1?'':'s'}</span>`
-    : '';
+  const _totalFlags = _redCount + _yellowCount;
+  const _attentionBadge = _totalFlags > 0
+    ? ` · <span style="color:${_redCount?'#dc2626':'#d97706'};font-weight:600;cursor:pointer" onclick="document.getElementById('md-f-special').value='attention';renderItemsGrid()" title="Click to filter flagged items">⚑ ${_totalFlags} flagged</span>` +
+      (_redCount ? ` <span style="font-size:.7rem;color:#dc2626">(${_redCount} critical)</span>` : '')
+    : ' · <span style="color:#16a34a;font-weight:500">✓ All clear</span>';
   document.getElementById('md-items-count').innerHTML =
     `${filtered.length} of ${_mdItems.length} item(s)${_attentionBadge}`;
 
@@ -5298,19 +5310,20 @@ function _renderItemsGrid() {
       ? `<span title="Prior analyst/reviewer notes exist for this matter" style="color:var(--green);font-weight:700;font-size:1rem">✓</span>`
       : `<span style="color:var(--gray-400)">—</span>`;
 
-    // Confidence flag dot
-    const _conf = it.confidence || 'green';
-    const _flagCount = (it.confidence_flags || []).length;
-    const _flagTitles = (it.confidence_flags || []).map(f => f.label).join(', ');
-    const _confDot = _conf === 'green'
-      ? '<span title="All clear — analysis complete" style="color:#16a34a;font-size:.9rem">●</span>'
-      : _conf === 'yellow'
-      ? `<span title="${_flagCount} warning${_flagCount>1?'s':''}: ${esc(_flagTitles)}" style="color:#d97706;font-size:.9rem;cursor:help">●</span>`
-      : `<span title="${_flagCount} issue${_flagCount>1?'s':''}: ${esc(_flagTitles)}" style="color:#dc2626;font-size:.9rem;cursor:help;animation:pulse-flag 1.5s ease-in-out infinite">●</span>`;
+    // Confidence flag circles — one per issue, each with its own color
+    const _flags = it.confidence_flags || [];
+    let _flagCell;
+    if (_flags.length === 0) {
+      _flagCell = '<span title="All clear — analysis complete" style="color:#16a34a;font-size:.7rem">●</span>';
+    } else {
+      _flagCell = _flags.map(f =>
+        `<span title="${esc(f.label)}: ${esc(f.detail)}" style="color:${f.color||'#dc2626'};font-size:.7rem;cursor:help;display:inline-block;line-height:1${f.level==='red'?';animation:pulse-flag 1.5s ease-in-out infinite':''}">●</span>`
+      ).join('');
+    }
 
     return `<tr class="clickable" onclick="openDrawer('${esc(it.file_number)}',${it.id})">
       <td><span class="file-link">${it.file_number||''}</span></td>
-      <td style="text-align:center;padding:0 .3rem">${_confDot}</td>
+      <td style="text-align:center;padding:0 .3rem;white-space:nowrap">${_flagCell}</td>
       <td onclick="event.stopPropagation()">${linksCell}</td>
       <td style="white-space:nowrap;font-size:.73rem">${cdSrc}</td>
       <td style="font-size:.73rem">${esc(cn)||'—'}</td>
@@ -7036,6 +7049,18 @@ def api_bulk_transcript_backfill():
                 mid = mtg.get("id")
                 label = f"{mtg.get('body_name', '')} — {mtg.get('meeting_date', '')}"
                 pct = int(5 + (90 * i / total))
+
+                # Skip future meetings — no recording exists yet
+                from datetime import date as _date
+                meeting_date_str = mtg.get("meeting_date", "")
+                if meeting_date_str and meeting_date_str > _date.today().isoformat():
+                    skipped += 1
+                    _bulk_tx_log(f"  ⏭ {label}: skipped — meeting hasn't happened yet", pct=pct)
+                    processed += 1
+                    with _bulk_tx_lock:
+                        _bulk_tx_state["processed"] = processed
+                        _bulk_tx_state["skipped"] = skipped
+                    continue
 
                 # Pre-emptive cleanup: clear leftover temp files from previous iterations
                 import glob as _glob, shutil as _shutil
