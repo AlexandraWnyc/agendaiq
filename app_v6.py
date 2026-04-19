@@ -6878,10 +6878,15 @@ def api_bulk_transcript_backfill():
                 pct = int(5 + (90 * i / total))
 
                 # Pre-emptive cleanup: clear leftover temp files from previous iterations
-                import glob as _glob
-                for stale in _glob.glob("/tmp/tmp*/meeting_audio.mp3"):
+                import glob as _glob, shutil as _shutil
+                for stale in _glob.glob("/tmp/tmp*/meeting_audio.*"):
                     try: Path(stale).unlink(missing_ok=True)
                     except: pass
+                for stale_dir in _glob.glob("/tmp/tmp*"):
+                    p = Path(stale_dir)
+                    if p.is_dir() and any(p.glob("*.mp3")) or any(p.glob("*.wav")) or any(p.glob("transcript*")):
+                        try: _shutil.rmtree(stale_dir, ignore_errors=True)
+                        except: pass
 
                 _bulk_tx_log(f"[{i+1}/{total}] Processing: {label}", pct=pct)
 

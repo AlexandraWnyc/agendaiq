@@ -21,6 +21,17 @@ from difflib import SequenceMatcher
 
 log = logging.getLogger("oca-agent")
 
+def _disk_free_mb(path="/tmp"):
+    """Return free disk space in MB at the given path."""
+    import shutil
+    try:
+        usage = shutil.disk_usage(path)
+        return usage.free / (1024 * 1024)
+    except Exception:
+        return 9999  # assume OK if check fails
+
+MIN_DISK_FREE_MB = 200  # don't download if less than 200MB free
+
 # ── Constants ────────────────────────────────────────────────
 YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
 YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@miami-dadebcc6863"
@@ -1256,7 +1267,12 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         try:
             mp3_info = search_granicus_mp3(body_name, meeting_date)
             if mp3_info:
-                _emit(f"Found recording — downloading MP3…",
+                # Check disk space before downloading
+                free_mb = _disk_free_mb("/tmp")
+                if free_mb < MIN_DISK_FREE_MB:
+                    log.warning(f"  Low disk space ({free_mb:.0f} MB free) — skipping MP3 download")
+                    return {"status": "skipped", "message": f"Low disk space ({free_mb:.0f} MB free)"}
+                _emit(f"Found recording — downloading MP3 ({free_mb:.0f} MB free)…",
                       phase="transcript", pct=10)
                 mp3_path = download_mp3(mp3_info["mp3_url"], output_dir)
                 if mp3_path:
@@ -1265,8 +1281,9 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                     transcript = transcribe_with_whisper(mp3_path)
                     # Delete MP3 immediately — we have the text, free the disk
                     try:
+                        sz = mp3_path.stat().st_size / (1024*1024) if mp3_path.exists() else 0
                         mp3_path.unlink(missing_ok=True)
-                        log.info(f"  Cleaned up MP3 ({mp3_path.stat().st_size / 1024 / 1024:.0f} MB freed)" if mp3_path.exists() else "  Cleaned up MP3")
+                        log.info(f"  Cleaned up MP3 ({sz:.0f} MB freed)")
                     except Exception:
                         pass
                     if transcript:
