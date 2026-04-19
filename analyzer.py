@@ -396,60 +396,52 @@ class AgendaAnalyzer:
 
     SYNTHESIS_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
 
-You are given ALL research gathered on one agenda item. Synthesize into the OCA standard debrief format shown below. This replaces the initial analysis — same structure, but enriched with everything learned from analyst notes, transcript, chat research, and legislative history.
+Synthesize ALL research on this agenda item into the OCA debrief format below. Plain, professional language. Be specific — names, dollar amounts, dates. No jargon, no filler.
 
-Write in plain, professional language. Be specific — name vendors, dollar amounts, dates, who said what. No bureaucratic jargon. No filler. If a sentence does not carry a fact, cut it.
+CRITICAL RULE — NO REPETITION:
+Every fact appears ONCE in the ENTIRE document. If you stated a dollar amount in Fiscal Impact, do NOT repeat it in Watch Points. If you described a service cut in Purpose and Background, do NOT restate it in Additional Notes. Each section adds ONLY new information. Before writing each section, ask: "Did I already say this above?" If yes, skip it.
 
-OUTPUT FORMAT RULES — MANDATORY:
-- Do NOT use markdown. No **, no ##, no *, no _, no ``` anywhere.
-- Do NOT add meta-commentary like "Based on the provided documents..."
-- Plain text only. Use bullet character "•" for bullet points.
-- CAPS for section headers. Never start with a preamble.
+OUTPUT FORMAT RULES:
+- No markdown. No **, ##, *, _, ``` anywhere. Plain text only.
+- Use bullet character "•" for all bullets.
+- CAPS for section headers. No preamble or meta-commentary.
 
-EXACT FORMAT TO FOLLOW:
+FORMAT:
 
 • ITEM [number] – [Short Title]
 
 • Sponsor: [Commissioner or Department name]
 
-• 1-sentence summary: [One clear sentence explaining what this item actually does in plain language. Be specific — not "approves service changes" but "adds 12 bus runs on Route 601, eliminates Route 7A airport service, and adjusts evening frequencies on 4 routes effective April 27."]
+• 1-sentence summary: [One plain-language sentence — what this item actually does. Be specific.]
 
 • District(s): [Affected district(s), or "Countywide"]
 
 • Purpose and Background:
-  • [Key fact or context — what triggered this item, mandate, prior resolution]
-  • [What committees reviewed it, key dates in the journey]
-  • [For procurement: vendor name, contract history, past performance, controversies]
-  • [What changed between versions if applicable]
-  • [Key data points and metrics from the source documents]
-  • [Include findings from analyst notes, chat research, legislative history, transcript discussion — weave them in naturally alongside PDF facts]
-  • [4-8 bullets. Each bullet is labeled if helpful (e.g., "Legislative Mandate:", "2025 Caseload:", "Performance Metrics:"). Each bullet is 1-2 sentences with specific detail.]
+  • [What triggered this item — mandate, prior resolution, operational need]
+  • [Committee review history, key dates]
+  • [For procurement: vendor, contract history, performance issues]
+  • [Key data points and metrics]
+  • [3-5 bullets MAX. Each bullet 1-2 sentences. Label if helpful.]
 
 • Fiscal Impact:
-  • [Funding source and budget line]
-  • [Specific dollar amounts — total, per-year, per-unit where applicable]
-  • [Actual expenditures vs budget if available]
-  • [Flag discrepancies or gaps across sources]
-  • [2-4 bullets with labeled sub-points if helpful]
+  • [Dollar amounts, funding source, budget line]
+  • [Flag gaps or discrepancies]
+  • [2-3 bullets MAX. Do NOT repeat amounts from above.]
 
 • Additional Notes:
-  • [Key findings not covered above — staffing, exclusions, implementation details]
-  • [Committee discussion: who raised concerns, what was said, vote outcome, tone]
-  • [Anything from reviewer notes or chat research the Commission Auditor needs]
-  • [1-4 bullets. Only include what matters.]
+  • [ONLY info not covered in any section above — implementation details, equity concerns, committee tone/discussion]
+  • [1-2 bullets MAX. If nothing new to add, write "None beyond above."]
 
-• WATCH POINTS: [2-4 sentences. What should the Commission Auditor flag for Commissioners? Specific and actionable, informed by all sources.]
+• WATCH POINTS: [2-3 sentences MAX. Actionable flags for Commissioners. Do NOT repeat facts — reference them briefly if needed ("the undocumented July savings") and state what action is needed.]
 
 ---WATCH_POINTS---
-• [Clean bullet list of watch points for extraction. Max 4 bullets.]
+• [Max 3 bullets. Brief, actionable. No repeated facts.]
 
 RULES:
-- Follow the EXACT format above. Same headers, same structure, same bullet style.
-- Plain language — professional but clear. Explain what things mean.
-- Be specific: numbers, names, dates, who said what. No vague summaries.
-- If a section has nothing substantive, keep the header but write "None identified."
-- Reconcile conflicting sources. Note discrepancies.
-- Target 400-600 words depending on item complexity."""
+- ZERO repetition across sections. This is the #1 rule.
+- Target 250-350 words total. One page maximum.
+- If a section has nothing new, write "None identified."
+- Every sentence must carry a fact. Cut anything that doesn't."""
 
     def synthesize_debrief(self, sources: dict) -> tuple:
         """Synthesize all research into a single comprehensive debrief.
@@ -509,7 +501,7 @@ RULES:
 
         text, usage = self._call_api(
             self.SYNTHESIS_PROMPT,
-            msg, max_tokens=1800, use_web_search=False, cache_system=True,
+            msg, max_tokens=1200, use_web_search=False, cache_system=True,
         )
 
         text = clean_markdown(text)
