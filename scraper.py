@@ -71,18 +71,29 @@ class MiamiDadeScraper:
             resp = self.session.get(url, timeout=30)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
-            dates, date_to_id = [], {}
+            dates, date_to_ids = [], {}
+            seen_dates = set()
             for select in soup.find_all("select"):
                 for opt in select.find_all("option"):
                     oid = opt.get("value", "").strip()
                     otxt = opt.get_text(strip=True)
                     m = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", otxt)
                     if m:
-                        dates.append(m.group(1))
-                        date_to_id[m.group(1)] = oid
+                        d = m.group(1)
+                        # Store ALL agenda IDs for each date (handles
+                        # supplemental/OTHER agendas on the same date)
+                        date_to_ids.setdefault(d, []).append({
+                            "id": oid, "label": otxt
+                        })
+                        # Only add the date string once to the dates list
+                        if d not in seen_dates:
+                            dates.append(d)
+                            seen_dates.add(d)
                 if dates:
                     break
-            self._form_cache[committee_code] = {"date_to_id": date_to_id}
+            self._form_cache[committee_code] = {"date_to_ids": date_to_ids}
+            log.info(f"    Found {len(dates)} dates, "
+                     f"{sum(len(v) for v in date_to_ids.values())} total agendas")
             return dates
         except Exception as e:
             log.error(f"  Error: {e}")
@@ -105,33 +116,61 @@ class MiamiDadeScraper:
 
     def get_agenda_items(self, committee_code, committee_name, date):
         form_info = self._form_cache.get(committee_code, {})
-        date_to_id = form_info.get("date_to_id", {})
-        meeting_id = date_to_id.get(date, "")
-        if not meeting_id:
+        # Support both old format (date_to_id) and new format (date_to_ids)
+        date_to_ids = form_info.get("date_to_ids", {})
+        if not date_to_ids:
+            # Legacy fallback
+            old = form_info.get("date_to_id", {})
+            if old.get(date):
+                date_to_ids = {date: [{"id": old[date], "label": date}]}
+
+        agenda_entries = date_to_ids.get(date, [])
+        if not agenda_entries:
             return []
-        agenda_url = (f"{BASE_URL}legistarfiles/SourceCode/searchforpdf.asp"
-                      f"?documentKey={meeting_id}&documenttype=agenda")
-        log.info(f"  Fetching agenda: {committee_name} ({date})")
-        try:
-            resp = self.session.get(agenda_url, timeout=60, allow_redirects=True)
-            resp.raise_for_status()
-            ct = resp.headers.get("Content-Type", "").lower()
-            if "pdf" in ct or resp.url.lower().endswith(".pdf"):
-                pp = PDF_CACHE_DIR / f"agenda_{committee_code}_{meeting_id}.pdf"
-                pp.write_bytes(resp.content)
-                return [{
-                    "committee_item_number": "1",
-                    "matter_id": meeting_id,
-                    "item_number": "Full Agenda",
-                    "title": committee_name,
-                    "pdf_url": resp.url,
-                    "pdf_path": str(pp),
-                    "page_text": "",
-                }]
-            return self._parse_committee_agenda(resp.text, resp.url)
-        except Exception as e:
-            log.error(f"  Failed: {e}")
-            return []
+
+        all_items = []
+        seen_matter_ids = set()
+        for entry in agenda_entries:
+            meeting_id = entry["id"]
+            label = entry.get("label", date)
+            agenda_url = (f"{BASE_URL}legistarfiles/SourceCode/searchforpdf.asp"
+                          f"?documentKey={meeting_id}&documenttype=agenda")
+            log.info(f"  Fetching agenda: {committee_name} ({label})")
+            try:
+                resp = self.session.get(agenda_url, timeout=60, allow_redirects=True)
+                resp.raise_for_status()
+                ct = resp.headers.get("Content-Type", "").lower()
+                if "pdf" in ct or resp.url.lower().endswith(".pdf"):
+                    pp = PDF_CACHE_DIR / f"agenda_{committee_code}_{meeting_id}.pdf"
+                    pp.write_bytes(resp.content)
+                    items = [{
+                        "committee_item_number": "1",
+                        "matter_id": meeting_id,
+                        "item_number": "Full Agenda",
+                        "title": committee_name,
+                        "pdf_url": resp.url,
+                        "pdf_path": str(pp),
+                        "page_text": "",
+                    }]
+                else:
+                    items = self._parse_committee_agenda(resp.text, resp.url)
+
+                # Merge items, skip duplicates (same matter_id already seen)
+                for item in items:
+                    mid = str(item.get("matter_id", ""))
+                    if mid and mid in seen_matter_ids:
+                        continue
+                    if mid:
+                        seen_matter_ids.add(mid)
+                    all_items.append(item)
+
+                if len(agenda_entries) > 1:
+                    log.info(f"    → {len(items)} items from {label} "
+                             f"({len(all_items)} total so far)")
+            except Exception as e:
+                log.error(f"  Failed fetching {label}: {e}")
+
+        return all_items
 
     def _parse_committee_agenda(self, html, base_url):
         """Parse committee agenda HTML — captures sub-items like 3A1, 1G1."""
