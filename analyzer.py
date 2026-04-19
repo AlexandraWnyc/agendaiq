@@ -417,25 +417,27 @@ PURPOSE AND BACKGROUND:
 - [Where this came from — prior resolutions, mandates, or triggering events.]
 - [What committees reviewed it. Key dates in the item's journey.]
 - [What changed between versions or stages, if anything.]
-- [Relevant prior legislation, news, vendor history, or controversy from research.]
+- [For procurement items: name the vendor/contractor, contract history, past performance, any prior controversies or protests. For policy items: relevant prior legislation, news coverage, public opposition or support.]
 - [3-5 bullets. Each bullet is 1-2 sentences with specific detail.]
 
 FISCAL IMPACT:
 - [Specific dollar amounts, funding sources, per-district vs countywide.]
+- [For contracts: original vs amended amounts, cost per unit, comparisons to market or prior contracts.]
 - [Cross-reference numbers across sources. Flag gaps or discrepancies.]
 - [2-3 bullets.]
 
 COMMITTEE DISCUSSION:
-- [Who raised concerns and what specifically they asked or challenged.]
-- [Commitments made by staff or sponsors in response.]
-- [Vote outcome and any conditions or amendments.]
-- [Capture the tone — was there pushback, consensus, skepticism?]
+- [Name the Commissioners who spoke. What specifically did they ask or challenge?]
+- [What did department staff or the sponsor commit to in response?]
+- [Were there concerns about vendors, costs, timelines, equity, or implementation?]
+- [Vote outcome — unanimous? Split? Any conditions, amendments, or deferrals?]
+- [Tone: was there pushback, skepticism, tension with staff, or smooth consensus?]
 - [Omit this entire section if no transcript available.]
 
 KEY CONCERNS:
-- [Findings from analyst notes, chat research, reviewer notes that are not covered above.]
-- [Equity impacts, implementation risks, missing documentation.]
-- [2-4 bullets. Only include what matters for the Commission Auditor's decision.]
+- [Findings from analyst notes, chat research, reviewer notes not covered above.]
+- [Equity impacts, implementation risks, missing documentation, vendor red flags.]
+- [2-4 bullets. Only what matters for the Commission Auditor's decision.]
 
 WATCH POINTS:
 - [Specific, actionable items to flag for Commissioners.]
