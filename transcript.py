@@ -36,15 +36,11 @@ MIN_DISK_FREE_MB = 100  # don't download if less than 100MB free
 YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
 YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@miami-dadebcc6863"
 
-# Miami-Dade webcasting pages — these have direct MP3 download links
-MIAMIDADE_ARCHIVES_URL = "https://www.miamidade.gov/global/webcasting/meetings-archives.page"
-MIAMIDADE_BCC_URL = "https://www.miamidade.gov/global/webcasting/bcc-committee-meetings.page"
-MIAMIDADE_COMMITTEES_URL = "https://www.miamidade.gov/global/webcasting/regular-and-zoning-meetings.page"
-
-# Granicus streaming archive (fallback)
-GRANICUS_ARCHIVE_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=2"
-GRANICUS_SEARCH_URL = "https://miamidade.granicus.com/ViewSearchResults.php"
-GRANICUS_RSS_URL = "https://miamidade.granicus.com/ViewPublisherRSS.php?view_id=2"
+# Granicus streaming archive — direct MP3 download links in page HTML
+# view_id=3: BCC meetings, BCC Zoning, special meetings
+# view_id=4: All other committee meetings
+GRANICUS_BCC_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=3"
+GRANICUS_COMMITTEES_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=4"
 
 # Known committee name aliases — maps canonical DB names to patterns
 # that might appear in YouTube video titles.  The fuzzy matcher uses
@@ -116,107 +112,15 @@ def _granicus_headers():
     return {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 
-def _scrape_miamidade_page_for_mp3(page_url: str, committee_name: str,
-                                    date_patterns: list, target_dt: datetime) -> dict | None:
-    """Scrape a Miami-Dade webcasting page for MP3 links matching committee + date.
-
-    These pages list meetings with direct MP3 audio download links.
-    We look for <a> tags with .mp3 in the href, then match the surrounding
-    text for committee name and date.
-    """
-    import requests
-    from bs4 import BeautifulSoup
-
-    log.info(f"  Fetching: {page_url}")
-    try:
-        resp = requests.get(page_url, timeout=30, headers=_granicus_headers())
-        resp.raise_for_status()
-    except Exception as e:
-        log.warning(f"  Failed to fetch {page_url}: {e}")
-        return None
-
-    raw = resp.text
-    soup = BeautifulSoup(raw, "html.parser")
-
-    best_match = None
-    best_score = 0
-
-    # Strategy A: Find MP3 links in <a> tags
-    for link in soup.find_all("a", href=True):
-        href = link.get("href", "")
-        if ".mp3" not in href.lower():
-            continue
-
-        # Get context: parent row, parent div, or nearby text
-        # Try table row first
-        row = link.find_parent("tr")
-        if row:
-            row_text = row.get_text(" ", strip=True)
-        else:
-            # Try parent list item or div
-            parent = link.find_parent(["li", "div", "p", "section"])
-            row_text = parent.get_text(" ", strip=True) if parent else link.get_text(strip=True)
-
-        # Check date match
-        date_match = any(dp.lower() in row_text.lower() for dp in date_patterns)
-        if not date_match:
-            continue
-
-        # Check committee name match
-        name_score = _committee_match_score(committee_name, row_text)
-        log.info(f"  MP3 candidate: score={name_score:.2f} href={href[:80]}… text='{row_text[:100]}'")
-
-        if name_score >= 0.20 and name_score > best_score:
-            best_score = name_score
-            mp3_url = href if href.startswith("http") else f"https://www.miamidade.gov{href}"
-            best_match = {
-                "mp3_url": mp3_url,
-                "title": row_text[:120],
-                "page_url": page_url,
-                "match_score": name_score + 1.0,
-            }
-
-    # Strategy B: Also scan raw HTML for MP3 URLs not in <a> tags
-    if not best_match:
-        mp3_urls = re.findall(r'https?://[^"\s\'<>]+\.mp3[^"\s\'<>]*', raw, re.IGNORECASE)
-        for mp3_url in mp3_urls:
-            mp3_url = mp3_url.rstrip("\\\"');,}")
-            # Try to find surrounding context
-            idx = raw.find(mp3_url)
-            if idx >= 0:
-                context = raw[max(0, idx-300):idx+len(mp3_url)+100]
-                # Strip tags for matching
-                context_text = re.sub(r'<[^>]+>', ' ', context)
-                date_match = any(dp.lower() in context_text.lower() for dp in date_patterns)
-                if date_match:
-                    name_score = _committee_match_score(committee_name, context_text)
-                    if name_score >= 0.20 and name_score > best_score:
-                        best_score = name_score
-                        best_match = {
-                            "mp3_url": mp3_url,
-                            "title": context_text.strip()[:120],
-                            "page_url": page_url,
-                            "match_score": name_score + 1.0,
-                        }
-
-    if best_match:
-        log.info(f"  Found MP3: {best_match['mp3_url'][:80]}…")
-    else:
-        # Log how many MP3 links were found total (helps debug)
-        all_mp3 = [a["href"] for a in soup.find_all("a", href=True) if ".mp3" in a["href"].lower()]
-        raw_mp3 = re.findall(r'https?://[^"\s\'<>]+\.mp3', raw, re.IGNORECASE)
-        log.info(f"  No match on {page_url} ({len(all_mp3)} MP3 <a> tags, {len(raw_mp3)} MP3 URLs in source)")
-
-    return best_match
-
-
 def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
-    """Search for an MP3 audio recording matching committee + date.
+    """Search Granicus archive pages for an MP3 matching committee + date.
 
-    Strategy 1: Miami-Dade meetings archive page (ALL meetings, direct MP3 links)
-    Strategy 2: Miami-Dade BCC committee meetings page
-    Strategy 3: Miami-Dade regular & zoning meetings page
-    Strategy 4: Granicus archive page (fallback, recent ~10 meetings only)
+    Scrapes two Granicus ViewPublisher pages that have direct MP3 links:
+      - view_id=3: BCC meetings, BCC Zoning, special meetings
+      - view_id=4: All other committee meetings
+
+    Each page lists meetings in table rows with format:
+      Meeting Name | Timestamp | Date | Duration | Video | ... | MP3 Audio | MP4 Video
 
     Returns: {"mp3_url": str, "title": str, "page_url": str} or None
     """
@@ -229,42 +133,26 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
         log.warning(f"  Invalid meeting date: {meeting_date}")
         return None
 
-    # Build date patterns to match against page text
+    # Date patterns that appear in Granicus row text
+    # Format: "Apr 15, 2026" or "Apr  7, 2026" (double space for single-digit days)
     date_patterns = [
         target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}",   # "Apr 7, 2026"
         target_dt.strftime("%b %d, %Y"),                                     # "Apr 07, 2026"
         target_dt.strftime("%b") + f"  {target_dt.day}, {target_dt.year}",  # "Apr  7, 2026"
-        target_dt.strftime("%B %d, %Y"),                                     # "April 07, 2026"
-        target_dt.strftime("%B") + f" {target_dt.day}, {target_dt.year}",   # "April 7, 2026"
-        f"{target_dt.month}/{target_dt.day}/{target_dt.year}",              # "4/7/2026"
-        target_dt.strftime("%m/%d/%Y"),                                      # "04/07/2026"
     ]
 
     log.info(f"  Searching for '{committee_name}' on {meeting_date}")
 
-    # ── Strategy 1: Miami-Dade meetings archive (ALL meetings in one page) ──
-    result = _scrape_miamidade_page_for_mp3(
-        MIAMIDADE_ARCHIVES_URL, committee_name, date_patterns, target_dt)
-    if result:
-        return result
+    # Search both Granicus pages
+    for page_url in [GRANICUS_COMMITTEES_URL, GRANICUS_BCC_URL]:
+        log.info(f"  Checking: {page_url}")
+        try:
+            resp = requests.get(page_url, timeout=30, headers=_granicus_headers())
+            resp.raise_for_status()
+        except Exception as e:
+            log.warning(f"  Failed to fetch {page_url}: {e}")
+            continue
 
-    # ── Strategy 2: BCC committee meetings page ──
-    result = _scrape_miamidade_page_for_mp3(
-        MIAMIDADE_BCC_URL, committee_name, date_patterns, target_dt)
-    if result:
-        return result
-
-    # ── Strategy 3: Regular & zoning meetings page ──
-    result = _scrape_miamidade_page_for_mp3(
-        MIAMIDADE_COMMITTEES_URL, committee_name, date_patterns, target_dt)
-    if result:
-        return result
-
-    # ── Strategy 4: Granicus archive (fallback, last ~10 meetings) ──
-    log.info(f"  Granicus fallback: {GRANICUS_ARCHIVE_URL}")
-    try:
-        resp = requests.get(GRANICUS_ARCHIVE_URL, timeout=30, headers=_granicus_headers())
-        resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "html.parser")
 
         best_match = None
@@ -274,31 +162,41 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
             href = link.get("href", "")
             if ".mp3" not in href.lower():
                 continue
+
+            # Get the parent table row text
             row = link.find_parent("tr")
             if not row:
                 continue
-            cells = row.find_all("td")
-            if len(cells) < 2:
+            row_text = row.get_text(" ", strip=True)
+
+            # Check date match
+            if not any(dp.lower() in row_text.lower() for dp in date_patterns):
                 continue
-            row_name = cells[0].get_text(strip=True)
-            row_date_text = cells[1].get_text(strip=True)
-            if not any(dp.lower() in row_date_text.lower() for dp in date_patterns):
+
+            # Check committee name match
+            name_score = _committee_match_score(committee_name, row_text)
+            if name_score < 0.20:
                 continue
-            name_score = _committee_match_score(committee_name, row_name)
-            if name_score >= 0.25 and (name_score + 1.0) > best_score:
-                best_score = name_score + 1.0
+
+            log.info(f"  Match: score={name_score:.2f} '{row_text[:100]}'")
+
+            if name_score > best_score:
+                best_score = name_score
+                mp3_url = href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
                 best_match = {
-                    "mp3_url": href if href.startswith("http") else f"https://miamidade.granicus.com/{href}",
-                    "title": row_name,
-                    "page_url": GRANICUS_ARCHIVE_URL,
-                    "match_score": best_score,
+                    "mp3_url": mp3_url,
+                    "title": row_text[:120],
+                    "page_url": page_url,
+                    "match_score": name_score + 1.0,
                 }
 
         if best_match:
-            log.info(f"  Granicus fallback found: {best_match['mp3_url'][:80]}…")
+            log.info(f"  Found MP3: {best_match['mp3_url'][:80]}…")
             return best_match
-    except Exception as e:
-        log.warning(f"  Granicus fallback failed: {e}")
+
+        # Log total MP3 links found on page for diagnostics
+        all_mp3 = [a["href"] for a in soup.find_all("a", href=True) if ".mp3" in a.get("href", "").lower()]
+        log.info(f"  No match on page ({len(all_mp3)} MP3 links found, none matched)")
 
     log.info(f"  No MP3 found for '{committee_name}' {meeting_date}")
     return None
