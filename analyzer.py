@@ -394,55 +394,53 @@ class AgendaAnalyzer:
     # Synthesized Debrief
     # ─────────────────────────────────────────────────────────
 
-    SYNTHESIS_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
+    SYNTHESIS_PROMPT = """You are preparing a debrief for the Commission Auditor at Miami-Dade County. He will use this to brief Commissioners in under 30 seconds per item. Every fact you write MUST come directly from the source materials provided. If you cannot find it in the sources, do not state it.
 
-Synthesize ALL research on this agenda item into the OCA debrief format below.
+YOUR JOB:
+1. ACCURACY FIRST. Only state facts that are explicitly in the source documents. If a number, name, date, or claim appears in your output, it must be traceable to the sources. Do not infer, assume, or extrapolate.
+2. COMPLETENESS. Include every important detail from the sources — dollar amounts, where the money comes from, who pays, what the item changes, what happened before, what is projected. The Commission Auditor cannot be caught off guard.
+3. PLAIN LANGUAGE. If the source uses a technical term (e.g., "lineup," "BRT," "RFP"), explain what it means in parentheses on first use. The Commissioners are not transit experts or procurement specialists.
+4. NEUTRAL TONE. You are a briefer, not a critic. State what the materials say. If information is missing from the materials, say "not addressed in materials" — never "undocumented," "unsupported," "failed to provide," or any accusatory language.
+5. NO REPETITION. Each fact appears exactly ONCE in the entire output. Each section adds only NEW information.
 
-TONE — THIS IS CRITICAL:
-You are a neutral briefer, not an investigator. The Commission Auditor uses this to prepare Commissioners — she must walk in informed, not adversarial.
-- State what the materials SAY. If something is not in the materials, say "not included in materials provided" or "details to be confirmed with department."
-- NEVER use words like: "undocumented," "unsupported," "unsubstantiated," "failed to provide," "no justification," "lacks transparency." These are conclusions, not facts.
-- NEVER editorialize. Wrong: "making it impossible to validate." Right: "ridership data not included in the brief."
-- Frame gaps as questions to ask, not accusations to make.
-
-CRITICAL RULE — NO REPETITION:
-Every fact appears ONCE in the ENTIRE document. Each section adds ONLY new information. Before writing each section, check: "Did I already say this?" If yes, skip it.
-
-OUTPUT FORMAT RULES:
-- No markdown. No **, ##, *, _, ``` anywhere. Plain text only.
-- Use bullet character "•" for all bullets.
-- CAPS for section headers. No preamble or meta-commentary.
+OUTPUT FORMAT — MANDATORY:
+- Plain text only. No markdown (no **, ##, *, _). Use "•" for bullets. CAPS for headers.
 
 FORMAT:
 
 • ITEM [number] – [Short Title]
 
-• Sponsor: [Commissioner or Department name]
+• Sponsor: [name]
 
-• Summary: [One sentence, MAX 20 words. What does this item do in plain English? Example: "Adjusts bus routes and frequencies countywide, adds 12 BRT runs, and eliminates Route 7A airport service."]
+• What this does: [1-2 sentences in plain English. What changes if this passes? Be specific — routes, amounts, dates.]
 
-• District(s): [Affected district(s), or "Countywide"]
+• District(s): [district or "Countywide"]
 
-• Purpose and Background:
-  • [3-5 bullets MAX. Each 1-2 sentences. What triggered it, key context, committee history, data points.]
+• Key Facts:
+  • [What triggered this — mandate, contract requirement, prior action. Explain terms.]
+  • [What specifically changes — services added, removed, modified. Dates.]
+  • [History — what happened before this item, prior lineups/cycles, past savings or costs]
+  • [Committee review, public input, or legislative history if any]
+  • [3-5 bullets. Each bullet 1-2 sentences with specific detail from the source documents.]
 
-• Fiscal Impact:
-  • [2-3 bullets MAX. Dollar amounts, funding source. Note where details are still pending from department.]
+• Money:
+  • [How much does this cost and what is the money for? Be specific.]
+  • [Where does the money come from? What fund, budget line, or offset?]
+  • [Any projected savings, past savings from similar actions, or future cost implications mentioned in the materials]
+  • [2-4 bullets. Every dollar amount must come from the source documents.]
 
-• Additional Notes:
-  • [1-2 bullets MAX. ONLY info not already stated above. If nothing new: "None beyond above."]
-
-• QUESTIONS FOR DEPARTMENT: [2-3 bullet points. Frame information gaps as specific questions the Commission Auditor can ask. Example: "Has DTPW provided the itemized breakdown of July 2026 service reductions and projected savings?"]
+• What to ask the department:
+  • [Specific questions about information not addressed in the materials. Frame as questions.]
+  • [2-3 bullets MAX. Only include if there are genuine gaps.]
 
 ---WATCH_POINTS---
-• [Max 3 bullets. Brief, specific questions or areas to monitor. Neutral tone.]
+• [Max 3 bullets. Key things to monitor or ask about. Neutral, specific.]
 
 RULES:
-- ZERO repetition across sections. #1 rule.
-- NEUTRAL tone. #2 rule. You inform, you do not accuse.
-- Target 250-350 words total. One page maximum.
-- Summary must be ONE short sentence (under 20 words).
-- Every sentence must carry a fact. Cut filler."""
+- If you are not 100% certain a fact is in the source materials, DO NOT include it.
+- Explain jargon. "Lineup" = scheduled service adjustment cycle. "BRT" = Bus Rapid Transit. Etc.
+- Target 300-400 words. Must fit on one page.
+- No filler sentences. Every sentence carries a fact from the sources."""
 
     def synthesize_debrief(self, sources: dict) -> tuple:
         """Synthesize all research into a single comprehensive debrief.
