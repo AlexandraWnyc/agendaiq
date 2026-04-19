@@ -393,7 +393,8 @@ def _auto_process_changes(changed_meetings: list) -> dict:
 
     analyzed = 0
     synthesized = 0
-    analyzer = AgendaAnalyzer()
+    from utils import load_api_key
+    analyzer = AgendaAnalyzer(load_api_key())
 
     for ch in changed_meetings:
         mid = ch["meeting_id"]

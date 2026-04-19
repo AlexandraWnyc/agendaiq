@@ -7239,7 +7239,7 @@ def api_appearance_reanalyze(app_id):
                     prior += f"\n[Prior {pa.get('body_name','')} {pa.get('meeting_date','')}]\n"
                     prior += pa["ai_summary_for_appearance"][:1000] + "\n"
 
-            analyzer = AgendaAnalyzer()
+            analyzer = AgendaAnalyzer(load_api_key())
             part1, part2, full, meta = analyzer.analyze_item(
                 item_number=item_num,
                 title=title,
@@ -7383,7 +7383,7 @@ def api_synthesize_debrief(app_id):
             sources['legislative_history'] = leg_history
 
             # Run synthesis
-            analyzer = AgendaAnalyzer()
+            analyzer = AgendaAnalyzer(load_api_key())
             debrief, watch_points, usage = analyzer.synthesize_debrief(sources)
 
             # Save to DB
@@ -7467,7 +7467,7 @@ def api_matter_reanalyze_all(matter_id):
                             prior += f"\n[Prior {pa.get('body_name','')} {pa.get('meeting_date','')}]\n"
                             prior += pa["ai_summary_for_appearance"][:1000] + "\n"
 
-                    analyzer = AgendaAnalyzer()
+                    analyzer = AgendaAnalyzer(load_api_key())
                     part1, part2, full, meta = analyzer.analyze_item(
                         item_number=item_num, title=title, pdf_text=pdf_text,
                         committee_name=committee, prior_context=prior,
@@ -7571,7 +7571,7 @@ def api_meeting_reanalyze_all(meeting_id):
                         prior += f"\n[Prior {pa.get('body_name','')} {pa.get('meeting_date','')}]\n"
                         prior += pa["ai_summary_for_appearance"][:1000] + "\n"
 
-                analyzer = AgendaAnalyzer()
+                analyzer = AgendaAnalyzer(load_api_key())
                 part1, part2, full, meta = analyzer.analyze_item(
                     item_number=item_num, title=title, pdf_text=pdf_text,
                     committee_name=committee, prior_context=prior,
