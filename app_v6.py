@@ -1165,8 +1165,16 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <table>
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="sel-all" onchange="selAll(this)"></th>
-          <th>App#</th><th>File #</th><th>Title</th><th>Item #</th><th>Stage</th>
-          <th>Status</th><th>Assigned To</th><th>Due Date</th><th>Priority</th><th></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','id')">ID <span id="sort-wf-id" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','file')">File # <span id="sort-wf-file" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','title')">Title <span id="sort-wf-title" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','item')">Item # <span id="sort-wf-item" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','stage')">Stage <span id="sort-wf-stage" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','status')">Status <span id="sort-wf-status" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','assigned')">Assigned To <span id="sort-wf-assigned" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','due')">Due Date <span id="sort-wf-due" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('wf','priority')">Priority <span id="sort-wf-priority" class="sort-icon-wf" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th></th>
         </tr></thead>
         <tbody id="wf-tbody">
           <tr><td colspan="11" style="padding:1.25rem;color:var(--gray-400)">Loading…</td></tr>
@@ -1456,8 +1464,12 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>Date</th><th>Body</th><th>Type</th>
-          <th>Items</th><th>Progress</th><th>Package Status</th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mtg','date')">Date <span id="sort-mtg-date" class="sort-icon-mtg" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mtg','body')">Body <span id="sort-mtg-body" class="sort-icon-mtg" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mtg','type')">Type <span id="sort-mtg-type" class="sort-icon-mtg" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mtg','items')">Items <span id="sort-mtg-items" class="sort-icon-mtg" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mtg','progress')">Progress <span id="sort-mtg-progress" class="sort-icon-mtg" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mtg','status')">Package Status <span id="sort-mtg-status" class="sort-icon-mtg" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
           <th>Exports</th><th></th>
         </tr></thead>
         <tbody id="mtg-tbody">
@@ -1598,18 +1610,26 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <table style="min-width:1600px">
         <thead><tr>
           <th style="width:30px"><input type="checkbox" id="md-select-all" onchange="toggleSelectAll(this)" title="Select all"></th>
-          <th>File #</th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','file')">File # <span id="sort-md-file" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
           <th title="Analysis confidence: 🟢 = all clear, 🟡 = warnings, 🔴 = needs attention. Click item for details.">⚑</th>
           <th title="Links: ↗ opens Legistar matter page, 📄 downloads the item PDF">Links</th>
-          <th>Cmte Date</th><th>Cmte #</th>
-          <th>BCC Date</th><th>BCC #</th>
-          <th>Title</th><th>Type</th><th>Leg Status</th>
-          <th>Sponsor / Requester</th><th>Control</th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','cmteDate')">Cmte Date <span id="sort-md-cmteDate" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','cmteNum')">Cmte # <span id="sort-md-cmteNum" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','bccDate')">BCC Date <span id="sort-md-bccDate" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','bccNum')">BCC # <span id="sort-md-bccNum" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','title')">Title <span id="sort-md-title" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','type')">Type <span id="sort-md-type" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','legStatus')">Leg Status <span id="sort-md-legStatus" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','sponsor')">Sponsor <span id="sort-md-sponsor" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th>Control</th>
           <th title="Chronological path showing every stage this item has passed through. Current stage is highlighted.">Journey</th>
           <th title="What needs to happen next based on Legistar legislative status and control body.">What's Next</th>
           <th title="✓ if this matter has analyst/reviewer notes from a previous appearance">Prior Notes</th>
           <th>History</th>
-          <th>Workflow</th><th>Assigned</th><th>Reviewer</th><th>Due</th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','workflow')">Workflow <span id="sort-md-workflow" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','assigned')">Assigned <span id="sort-md-assigned" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th>Reviewer</th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('md','due')">Due <span id="sort-md-due" class="sort-icon-md" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
           <th>Notes</th><th></th>
         </tr></thead>
         <tbody id="md-items"></tbody>
@@ -1649,8 +1669,15 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>File #</th><th title="Analysis confidence flags">⚑</th><th>Title</th><th>Meeting</th><th>Body</th>
-          <th>Status</th><th>Notes</th><th>Due Date</th><th></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','file')">File # <span id="sort-mi-file" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th title="Analysis confidence flags">⚑</th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','title')">Title <span id="sort-mi-title" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','meeting')">Meeting <span id="sort-mi-meeting" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','body')">Body <span id="sort-mi-body" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','status')">Status <span id="sort-mi-status" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th>Notes</th>
+          <th style="cursor:pointer;user-select:none" onclick="tblSort('mi','due')">Due Date <span id="sort-mi-due" class="sort-icon-mi" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>
+          <th></th>
         </tr></thead>
         <tbody id="mi-tbody">
           <tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">Select a researcher to view their items.</td></tr>
@@ -2254,6 +2281,20 @@ async function loadWorkflow() {
     return;
   }
 
+  // Apply sort within groups
+  const _wfFieldMap = {
+    id: a => a.id,
+    file: a => a.file_number || '',
+    title: a => a.short_title || '',
+    item: a => a.committee_item_number || a.bcc_item_number || a.raw_agenda_item_number || '',
+    stage: a => a.agenda_stage || '',
+    status: a => a.workflow_status || '',
+    assigned: a => a.assigned_to || '',
+    due: a => a.due_date || '',
+    priority: a => a.priority || '',
+  };
+  d = getSortedRows('wf', d, _wfFieldMap);
+
   // Group by meeting (body_name + meeting_date), newest meeting first
   const groups={};
   d.forEach(a=>{
@@ -2267,7 +2308,7 @@ async function loadWorkflow() {
     const due_lbl=a._due_label||a.due_date||'—';
     return `<tr class="clickable" onclick="openDrawer('${esc(a.file_number)}',${a.id})">
       <td onclick="event.stopPropagation()"><input type="checkbox" class="row-sel" value="${a.id}"></td>
-      <td style="font-size:.75rem;color:var(--gray-400)">${a.id}</td>
+      <td style="font-size:.75rem;color:var(--gray-400)" title="Internal appearance ID">${a.id}</td>
       <td><span class="file-link">${a.file_number}</span></td>
       <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.short_title||'')}</td>
       <td style="font-size:.72rem">${esc(a.committee_item_number||a.bcc_item_number||a.raw_agenda_item_number||'')}</td>
@@ -5121,6 +5162,15 @@ function filterMeetingsTable() {
     const hay = [m.body_name, m.meeting_date, m.meeting_type, m.status].join(' ').toLowerCase();
     return hay.includes(q);
   });
+  // Apply sort
+  rows = getSortedRows('mtg', rows, {
+    date: m => m.meeting_date || '',
+    body: m => m.body_name || '',
+    type: m => m.meeting_type || '',
+    items: m => m.total || 0,
+    progress: m => m.total ? m.finalized / m.total : 0,
+    status: m => m.status || '',
+  });
   const tb = document.getElementById('mtg-tbody');
   document.getElementById('mtg-count').textContent = `${rows.length} meeting(s)`;
   if (!rows.length) {
@@ -5421,7 +5471,7 @@ function _renderItemsGrid() {
   const bodyLower = (m.body_name||'').toLowerCase();
   const isBCC = bodyLower.includes('bcc') || bodyLower.includes('board of county');
 
-  const filtered = _mdItems.filter(it => {
+  let filtered = _mdItems.filter(it => {
     if (q && !((it.file_number||'').toLowerCase().includes(q) ||
                (it.short_title||it.appearance_title||'').toLowerCase().includes(q) ||
                (it.bcc_item_number||'').toLowerCase().includes(q) ||
@@ -5441,6 +5491,23 @@ function _renderItemsGrid() {
     if (sx === 'unnotes' && (it.has_analyst_notes || it.has_reviewer_notes || it.has_finalized_brief)) return false;
     return true;
   });
+
+  // Apply column sort (if user clicked a header)
+  const _mdSorted = getSortedRows('md', filtered, {
+    file: i => i.file_number || '',
+    cmteDate: i => i.committee_date || '',
+    cmteNum: i => i.committee_item_number || '',
+    bccDate: i => i.bcc_date || '',
+    bccNum: i => i.bcc_item_number || '',
+    title: i => i.short_title || i.appearance_title || '',
+    type: i => i.file_type || '',
+    legStatus: i => i.current_status || '',
+    sponsor: i => i.sponsor || '',
+    workflow: i => i.workflow_status || '',
+    assigned: i => i.assigned_to || '',
+    due: i => i.due_date || '',
+  });
+  filtered = _mdSorted;
 
   // Confidence summary for the full (unfiltered) set
   const _redCount = _mdItems.filter(i => i.confidence === 'red').length;
@@ -5649,7 +5716,16 @@ async function loadMyItems() {
   if (status) url += `&status=${encodeURIComponent(status)}`;
   if (due) url += `&due=${encodeURIComponent(due)}`;
   const r = await fetch(url);
-  const rows = await r.json();
+  let rows = await r.json();
+  // Apply sort
+  rows = getSortedRows('mi', rows, {
+    file: a => a.file_number || '',
+    title: a => a.short_title || '',
+    meeting: a => a.meeting_date || '',
+    body: a => a.body_name || '',
+    status: a => a.workflow_status || '',
+    due: a => a.due_date || '',
+  });
   document.getElementById('mi-count').textContent = `${rows.length} item(s)`;
   const tb = document.getElementById('mi-tbody');
   if (!rows.length) {
@@ -5679,6 +5755,56 @@ async function loadMyItems() {
       </td>
     </tr>`;
   }).join('');
+}
+
+// ════════════════════════════════════════════════════════════
+// Generic table sorting
+// ════════════════════════════════════════════════════════════
+const _sortState = {};  // { tableName: { col, asc } }
+
+function tblSort(table, col) {
+  const s = _sortState[table] || { col: null, asc: true };
+  if (s.col === col) { s.asc = !s.asc; }
+  else { s.col = col; s.asc = true; }
+  _sortState[table] = s;
+  // Update header indicators
+  document.querySelectorAll(`.sort-icon-${table}`).forEach(el => { el.textContent = '⇅'; });
+  const active = document.getElementById(`sort-${table}-${col}`);
+  if (active) active.textContent = s.asc ? '↑' : '↓';
+  // Trigger re-render
+  const renderers = {
+    mtg: filterMeetingsTable,
+    md: renderItemsGrid,
+    wf: loadWorkflow,
+    mi: loadMyItems,
+  };
+  if (renderers[table]) renderers[table]();
+}
+
+function getSortedRows(table, rows, fieldMap) {
+  const s = _sortState[table];
+  if (!s || !s.col) return rows;
+  const getter = fieldMap[s.col];
+  if (!getter) return rows;
+  const sorted = [...rows].sort((a, b) => {
+    let va = getter(a), vb = getter(b);
+    // Handle nulls
+    if (va == null) va = '';
+    if (vb == null) vb = '';
+    // Numeric comparison if both are numbers
+    const na = typeof va === 'number' ? va : parseFloat(va);
+    const nb = typeof vb === 'number' ? vb : parseFloat(vb);
+    if (!isNaN(na) && !isNaN(nb)) return s.asc ? na - nb : nb - na;
+    // String comparison
+    va = String(va).toLowerCase();
+    vb = String(vb).toLowerCase();
+    return s.asc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+  return sorted;
+}
+
+function sortHdr(table, col, label, extra) {
+  return `<th style="cursor:pointer;user-select:none;${extra||''}" onclick="tblSort('${table}','${col}')">${label} <span id="sort-${table}-${col}" class="sort-icon-${table}" style="font-size:.65rem;color:var(--gray-400)">⇅</span></th>`;
 }
 
 // ════════════════════════════════════════════════════════════
