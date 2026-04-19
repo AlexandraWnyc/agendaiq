@@ -73,12 +73,12 @@ def list_saved_meetings(limit: int = 200) -> list[dict]:
     """Every meeting that has at least one appearance, with package status."""
     with get_db() as conn:
         rows = conn.execute(
-            """SELECT m.*, COUNT(a.id) as item_count,
+            """SELECT m.*, COUNT(a.id) as appearance_count,
                       MAX(a.updated_at) as last_activity
                FROM meetings m
                LEFT JOIN appearances a ON a.meeting_id=m.id
                GROUP BY m.id
-               HAVING item_count > 0
+               HAVING appearance_count > 0
                ORDER BY m.meeting_date DESC, m.body_name ASC
                LIMIT ?""",
             (limit,),
