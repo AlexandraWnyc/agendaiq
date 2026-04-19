@@ -130,16 +130,57 @@ def _normalize_date(d: str) -> str:
     return d.strip()  # already ISO or unknown — return as-is
 
 
+def _date_variants(iso_date: str) -> list:
+    """Return all plausible date format variants for matching legacy rows.
+
+    The database may contain dates as 'YYYY-MM-DD' or 'M/D/YYYY'.
+    Given an ISO date string, return both formats for comparison.
+    """
+    variants = [iso_date]
+    try:
+        dt = datetime.strptime(iso_date, "%Y-%m-%d")
+        slash = f"{dt.month}/{dt.day}/{dt.year}"  # M/D/YYYY (no zero-padding)
+        if slash != iso_date:
+            variants.append(slash)
+    except ValueError:
+        pass
+    return variants
+
+
 def get_or_create_meeting(body_name: str, meeting_date: str, **kwargs) -> int:
     """Find an existing meeting row or create one. Returns meeting id."""
     meeting_date = _normalize_date(meeting_date)
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT id FROM meetings WHERE body_name=? AND meeting_date=?",
-            (body_name, meeting_date)
-        ).fetchone()
-        if row:
-            return row["id"]
+        # Check for both ISO and legacy M/D/YYYY formats in the DB
+        for dv in _date_variants(meeting_date):
+            row = conn.execute(
+                "SELECT id FROM meetings WHERE body_name=? AND meeting_date=?",
+                (body_name, dv)
+            ).fetchone()
+            if row:
+                updates = []
+                params = []
+                # Normalize the stored date to ISO if it was in legacy format
+                if dv != meeting_date:
+                    updates.append("meeting_date=?")
+                    params.append(meeting_date)
+                # Fix meeting_type if caller provides one and existing is wrong
+                new_type = kwargs.get("meeting_type")
+                if new_type:
+                    cur = conn.execute(
+                        "SELECT meeting_type FROM meetings WHERE id=?",
+                        (row["id"],)
+                    ).fetchone()
+                    if cur and cur["meeting_type"] != new_type:
+                        updates.append("meeting_type=?")
+                        params.append(new_type)
+                if updates:
+                    params.append(row["id"])
+                    conn.execute(
+                        f"UPDATE meetings SET {','.join(updates)} WHERE id=?",
+                        params
+                    )
+                return row["id"]
 
         now = now_iso()
         cols = ["body_name", "meeting_date", "created_at", "updated_at"]

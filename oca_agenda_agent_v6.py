@@ -247,17 +247,29 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                                        and "board of county" not in bn_low)
                             if not is_cmte:
                                 continue
+                            # Skip if the lifecycle event date matches the
+                            # current meeting date — those items are already
+                            # in this meeting, no stub needed.
+                            from repository import _normalize_date as _nd
+                            if ev_date == _nd(adate):
+                                continue
                             # Skip if we already have an appearance at that meeting
                             try:
                                 from db import get_db as _gdb
+                                from repository import _date_variants
+                                _ev_variants = _date_variants(ev_date)
                                 with _gdb() as _c:
-                                    existing = _c.execute(
-                                        """SELECT a.id FROM appearances a
-                                           JOIN meetings m ON m.id=a.meeting_id
-                                           WHERE a.matter_id=? AND m.meeting_date=?
-                                             AND LOWER(m.body_name)=LOWER(?)""",
-                                        (matter_id, ev_date, ev_body)
-                                    ).fetchone()
+                                    existing = None
+                                    for _dv in _ev_variants:
+                                        existing = _c.execute(
+                                            """SELECT a.id FROM appearances a
+                                               JOIN meetings m ON m.id=a.meeting_id
+                                               WHERE a.matter_id=? AND m.meeting_date=?
+                                                 AND LOWER(m.body_name)=LOWER(?)""",
+                                            (matter_id, _dv, ev_body)
+                                        ).fetchone()
+                                        if existing:
+                                            break
                                 if existing:
                                     continue
                             except Exception:

@@ -179,6 +179,8 @@ def init_db():
                             conn.execute(stmt)
                         except Exception:
                             pass
+                    # Normalize any legacy M/D/YYYY dates to ISO format
+                    _normalize_meeting_dates(conn)
             except Exception as e:
                 _disk_full_mode = True
                 log.warning(f"Migrations skipped (disk issue): {e}")

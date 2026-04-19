@@ -28,6 +28,12 @@ app = Flask(__name__)
 JOBS: dict = {}
 
 
+def _compute_confidence_flags(a: dict) -> tuple:
+    """Wrapper — delegates to shared confidence_flags module."""
+    from confidence_flags import compute_confidence_flags
+    return compute_confidence_flags(a)
+
+
 def _current_user() -> str:
     """Extract the username from Basic Auth header, or 'anonymous'."""
     auth = request.headers.get("Authorization", "")
@@ -1334,6 +1340,29 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           <div id="pa-test-result" style="margin-top:.5rem;font-size:.78rem;display:none"></div>
         </div>
       </div>
+      <div class="card" style="margin-top:1rem">
+        <div class="ch"><div class="ch-left"><div class="cicon">🧹</div>Data Maintenance</div></div>
+        <div class="cb">
+          <p style="font-size:.78rem;color:var(--gray-600);margin-bottom:.75rem;">
+            Use these tools to clean up test data. <strong style="color:#dc2626">These actions cannot be undone.</strong></p>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+            <button class="btn btn-sm" onclick="clearWorkflowHistory()"
+              style="background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;font-size:.8rem">
+              🗑 Clear All Workflow History
+            </button>
+            <span style="font-size:.72rem;color:#94a3b8">Deletes all history entries, resets all items to "New", clears assignments and due dates.</span>
+          </div>
+          <div id="clear-history-result" style="margin-top:.5rem;font-size:.78rem;display:none"></div>
+          <div style="display:flex;gap:.5rem;flex-wrap:wrap;align-items:center;margin-top:.75rem">
+            <button class="btn btn-sm" onclick="fixMeetingDates()"
+              style="background:#eff6ff;color:#1d4ed8;border:1px solid #93c5fd;font-size:.8rem">
+              🔧 Fix Meeting Dates &amp; Duplicates
+            </button>
+            <span style="font-size:.72rem;color:#94a3b8">Normalizes date formats, merges duplicate meetings, fixes BCC meeting types.</span>
+          </div>
+          <div id="fix-dates-result" style="margin-top:.5rem;font-size:.78rem;display:none"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -1521,6 +1550,38 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <button class="btn btn-o btn-xs" onclick="clearItemFilters()" style="margin-bottom:.75rem">Reset</button>
       </div>
     </div>
+    <!-- Bulk Action Bar (hidden until checkboxes selected) -->
+    <div id="bulk-action-bar" style="display:none;padding:.6rem 1.1rem;background:linear-gradient(135deg,#eff6ff,#dbeafe);
+      border-bottom:1px solid #93c5fd;align-items:center;gap:.75rem;flex-wrap:wrap">
+      <span id="bulk-count" style="font-weight:700;color:#1e40af;font-size:.85rem">0 selected</span>
+      <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap">
+        <div>
+          <label style="font-size:.7rem;color:#1e40af;margin-bottom:.15rem">Assign To</label>
+          <input type="text" id="bulk-assign-to" placeholder="Analyst name" style="margin:0;width:130px;font-size:.8rem;padding:.25rem .4rem">
+        </div>
+        <div>
+          <label style="font-size:.7rem;color:#1e40af;margin-bottom:.15rem">Reviewer</label>
+          <input type="text" id="bulk-reviewer" placeholder="Reviewer name" style="margin:0;width:130px;font-size:.8rem;padding:.25rem .4rem">
+        </div>
+        <div>
+          <label style="font-size:.7rem;color:#1e40af;margin-bottom:.15rem">Due Date</label>
+          <input type="date" id="bulk-due-date" style="margin:0;width:140px;font-size:.8rem;padding:.25rem .4rem">
+        </div>
+        <div>
+          <label style="font-size:.7rem;color:#1e40af;margin-bottom:.15rem">Status</label>
+          <select id="bulk-status" style="margin:0;width:130px;font-size:.8rem;padding:.25rem .4rem">
+            <option value="">— Don't change —</option>
+            <option value="New">New</option>
+            <option value="Assigned">Assigned</option>
+            <option value="In Progress">In Progress</option>
+          </select>
+        </div>
+        <button class="btn btn-p btn-sm" onclick="applyBulkAssign()" style="font-size:.8rem;padding:.3rem .75rem;background:#1e40af">
+          Apply to Selected
+        </button>
+        <button class="btn btn-o btn-xs" onclick="clearBulkSelection()" style="font-size:.75rem">Clear</button>
+      </div>
+    </div>
     <!-- Confidence Flag Key -->
     <div id="flag-key" style="padding:.4rem 1.1rem .5rem;background:#f8fafc;border-bottom:1px solid var(--gray-200);
       display:flex;align-items:center;gap:1rem;flex-wrap:wrap;font-size:.73rem;color:#475569">
@@ -1536,6 +1597,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="tbl-wrap">
       <table style="min-width:1600px">
         <thead><tr>
+          <th style="width:30px"><input type="checkbox" id="md-select-all" onchange="toggleSelectAll(this)" title="Select all"></th>
           <th>File #</th>
           <th title="Analysis confidence: 🟢 = all clear, 🟡 = warnings, 🔴 = needs attention. Click item for details.">⚑</th>
           <th title="Links: ↗ opens Legistar matter page, 📄 downloads the item PDF">Links</th>
@@ -1587,11 +1649,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="tbl-wrap">
       <table>
         <thead><tr>
-          <th>File #</th><th>Title</th><th>Meeting</th><th>Body</th>
+          <th>File #</th><th title="Analysis confidence flags">⚑</th><th>Title</th><th>Meeting</th><th>Body</th>
           <th>Status</th><th>Notes</th><th>Due Date</th><th></th>
         </tr></thead>
         <tbody id="mi-tbody">
-          <tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">Select a researcher to view their items.</td></tr>
+          <tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">Select a researcher to view their items.</td></tr>
         </tbody>
       </table>
     </div>
@@ -1648,6 +1710,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <table id="mp-table">
           <thead><tr>
             <th style="width:30px"></th>
+            <th style="width:36px" title="Analysis confidence flags">⚑</th>
             <th style="width:60px;cursor:pointer" onclick="mpSort('risk')">Risk <span class="mp-sort-icon">⇅</span></th>
             <th style="width:90px;cursor:pointer" onclick="mpSort('researcher')">Researcher <span class="mp-sort-icon">⇅</span></th>
             <th style="width:55px;cursor:pointer" onclick="mpSort('position')">Pos. <span class="mp-sort-icon">⇅</span></th>
@@ -1657,7 +1720,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
             <th style="width:300px">Notes / Final Analysis</th>
           </tr></thead>
           <tbody id="mp-tbody">
-            <tr><td colspan="8" style="padding:1.5rem;color:var(--gray-400);text-align:center">Loading…</td></tr>
+            <tr><td colspan="9" style="padding:1.5rem;color:var(--gray-400);text-align:center">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -4547,6 +4610,51 @@ async function testPowerAutomate() {
   }
 }
 
+async function clearWorkflowHistory() {
+  if (!confirm('This will DELETE all workflow history entries and RESET every item to "New" with no assignments or due dates.\\n\\nThis cannot be undone. Continue?')) return;
+  const el = document.getElementById('clear-history-result');
+  el.style.display = 'block';
+  el.innerHTML = '<span style="color:#6b7280">Clearing…</span>';
+  try {
+    const r = await fetch('/api/workflow-history/clear', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({reset_status: true}),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      el.innerHTML = `<span style="color:#059669">Done — ${d.history_deleted} history entries deleted, ${d.appearances_reset} items reset to New.</span>`;
+      toast(`Cleared ${d.history_deleted} history entries, reset ${d.appearances_reset} items`, 'ok');
+    } else {
+      el.innerHTML = `<span style="color:#dc2626">Error: ${d.error}</span>`;
+    }
+  } catch(e) {
+    el.innerHTML = `<span style="color:#dc2626">Error: ${e.message}</span>`;
+  }
+}
+
+async function fixMeetingDates() {
+  if (!confirm('This will normalize all meeting dates to ISO format, merge duplicates, and fix BCC meeting types.\\n\\nContinue?')) return;
+  const el = document.getElementById('fix-dates-result');
+  el.style.display = 'block';
+  el.innerHTML = '<span style="color:#6b7280">Fixing…</span>';
+  try {
+    const r = await fetch('/api/meetings/fix-dates', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+    });
+    const d = await r.json();
+    if (d.ok) {
+      el.innerHTML = `<span style="color:#059669">Done — ${d.meetings_normalized} meetings with ISO dates, ${d.bcc_type_fixed} BCC types fixed.</span>`;
+      toast(`Fixed meeting dates and types`, 'ok');
+    } else {
+      el.innerHTML = `<span style="color:#dc2626">Error: ${d.error}</span>`;
+    }
+  } catch(e) {
+    el.innerHTML = `<span style="color:#dc2626">Error: ${e.message}</span>`;
+  }
+}
+
 // ════════════════════════════════════════════════════════════
 // Saved Meetings + Meeting Detail
 // ════════════════════════════════════════════════════════════
@@ -5050,10 +5158,33 @@ function filterMeetingsTable() {
           <button class="btn btn-p btn-xs" onclick="genFinal(${m.id},this)"
             ${m.finalized === m.total && m.total > 0 ? '' : 'disabled title="All items must be Finalized"'}
             >★ Export Whole Agenda</button>
+          <button class="btn btn-xs" onclick="deleteMeeting(${m.id},'${esc(m.body_name)} (${esc(m.date)})',this)"
+            style="background:#fef2f2;color:#dc2626;border:1px solid #fca5a5"
+            title="Delete this meeting and all its items">🗑</button>
         </div>
       </td>
     </tr>`;
   }).join('');
+}
+
+async function deleteMeeting(meetingId, label, btn) {
+  if (!confirm(`Delete "${label}" and ALL its items?\\n\\nThis cannot be undone.`)) return;
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await fetch(`/api/meetings/${meetingId}`, {method:'DELETE'});
+    const d = await r.json();
+    if (d.ok) {
+      toast(`Deleted meeting — ${d.appearances_removed} items removed`, 'ok');
+      loadMeetings();
+    } else {
+      toast(`Error: ${d.error}`, 'err');
+      btn.disabled = false; btn.textContent = prev;
+    }
+  } catch(e) {
+    toast(`Error: ${e.message}`, 'err');
+    btn.disabled = false; btn.textContent = prev;
+  }
 }
 
 async function openMeeting(meetingId) {
@@ -5137,9 +5268,16 @@ function renderMeetingDetail(pkg) {
   }).join('') : '<p style="color:var(--gray-400);font-size:.82rem">No exports yet. Click Regenerate Draft to create them.</p>';
 
   // Cache items for filtering — sort by agenda position (natural order)
+  // For BCC meetings, prefer bcc_item_number; for committee, prefer committee_item_number
+  const _isBccMeeting = (m.body_name||'').toLowerCase().includes('board of county')
+    || (m.body_name||'').toLowerCase().includes('bcc');
   items.sort((a, b) => {
-    const pa = naturalSortKey(a.bcc_item_number || a.committee_item_number || a.raw_agenda_item_number || 'ZZZ').join('|');
-    const pb = naturalSortKey(b.bcc_item_number || b.committee_item_number || b.raw_agenda_item_number || 'ZZZ').join('|');
+    const _getNum = (it) => {
+      if (_isBccMeeting) return it.bcc_item_number || it.raw_agenda_item_number || it.committee_item_number || 'ZZZ';
+      return it.committee_item_number || it.raw_agenda_item_number || it.bcc_item_number || 'ZZZ';
+    };
+    const pa = naturalSortKey(_getNum(a)).join('|');
+    const pb = naturalSortKey(_getNum(b)).join('|');
     return pa < pb ? -1 : pa > pb ? 1 : 0;
   });
   _mdItems = items;
@@ -5150,7 +5288,7 @@ function renderMeetingDetail(pkg) {
   // If the API truly returned zero items, tell the user plainly — otherwise
   // the table just looks "broken".
   if (items.length === 0) {
-    document.getElementById('md-items').innerHTML = `<tr><td colspan="22" style="padding:1.5rem;text-align:center">
+    document.getElementById('md-items').innerHTML = `<tr><td colspan="23" style="padding:1.5rem;text-align:center">
       <div style="font-size:1.4rem;margin-bottom:.3rem">📭</div>
       <div style="font-weight:600;color:var(--ink)">This meeting has no appearances stored yet.</div>
       <div style="font-size:.78rem;color:var(--gray-600);margin-top:.35rem">
@@ -5188,12 +5326,83 @@ function clearItemFilters() {
   renderItemsGrid();
 }
 
+// ── Bulk selection + assign ─────────────────────────────────
+function toggleSelectAll(masterCb) {
+  document.querySelectorAll('.md-row-cb').forEach(cb => { cb.checked = masterCb.checked; });
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const checked = document.querySelectorAll('.md-row-cb:checked');
+  const bar = document.getElementById('bulk-action-bar');
+  if (checked.length > 0) {
+    bar.style.display = 'flex';
+    document.getElementById('bulk-count').textContent = `${checked.length} selected`;
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+function clearBulkSelection() {
+  document.querySelectorAll('.md-row-cb').forEach(cb => { cb.checked = false; });
+  const master = document.getElementById('md-select-all');
+  if (master) master.checked = false;
+  updateBulkBar();
+}
+
+async function applyBulkAssign() {
+  const ids = [...document.querySelectorAll('.md-row-cb:checked')].map(cb => parseInt(cb.dataset.id));
+  if (!ids.length) { toast('No items selected', 'err'); return; }
+
+  const payload = { appearance_ids: ids, changed_by: 'admin' };
+  const assignTo = document.getElementById('bulk-assign-to').value.trim();
+  const reviewer = document.getElementById('bulk-reviewer').value.trim();
+  const dueDate  = document.getElementById('bulk-due-date').value;
+  const status   = document.getElementById('bulk-status').value;
+
+  if (!assignTo && !reviewer && !dueDate && !status) {
+    toast('Fill in at least one field to apply', 'err');
+    return;
+  }
+
+  if (assignTo) payload.assigned_to = assignTo;
+  if (reviewer) payload.reviewer = reviewer;
+  if (dueDate)  payload.due_date = dueDate;
+  if (status)   payload.status = status;
+
+  const btn = document.querySelector('#bulk-action-bar .btn-p');
+  const prev = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Applying…';
+
+  const r = await fetch('/api/appearances/bulk-assign', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  });
+  const d = await r.json();
+  btn.disabled = false; btn.textContent = prev;
+
+  if (d.ok) {
+    toast(`Updated ${d.updated} of ${d.total} items`, 'ok');
+    clearBulkSelection();
+    // Clear inputs
+    document.getElementById('bulk-assign-to').value = '';
+    document.getElementById('bulk-reviewer').value = '';
+    document.getElementById('bulk-due-date').value = '';
+    document.getElementById('bulk-status').value = '';
+    // Refresh the grid
+    if (currentMeetingId) openMeeting(currentMeetingId);
+  } else {
+    toast(d.error || 'Bulk assign failed', 'err');
+  }
+}
+
 function renderItemsGrid() {
   try { return _renderItemsGrid(); }
   catch (e) {
     console.error('renderItemsGrid failed:', e);
     const tb = document.getElementById('md-items');
-    if (tb) tb.innerHTML = `<tr><td colspan="22" style="padding:1rem;color:var(--red)">
+    if (tb) tb.innerHTML = `<tr><td colspan="23" style="padding:1rem;color:var(--red)">
       <b>Render error:</b> ${(e&&e.message)||e}<br>
       <span style="font-size:.72rem;color:#64748b">Open DevTools → Console for the full stack trace. Items are loaded (${_mdItems.length}) but couldn't render.</span>
     </td></tr>`;
@@ -5246,7 +5455,7 @@ function _renderItemsGrid() {
 
   const tbody = document.getElementById('md-items');
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="22" style="padding:1rem;color:var(--gray-400)">No items match these filters.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="23" style="padding:1rem;color:var(--gray-400)">No items match these filters.</td></tr>';
     return;
   }
 
@@ -5322,6 +5531,7 @@ function _renderItemsGrid() {
     }
 
     return `<tr class="clickable" onclick="openDrawer('${esc(it.file_number)}',${it.id})">
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="md-row-cb" data-id="${it.id}" onchange="updateBulkBar()"></td>
       <td><span class="file-link">${it.file_number||''}</span></td>
       <td style="text-align:center;padding:0 .3rem;white-space:nowrap">${_flagCell}</td>
       <td onclick="event.stopPropagation()">${linksCell}</td>
@@ -5431,7 +5641,7 @@ async function loadMyItems() {
   const due = document.getElementById('mi-due').value;
   if (!who) {
     document.getElementById('mi-tbody').innerHTML =
-      '<tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">Pick a researcher (top-right user menu) to view your assigned items.</td></tr>';
+      '<tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">Pick a researcher (top-right user menu) to view your assigned items.</td></tr>';
     document.getElementById('mi-count').textContent = '';
     return;
   }
@@ -5443,15 +5653,21 @@ async function loadMyItems() {
   document.getElementById('mi-count').textContent = `${rows.length} item(s)`;
   const tb = document.getElementById('mi-tbody');
   if (!rows.length) {
-    tb.innerHTML = '<tr><td colspan="8" style="padding:1.25rem;color:var(--gray-400)">No items match these filters.</td></tr>';
+    tb.innerHTML = '<tr><td colspan="9" style="padding:1.25rem;color:var(--gray-400)">No items match these filters.</td></tr>';
     return;
   }
   tb.innerHTML = rows.map(a => {
     const due_cls = a._due_class||'due-none';
     const due_lbl = a._due_label||a.due_date||'—';
     const hasNotes = (a.analyst_working_notes||'').trim() ? '📝' : '';
+    // Confidence flags
+    const _fl = a.confidence_flags || [];
+    const _fDots = _fl.length === 0
+      ? '<span style="color:#16a34a;font-size:.7rem">●</span>'
+      : _fl.map(f => `<span title="${esc(f.label)}: ${esc(f.detail)}" style="color:${f.color||'#dc2626'};font-size:.7rem;cursor:help${f.level==='red'?';animation:pulse-flag 1.5s ease-in-out infinite':''}">\u25CF</span>`).join('');
     return `<tr class="clickable" onclick="openDrawer('${esc(a.file_number)}',${a.id})">
       <td><span class="file-link">${a.file_number}</span></td>
+      <td style="text-align:center;white-space:nowrap;padding:0 .3rem">${_fDots}</td>
       <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.short_title||'')}</td>
       <td style="white-space:nowrap;font-size:.75rem">${fmtDate(a.meeting_date)}</td>
       <td style="font-size:.72rem">${esc(a.body_name||'')}</td>
@@ -5571,7 +5787,7 @@ function openMeetingPrep(meetingId) {
   currentMeetingId = meetingId;
   showPg('meeting-prep');
   document.getElementById('mp-title').textContent = 'Loading…';
-  document.getElementById('mp-tbody').innerHTML = '<tr><td colspan="8" style="padding:1.5rem;color:var(--gray-400);text-align:center">Loading…</td></tr>';
+  document.getElementById('mp-tbody').innerHTML = '<tr><td colspan="9" style="padding:1.5rem;color:var(--gray-400);text-align:center">Loading…</td></tr>';
   loadMeetingPrep(meetingId);
 }
 
@@ -5714,7 +5930,7 @@ function renderMeetingPrepTable() {
   const tbody = document.getElementById('mp-tbody');
 
   if (!items.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="padding:1.5rem;color:var(--gray-400);text-align:center">No items match your filter</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="padding:1.5rem;color:var(--gray-400);text-align:center">No items match your filter</td></tr>';
     return;
   }
 
@@ -5761,8 +5977,15 @@ function renderMeetingPrepTable() {
     const status = item.workflow_status || 'New';
     const statusBadge = `<span class="badge b-${status.replace(/\s/g,'')}" style="font-size:.65rem;padding:.15rem .4rem">${esc(status)}</span>`;
 
+    // Confidence flag dots
+    const _mpFlags = item.confidence_flags || [];
+    const _mpFlagDots = _mpFlags.length === 0
+      ? '<span style="color:#16a34a;font-size:.7rem">\u25CF</span>'
+      : _mpFlags.map(f => `<span title="${esc(f.label)}" style="color:${f.color||'#dc2626'};font-size:.7rem;cursor:help">\u25CF</span>`).join('');
+
     html += `<tr class="${rowClass}" onclick="mpToggleExpand(${item.id})">
       <td style="text-align:center"><span style="font-size:.7rem;color:var(--gray-400);transition:transform .2s;display:inline-block;${isExpanded?'transform:rotate(90deg)':''}">▶</span></td>
+      <td style="text-align:center;white-space:nowrap">${_mpFlagDots}</td>
       <td><span class="mp-risk mp-risk-${risk}">${risk}</span></td>
       <td><span class="mp-researcher ${researcher?'':'mp-none'}">${esc(researcher||'—')}</span></td>
       <td style="font-weight:700;color:var(--blue);font-size:.85rem">${esc(pos)}</td>
@@ -5774,7 +5997,7 @@ function renderMeetingPrepTable() {
 
     // Expanded detail row
     if (isExpanded) {
-      html += `<tr class="mp-detail-row"><td colspan="8" style="padding:0;border-bottom:2px solid var(--blue-lt)">
+      html += `<tr class="mp-detail-row"><td colspan="9" style="padding:0;border-bottom:2px solid var(--blue-lt)">
         ${renderMpDetail(item)}
       </td></tr>`;
     }
@@ -6245,6 +6468,112 @@ def api_workflow_update(app_id):
         app.logger.warning(f"Notification error: {_e}")
 
     return jsonify({"ok": True})
+
+
+@app.route("/api/appearances/bulk-assign", methods=["POST"])
+def api_bulk_assign():
+    """Bulk-update assigned_to, reviewer, due_date, and/or workflow_status
+    for multiple appearances at once."""
+    import workflow as wf
+    d = request.get_json(force=True)
+    ids = d.get("appearance_ids", [])
+    if not ids:
+        return jsonify({"ok": False, "error": "No appearance IDs provided"}), 400
+
+    by = d.get("changed_by") or "system"
+    assigned_to = d.get("assigned_to")  # None = don't change
+    reviewer    = d.get("reviewer")
+    due_date    = d.get("due_date")
+    status      = d.get("status")
+    count = 0
+
+    for aid in ids:
+        try:
+            if assigned_to is not None:
+                wf.assign_appearance(aid, assigned_to, by)
+            if reviewer is not None:
+                wf.set_reviewer(aid, reviewer, by)
+            if due_date is not None:
+                wf.set_due_date(aid, due_date, by)
+            if status:
+                wf.set_workflow_status(aid, status, by)
+            count += 1
+        except Exception as e:
+            app.logger.warning(f"Bulk assign error for appearance {aid}: {e}")
+
+    return jsonify({"ok": True, "updated": count, "total": len(ids)})
+
+
+@app.route("/api/workflow-history/clear", methods=["POST"])
+def api_clear_workflow_history():
+    """Clear all workflow history and reset all workflow statuses to 'New'.
+    Intended for wiping test data."""
+    import db as _db
+    d = request.get_json(force=True) if request.is_json else {}
+    reset_status = d.get("reset_status", True)
+
+    with _db.get_db() as conn:
+        conn.execute("DELETE FROM workflow_history")
+        count = conn.execute("SELECT changes()").fetchone()[0]
+        if reset_status:
+            conn.execute("""UPDATE appearances SET
+                workflow_status='New',
+                assigned_to=NULL, reviewer=NULL,
+                assigned_date=NULL, due_date=NULL,
+                completion_date=NULL,
+                updated_at=?""", (now_iso(),))
+            reset_count = conn.execute("SELECT changes()").fetchone()[0]
+        else:
+            reset_count = 0
+
+    return jsonify({
+        "ok": True,
+        "history_deleted": count,
+        "appearances_reset": reset_count,
+    })
+
+
+@app.route("/api/meetings/fix-dates", methods=["POST"])
+def api_fix_meeting_dates():
+    """Normalize all meeting dates to ISO format and merge duplicates.
+    Also fixes meeting_type for BCC meetings incorrectly typed as 'committee'."""
+    import db as _db
+    from db import _normalize_meeting_dates
+    fixed = 0
+    with _db.get_db() as conn:
+        # Run the date normalization / merge logic
+        _normalize_meeting_dates(conn)
+        # Count how many meetings now have ISO dates
+        fixed = conn.execute(
+            "SELECT COUNT(*) FROM meetings WHERE meeting_date LIKE '____-__-__'"
+        ).fetchone()[0]
+        # Fix BCC meetings incorrectly typed as committee
+        conn.execute("""
+            UPDATE meetings SET meeting_type='bcc'
+            WHERE LOWER(body_name) LIKE '%board of county commissioner%'
+              AND meeting_type != 'bcc'
+        """)
+        bcc_fixed = conn.execute("SELECT changes()").fetchone()[0]
+    return jsonify({"ok": True, "meetings_normalized": fixed, "bcc_type_fixed": bcc_fixed})
+
+
+@app.route("/api/meetings/<int:meeting_id>", methods=["DELETE"])
+def api_delete_meeting(meeting_id):
+    """Delete a phantom/duplicate meeting and all its appearances."""
+    import db as _db
+    with _db.get_db() as conn:
+        # Count appearances that will be removed
+        app_count = conn.execute(
+            "SELECT COUNT(*) FROM appearances WHERE meeting_id=?", (meeting_id,)
+        ).fetchone()[0]
+        # Remove related data
+        conn.execute("DELETE FROM workflow_history WHERE appearance_id IN "
+                     "(SELECT id FROM appearances WHERE meeting_id=?)", (meeting_id,))
+        conn.execute("DELETE FROM appearances WHERE meeting_id=?", (meeting_id,))
+        conn.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
+        deleted = conn.execute("SELECT changes()").fetchone()[0]
+    return jsonify({"ok": True, "meeting_deleted": deleted > 0,
+                    "appearances_removed": app_count})
 
 
 @app.route("/api/appearance/<int:app_id>/notes", methods=["POST"])
@@ -7292,6 +7621,8 @@ def api_workflow():
             elif due <= (today + timedelta(days=7)).strftime("%Y-%m-%d"):
                 row["_due_class"]="due-soon"; row["_due_label"]=f"⏰ {due}"
             else: row["_due_class"]="due-ok"; row["_due_label"]=due
+        # Add confidence flags
+        row["confidence"], row["confidence_flags"] = _compute_confidence_flags(row)
         result.append(row)
     return jsonify(result)
 
