@@ -396,14 +396,14 @@ class AgendaAnalyzer:
 
     SYNTHESIS_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
 
-You are given ALL research gathered on one agenda item. Synthesize into a scannable debrief the Commission Auditor can read in under 2 minutes.
+You are given ALL research gathered on one agenda item. Synthesize into a debrief the Commission Auditor can absorb quickly — detailed but not wordy.
 
 STYLE — MANDATORY:
-- Bullet points for everything. No prose paragraphs. No filler words.
-- Every bullet starts with "- " and is one concise sentence or fact.
+- Bullet points for most content. Short prose sentences OK for context where bullets feel choppy.
 - No markdown (no **, ##, *, _). Plain text only. CAPS for headers.
-- No meta-commentary. No preamble. Go straight into output.
-- Write like a briefing memo, not an essay.
+- No meta-commentary or preamble. Go straight into output.
+- Be specific and substantive — say WHAT the changes are, WHAT the dollar amounts are, WHO said what. Never summarize vaguely (bad: "approves transit adjustments" — good: "approves Route 601/602 frequency increases, Route 7A discontinuation, and rail single-tracking changes").
+- No filler words or throat-clearing. Every sentence carries information.
 
 FORMAT:
 
@@ -411,45 +411,45 @@ ITEM [number] - [Short Title]
 Sponsor: [Name]
 District(s): [District or "Countywide"]
 
-WHAT IT DOES:
-- [One bullet. What this item actually does. Plain language.]
+SUMMARY: [2-3 sentences. What this item specifically does — include the actual substance, not just "approves changes." Name the key actions, amounts, and effective dates.]
 
-BACKGROUND AND HISTORY:
-- [Where this came from. Prior committee action. Key dates.]
-- [What changed between versions, if anything.]
-- [Any relevant prior legislation, news, or controversy.]
-- [Only include bullets that add real context. Skip if nothing to add.]
+PURPOSE AND BACKGROUND:
+- [Where this came from — prior resolutions, mandates, or triggering events.]
+- [What committees reviewed it. Key dates in the item's journey.]
+- [What changed between versions or stages, if anything.]
+- [Relevant prior legislation, news, vendor history, or controversy from research.]
+- [3-5 bullets. Each bullet is 1-2 sentences with specific detail.]
 
 FISCAL IMPACT:
-- [Dollar amount, funding source.]
-- [Flag discrepancies between PDF and other sources if any.]
+- [Specific dollar amounts, funding sources, per-district vs countywide.]
+- [Cross-reference numbers across sources. Flag gaps or discrepancies.]
+- [2-3 bullets.]
 
 COMMITTEE DISCUSSION:
-- [Who raised concerns and what they said. Specific names if available.]
-- [Key questions asked. Commitments made by staff/sponsors.]
-- [Vote outcome.]
+- [Who raised concerns and what specifically they asked or challenged.]
+- [Commitments made by staff or sponsors in response.]
+- [Vote outcome and any conditions or amendments.]
+- [Capture the tone — was there pushback, consensus, skepticism?]
 - [Omit this entire section if no transcript available.]
 
 KEY CONCERNS:
-- [Findings from analyst notes, chat research, reviewer notes.]
-- [Anything the Commission Auditor needs to know that is not obvious from the PDF.]
-- [Max 3-4 bullets. Only what matters.]
+- [Findings from analyst notes, chat research, reviewer notes that are not covered above.]
+- [Equity impacts, implementation risks, missing documentation.]
+- [2-4 bullets. Only include what matters for the Commission Auditor's decision.]
 
 WATCH POINTS:
-- [What to flag for Commissioners. Specific and actionable.]
-- [Informed by all sources — research, transcript, fiscal analysis.]
-- [Max 3-4 bullets.]
+- [Specific, actionable items to flag for Commissioners.]
+- [Informed by all sources — transcript, research, fiscal, analyst notes.]
+- [3-4 bullets.]
 
 ---WATCH_POINTS---
 - [Same watch points repeated here for extraction. Max 4 bullets.]
 
 RULES:
-- Bullets only. No paragraphs. No filler.
-- Every bullet must contain a specific fact, dollar amount, name, date, or actionable concern.
-- Cut anything that does not help the Commission Auditor make a decision.
-- If a section has nothing substantive, omit it entirely.
-- Reconcile conflicting sources. Flag discrepancies in one bullet.
-- Target 300-500 words total."""
+- Be detailed but not wordy. Specifics over generalities, always.
+- If a section has nothing substantive to add, omit it entirely.
+- Reconcile conflicting sources. Note discrepancies.
+- Target 400-600 words total."""
 
     def synthesize_debrief(self, sources: dict) -> tuple:
         """Synthesize all research into a single comprehensive debrief.
