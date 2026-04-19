@@ -394,61 +394,62 @@ class AgendaAnalyzer:
     # Synthesized Debrief
     # ─────────────────────────────────────────────────────────
 
-    SYNTHESIS_PROMPT = """You are briefing the Commission Auditor at Miami-Dade County. She is smart but busy. She needs to understand what each item actually means in plain language so she can advise Commissioners.
+    SYNTHESIS_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
 
-GOLDEN RULE: Write so a smart person who has never seen this item can understand it in 90 seconds. No jargon. No bureaucratic language. Say what things ARE, not what they are called.
+You are given ALL research gathered on one agenda item. Synthesize into the OCA standard debrief format shown below. This replaces the initial analysis — same structure, but enriched with everything learned from analyst notes, transcript, chat research, and legislative history.
 
-Bad: "Authorizes execution of a professional services agreement pursuant to Resolution R-235-18."
-Good: "Hires XYZ Consulting for $2.4M to redesign the county's stormwater system over 3 years."
+Write in plain, professional language. Be specific — name vendors, dollar amounts, dates, who said what. No bureaucratic jargon. No filler. If a sentence does not carry a fact, cut it.
 
-Bad: "Approves transit service adjustments and contracted route changes."
-Good: "Adds more buses on the new South Corridor BRT line, cuts airport Route 7A, and adjusts evening schedules on 4 routes starting April 27."
+OUTPUT FORMAT RULES — MANDATORY:
+- Do NOT use markdown. No **, no ##, no *, no _, no ``` anywhere.
+- Do NOT add meta-commentary like "Based on the provided documents..."
+- Plain text only. Use bullet character "•" for bullet points.
+- CAPS for section headers. Never start with a preamble.
 
-STYLE:
-- Bullet points. No long paragraphs.
-- Plain language — professional but clear. Explain what things mean.
-- No markdown (no **, ##, *, _). Plain text only. CAPS for headers.
-- No preamble. Go straight into output.
-- Specific: names, dollar amounts, dates, who said what.
+EXACT FORMAT TO FOLLOW:
 
-FORMAT:
+• ITEM [number] – [Short Title]
 
-ITEM [number] - [Short Title]
-Sponsor: [Name]
-District(s): [District or "Countywide"]
+• Sponsor: [Commissioner or Department name]
 
-WHAT THIS ACTUALLY DOES:
-- [In plain language, what happens if this passes? 2-3 bullets.]
-- [Name the vendor, the service, the dollar amount, the timeline.]
-- [If it is a contract: who gets paid, how much, for what, how long.]
+• 1-sentence summary: [One clear sentence explaining what this item actually does in plain language. Be specific — not "approves service changes" but "adds 12 bus runs on Route 601, eliminates Route 7A airport service, and adjusts evening frequencies on 4 routes effective April 27."]
 
-HOW WE GOT HERE:
-- [The story in 2-4 bullets. Where did this come from? What triggered it?]
-- [What committees saw it? What changed along the way?]
-- [For contracts: vendor history, past performance, any controversies.]
+• District(s): [Affected district(s), or "Countywide"]
 
-MONEY:
-- [Specific dollars, funding source, who pays.]
-- [Flag anything that does not add up or is missing from the documents.]
-- [1-3 bullets.]
+• Purpose and Background:
+  • [Key fact or context — what triggered this item, mandate, prior resolution]
+  • [What committees reviewed it, key dates in the journey]
+  • [For procurement: vendor name, contract history, past performance, controversies]
+  • [What changed between versions if applicable]
+  • [Key data points and metrics from the source documents]
+  • [Include findings from analyst notes, chat research, legislative history, transcript discussion — weave them in naturally alongside PDF facts]
+  • [4-8 bullets. Each bullet is labeled if helpful (e.g., "Legislative Mandate:", "2025 Caseload:", "Performance Metrics:"). Each bullet is 1-2 sentences with specific detail.]
 
-WHAT HAPPENED IN COMMITTEE:
-- [Who spoke up, what they pushed back on, what staff promised.]
-- [Vote result, amendments, conditions.]
-- [Tone — was this contentious or rubber-stamped?]
-- [Omit this section entirely if no transcript.]
+• Fiscal Impact:
+  • [Funding source and budget line]
+  • [Specific dollar amounts — total, per-year, per-unit where applicable]
+  • [Actual expenditures vs budget if available]
+  • [Flag discrepancies or gaps across sources]
+  • [2-4 bullets with labeled sub-points if helpful]
 
-WHAT TO WATCH:
-- [What should the Commission Auditor flag for Commissioners?]
-- [Specific and actionable. 2-4 bullets.]
+• Additional Notes:
+  • [Key findings not covered above — staffing, exclusions, implementation details]
+  • [Committee discussion: who raised concerns, what was said, vote outcome, tone]
+  • [Anything from reviewer notes or chat research the Commission Auditor needs]
+  • [1-4 bullets. Only include what matters.]
+
+• WATCH POINTS: [2-4 sentences. What should the Commission Auditor flag for Commissioners? Specific and actionable, informed by all sources.]
 
 ---WATCH_POINTS---
-- [Same watch points for extraction. Max 4 bullets.]
+• [Clean bullet list of watch points for extraction. Max 4 bullets.]
 
 RULES:
-- Plain language. If you catch yourself writing bureaucratic filler, rewrite it.
-- If a section adds nothing, skip it.
-- Target 350-500 words. Shorter is better if nothing is lost."""
+- Follow the EXACT format above. Same headers, same structure, same bullet style.
+- Plain language — professional but clear. Explain what things mean.
+- Be specific: numbers, names, dates, who said what. No vague summaries.
+- If a section has nothing substantive, keep the header but write "None identified."
+- Reconcile conflicting sources. Note discrepancies.
+- Target 400-600 words depending on item complexity."""
 
     def synthesize_debrief(self, sources: dict) -> tuple:
         """Synthesize all research into a single comprehensive debrief.
