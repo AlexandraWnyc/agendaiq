@@ -396,44 +396,37 @@ class AgendaAnalyzer:
 
     SYNTHESIS_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
 
-You are being given ALL research gathered on a single agenda item from multiple sources. Synthesize everything into one authoritative debrief following the OCA standard format below. This replaces the initial analysis — it must be better, not longer.
+You are given ALL research gathered on one agenda item. Produce a CONCISE debrief in OCA standard format. This replaces the initial analysis — it must be sharper, not longer. Keep the TOTAL output under 400 words.
 
-OUTPUT FORMAT RULES — MANDATORY:
-- Do NOT use markdown. No **, no ##, no *, no _, no ``` anywhere.
-- Do NOT add meta-commentary like "Based on the provided documents..." or "I'll analyze..."
-- Write in clean professional prose. Use plain text only.
-- For emphasis, just use CAPS for section headers.
-- For bullet points, start lines with a dash and space: "- "
-- Never start your response with a preamble. Go straight into the formatted output.
-
-PART 1 - OCA AGENDA DEBRIEF (Standardized Summary)
+OUTPUT RULES — MANDATORY:
+- No markdown. No **, ##, *, _, or ```. Plain text only.
+- No preamble or meta-commentary. Go straight into output.
+- CAPS for section headers. Dash-space ("- ") for bullets.
+- BE BRIEF. Every sentence must earn its place.
 
 ITEM [number] - [Short Title]
-Sponsor: [Commissioner or Department name only]
-Summary: [One sentence. What this item does.]
-District(s): [Affected district(s), or "Countywide"]
-Purpose and Background: [2-3 sentences of context. Incorporate what was learned from all research sources — not just the PDF.]
-Fiscal Impact: [Funding source, dollar amount, countywide vs district. Cross-reference numbers across sources. Flag discrepancies.]
-Additional Notes: [1-3 short bullets if applicable, each starting with "- ". Include key findings from analyst notes, chat research, and transcript discussion.]
+Sponsor: [Name only]
+Summary: [One sentence.]
+District(s): [District or "Countywide"]
+Purpose and Background: [2-3 sentences max.]
+Fiscal Impact: [Dollar amounts, source, flag discrepancies. 1-2 sentences.]
+Additional Notes:
+- [One bullet per key finding. Max 3 bullets. One sentence each.]
 
-WATCH POINTS: [1-2 sentences: what should the Commission Auditor flag for Commissioners on this item?]
-
-PART 2 - RESEARCH INTELLIGENCE
+WATCH POINTS: [1-2 sentences only.]
 
 RESEARCH CONTEXT:
-[Synthesize findings from ALL sources — web search results, analyst working notes, chat-based research, reviewer notes, and legislative history. Plain text paragraphs. Cite sources inline with parenthetical references. Cover: prior legislation, news, vendor history for procurement items, known controversy, peer jurisdiction context. If transcript discussion is available, incorporate key arguments and questions raised.]
-
-WATCH POINTS:
-[2-3 bullets on what Commissioners should watch for. Each starts with "- ". These should reflect the full picture from all research, not just the initial scan.]
+[One short paragraph. Only include findings that ADD to the debrief above — do not restate what is already in Purpose/Fiscal/Notes. Focus on: controversy, vendor history, peer context, legislative history.]
 
 ---WATCH_POINTS---
-[Repeat ONLY the watch points from both Part 1 and Part 2 as a clean bullet list here, one per line starting with "- ". This section will be extracted separately.]
+- [Consolidated bullet list of all watch points. Max 3 bullets.]
 
 RULES:
-- Reconcile conflicting information across sources. If sources disagree, note the discrepancy.
-- Do not repeat the same information across sections.
-- Prefer specifics (dollar amounts, dates, names) over generalities.
-- Be factual, concise, and non-interpretive. Work with available information and note gaps."""
+- Total output MUST be under 400 words. Brevity is mandatory.
+- Reconcile conflicting sources. Note discrepancies in one sentence.
+- Do not repeat information across sections.
+- Specifics (dollar amounts, dates, names) over generalities.
+- If a section has nothing new to add, omit it entirely."""
 
     def synthesize_debrief(self, sources: dict) -> tuple:
         """Synthesize all research into a single comprehensive debrief.
@@ -493,7 +486,7 @@ RULES:
 
         text, usage = self._call_api(
             self.SYNTHESIS_PROMPT,
-            msg, max_tokens=2000, use_web_search=False, cache_system=True,
+            msg, max_tokens=1200, use_web_search=False, cache_system=True,
         )
 
         text = clean_markdown(text)
