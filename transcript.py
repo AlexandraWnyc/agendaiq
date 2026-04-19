@@ -107,11 +107,41 @@ for canonical, aliases in COMMITTEE_ALIASES.items():
 
 # ── Granicus MP3 + Whisper transcription ─────────────────────
 
+def _granicus_headers():
+    return {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+
+def _find_mp3_on_clip_page(clip_id: str) -> str | None:
+    """Fetch a Granicus MediaPlayer page and extract the MP3 download URL."""
+    import requests
+    from bs4 import BeautifulSoup
+    try:
+        url = f"https://miamidade.granicus.com/MediaPlayer.php?view_id=2&clip_id={clip_id}"
+        resp = requests.get(url, timeout=20, headers=_granicus_headers())
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for a in soup.find_all("a", href=True):
+            if ".mp3" in a["href"].lower():
+                href = a["href"]
+                return href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
+        # Also check for direct download links
+        for a in soup.find_all("a", href=True):
+            if "archive-video.granicus.com" in a["href"]:
+                href = a["href"]
+                if ".mp3" in href or ".mp4" in href:
+                    # Prefer MP3 but take MP4 if that's all there is
+                    return href
+    except Exception as e:
+        log.warning(f"  Failed to fetch clip page {clip_id}: {e}")
+    return None
+
+
 def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
     """Search Granicus streaming archive for an MP3 matching committee + date.
 
-    Strategy 1: Search endpoint (returns ALL results, covers full archive)
-    Strategy 2: HTML scraper on main page (last ~10 meetings)
+    Strategy 1: Main page (has MP3 links directly, last ~10 meetings)
+    Strategy 2: Keyword search → find clip_id → fetch clip page for MP3
+    Strategy 3: Date search → find clip_id → fetch clip page for MP3
 
     Returns: {"mp3_url": str, "title": str, "page_url": str} or None
     """
@@ -134,114 +164,109 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
 
     log.info(f"  Searching Granicus for '{committee_name}' on {meeting_date}")
 
-    # ── Strategy 1: Granicus keyword search (covers entire archive) ──
-    # Extract first keyword from committee name for broad search
+    # ── Strategy 1: Main page (last ~10 meetings, has direct MP3 links) ──
+    log.info(f"  Granicus main_page: {GRANICUS_ARCHIVE_URL}")
+    try:
+        resp = requests.get(GRANICUS_ARCHIVE_URL, timeout=30, headers=_granicus_headers())
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        best_match = None
+        best_score = 0
+
+        for link in soup.find_all("a", href=True):
+            href = link.get("href", "")
+            if ".mp3" not in href.lower():
+                continue
+            row = link.find_parent("tr")
+            if not row:
+                continue
+            cells = row.find_all("td")
+            if len(cells) < 2:
+                continue
+            row_name = cells[0].get_text(strip=True)
+            row_date_text = cells[1].get_text(strip=True)
+            if not any(dp.lower() in row_date_text.lower() for dp in date_patterns):
+                continue
+            name_score = _committee_match_score(committee_name, row_name)
+            log.info(f"  Main page candidate: '{row_name}' date='{row_date_text}' score={name_score:.2f}")
+            if name_score >= 0.25 and (name_score + 1.0) > best_score:
+                best_score = name_score + 1.0
+                best_match = {
+                    "mp3_url": href if href.startswith("http") else f"https://miamidade.granicus.com/{href}",
+                    "title": row_name,
+                    "page_url": GRANICUS_ARCHIVE_URL,
+                    "match_score": best_score,
+                }
+
+        if best_match:
+            log.info(f"  Found MP3 on main page: {best_match['mp3_url'][:80]}...")
+            return best_match
+    except Exception as e:
+        log.warning(f"  Main page fetch failed: {e}")
+
+    # ── Strategy 2: Keyword search → get clip_id → fetch MP3 from clip page ──
     search_words = [w for w in committee_name.split()
                     if w.lower() not in ('of', 'and', 'the', 'for', 'in', 'committee',
                                          'cmte', 'ad', 'hoc', 'miami-dade')]
     search_term = search_words[0] if search_words else committee_name.split()[0]
 
-    for strategy_name, fetch_url in [
-        ("search", f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={search_term}"),
-        ("main_page", GRANICUS_ARCHIVE_URL),
-    ]:
-        log.info(f"  Granicus {strategy_name}: {fetch_url[:100]}")
+    for search_label, kw in [("keyword", search_term), ("date", target_dt.strftime("%m/%d/%Y"))]:
+        search_url = f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={kw}"
+        log.info(f"  Granicus {search_label} search: {search_url[:100]}")
         try:
-            resp = requests.get(fetch_url, timeout=30, headers={
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            })
+            resp = requests.get(search_url, timeout=30, headers=_granicus_headers())
             resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            # Search results have rows with: Name | Date | Duration | Agenda | (empty) | Video
+            # No MP3 links — but Video links contain clip_id
+            for row in soup.find_all("tr"):
+                cells = row.find_all("td")
+                if len(cells) < 3:
+                    continue
+
+                row_name = cells[0].get_text(strip=True)
+                row_date_text = cells[1].get_text(strip=True)
+
+                # Date match
+                if not any(dp.lower() in row_date_text.lower() for dp in date_patterns):
+                    continue
+
+                # Name match
+                name_score = _committee_match_score(committee_name, row_name)
+                if name_score < 0.25:
+                    continue
+
+                log.info(f"  Search hit: '{row_name}' date='{row_date_text}' score={name_score:.2f}")
+
+                # Extract clip_id from any link in this row
+                clip_id = None
+                for a in row.find_all("a", href=True):
+                    m = re.search(r'clip_id=(\d+)', a["href"])
+                    if m:
+                        clip_id = m.group(1)
+                        break
+
+                if not clip_id:
+                    log.info(f"  No clip_id found in row links")
+                    continue
+
+                log.info(f"  Found clip_id={clip_id}, fetching MP3 URL…")
+                mp3_url = _find_mp3_on_clip_page(clip_id)
+                if mp3_url:
+                    log.info(f"  Found MP3: {mp3_url[:80]}...")
+                    return {
+                        "mp3_url": mp3_url,
+                        "title": row_name,
+                        "page_url": search_url,
+                        "match_score": name_score + 1.0,
+                    }
+                else:
+                    log.info(f"  Clip page {clip_id} had no MP3 link")
+
         except Exception as e:
-            log.warning(f"  Granicus {strategy_name} fetch failed: {e}")
-            continue
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        best_match = None
-        best_score = 0
-        candidates_checked = 0
-
-        # Find all MP3 links
-        for link in soup.find_all("a", href=True):
-            href = link.get("href", "")
-            if ".mp3" not in href.lower():
-                continue
-
-            row = link.find_parent("tr")
-            if not row:
-                continue
-
-            cells = row.find_all("td")
-            if len(cells) < 2:
-                continue
-
-            row_name = cells[0].get_text(strip=True)
-            row_date_text = cells[1].get_text(strip=True)
-
-            # Date match — check all patterns
-            date_match = any(dp.lower() in row_date_text.lower() for dp in date_patterns)
-            if not date_match:
-                continue
-
-            candidates_checked += 1
-            name_score = _committee_match_score(committee_name, row_name)
-            log.info(f"  Candidate: '{row_name}' date='{row_date_text}' score={name_score:.2f}")
-
-            if name_score < 0.25:  # lowered threshold
-                continue
-
-            total_score = name_score + 1.0
-            if total_score > best_score:
-                best_score = total_score
-                best_match = {
-                    "mp3_url": href if href.startswith("http") else f"https://miamidade.granicus.com/{href}",
-                    "title": row_name,
-                    "page_url": fetch_url,
-                    "match_score": total_score,
-                }
-
-        log.info(f"  Granicus {strategy_name}: {candidates_checked} date-matched rows checked")
-
-        if best_match:
-            log.info(f"  Found MP3: {best_match['mp3_url'][:80]}... (score={best_match['match_score']:.2f})")
-            return best_match
-
-    # ── Strategy 3: Try searching for the meeting date directly ──
-    date_search = target_dt.strftime("%m/%d/%Y")
-    try:
-        log.info(f"  Granicus date search: {date_search}")
-        resp = requests.get(
-            f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={date_search}",
-            timeout=30,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        )
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-
-        for link in soup.find_all("a", href=True):
-            href = link.get("href", "")
-            if ".mp3" not in href.lower():
-                continue
-            row = link.find_parent("tr")
-            if not row:
-                continue
-            cells = row.find_all("td")
-            if len(cells) < 2:
-                continue
-            row_name = cells[0].get_text(strip=True)
-            name_score = _committee_match_score(committee_name, row_name)
-            log.info(f"  Date-search candidate: '{row_name}' score={name_score:.2f}")
-            if name_score >= 0.25:
-                mp3_url = href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
-                log.info(f"  Found MP3 via date search: {mp3_url[:80]}")
-                return {
-                    "mp3_url": mp3_url,
-                    "title": row_name,
-                    "page_url": f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={date_search}",
-                    "match_score": name_score + 1.0,
-                }
-    except Exception as e:
-        log.warning(f"  Granicus date search failed: {e}")
+            log.warning(f"  Granicus {search_label} search failed: {e}")
 
     log.info(f"  No MP3 found on Granicus for '{committee_name}' {meeting_date}")
     return None
