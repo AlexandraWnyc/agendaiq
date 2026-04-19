@@ -1360,6 +1360,10 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <div style="font-size:1rem">⏳</div>
       <div style="flex:1;font-weight:600;font-size:.9rem;color:var(--ink)">Backfill in progress</div>
       <div id="bf-progress-text" style="font-size:.78rem;color:var(--gray-600)"></div>
+      <button id="bf-stop-btn" class="btn btn-sm" onclick="stopBackfill()"
+        style="background:#ef4444;color:#fff;border:none;font-size:.75rem;padding:.25rem .6rem;border-radius:6px;cursor:pointer">
+        ⬜ Stop
+      </button>
     </div>
     <div style="height:8px;background:#eef1f5;border-radius:999px;overflow:hidden;margin-bottom:.55rem">
       <div id="bf-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#003087,#0058a7);
@@ -1375,6 +1379,10 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <div style="font-size:1rem">🎙</div>
       <div style="flex:1;font-weight:600;font-size:.9rem;color:var(--ink)">Transcript Backfill in progress</div>
       <div id="bulk-tx-text" style="font-size:.78rem;color:var(--gray-600)"></div>
+      <button id="bulk-tx-stop-btn" class="btn btn-sm" onclick="stopBulkTranscriptBackfill()"
+        style="background:#ef4444;color:#fff;border:none;font-size:.75rem;padding:.25rem .6rem;border-radius:6px;cursor:pointer">
+        ⬜ Stop
+      </button>
     </div>
     <div style="height:8px;background:#ede9fe;border-radius:999px;overflow:hidden;margin-bottom:.55rem">
       <div id="bulk-tx-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,#a78bfa);
@@ -4509,6 +4517,8 @@ function _renderBfProgress(p) {
     return;
   }
   panel.style.display = 'block';
+  const stopBtn = document.getElementById('bf-stop-btn');
+  if (stopBtn) stopBtn.style.display = p.running ? '' : 'none';
   const pct = p.percent || 0;
   const done = p.done || 0;
   const total = p.total || 0;
@@ -4595,15 +4605,38 @@ function _renderBulkTxProgress(d) {
   const bar = document.getElementById('bulk-tx-bar');
   const txt = document.getElementById('bulk-tx-text');
   const log = document.getElementById('bulk-tx-log');
+  const stopBtn = document.getElementById('bulk-tx-stop-btn');
   if (bar) bar.style.width = (d.pct || 0) + '%';
   if (txt) txt.textContent = d.msg || '';
   if (d.log_lines && log) {
     log.innerHTML = d.log_lines.map(l => `<div>${l}</div>`).join('');
     log.scrollTop = log.scrollHeight;
   }
+  // Show/hide stop button based on running state
+  if (stopBtn) stopBtn.style.display = d.running ? '' : 'none';
   if (d.done && !d.running) {
     if (txt) txt.textContent = d.error ? '❌ ' + d.error : '✅ ' + (d.msg || 'Done');
   }
+}
+
+async function stopBulkTranscriptBackfill() {
+  const stopBtn = document.getElementById('bulk-tx-stop-btn');
+  if (stopBtn) { stopBtn.disabled = true; stopBtn.textContent = '⏳ Stopping…'; }
+  try {
+    const r = await fetch('/api/backfill/transcript/bulk/stop', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) toast('Stop signal sent — finishing current meeting…', 'ok');
+    else toast(d.error || 'Failed to stop', 'err');
+  } catch(e) { toast('Failed to stop: '+(e.message||e), 'err'); }
+}
+
+async function stopBackfill() {
+  try {
+    const r = await fetch('/api/backfill/stop', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) toast('Stop signal sent…', 'ok');
+    else toast(d.error || 'Failed to stop', 'err');
+  } catch(e) { toast('Failed to stop: '+(e.message||e), 'err'); }
 }
 
 async function runBulkTranscriptBackfill() {
@@ -6709,6 +6742,7 @@ _bf_state = {
     "events": [],       # rolling log of status lines (last ~30)
     "summary": None,    # dict when finished
     "error": None,
+    "abort": False,
 }
 _bf_lock = _threading.Lock()
 
@@ -6780,6 +6814,7 @@ def api_backfill():
             "running": True, "started_at": now_iso(), "finished_at": None,
             "only_missing": only_missing, "total": 0, "done": 0,
             "current": "queued…", "events": [], "summary": None, "error": None,
+            "abort": False,
         })
     t = _threading.Thread(target=_run_backfill, args=(only_missing,), daemon=True)
     t.start()
@@ -6888,7 +6923,7 @@ _bulk_tx_lock = _threading.Lock()
 _bulk_tx_state = {
     "running": False, "done": False, "pct": 0, "msg": "",
     "processed": 0, "total": 0, "skipped": 0, "updated": 0,
-    "error": None, "log_lines": [],
+    "error": None, "log_lines": [], "abort": False,
 }
 
 def _bulk_tx_log(msg, pct=None):
@@ -6911,7 +6946,7 @@ def api_bulk_transcript_backfill():
         _bulk_tx_state.update({
             "running": True, "done": False, "pct": 2, "msg": "Loading meetings…",
             "processed": 0, "total": 0, "skipped": 0, "updated": 0,
-            "error": None, "log_lines": ["Starting bulk transcript backfill…"],
+            "error": None, "log_lines": ["Starting bulk transcript backfill…"], "abort": False,
         })
 
     def _run_bulk():
@@ -6936,6 +6971,15 @@ def api_bulk_transcript_backfill():
             updated = 0
 
             for i, mtg in enumerate(meetings):
+                # Check abort flag
+                with _bulk_tx_lock:
+                    if _bulk_tx_state["abort"]:
+                        _bulk_tx_log(f"⛔ Stopped by user after {processed} meetings ({updated} items updated, {skipped} skipped)", pct=_bulk_tx_state["pct"])
+                        _bulk_tx_state["msg"] = f"Stopped by user — {processed} processed, {updated} updated"
+                        _bulk_tx_state["done"] = True
+                        _bulk_tx_state["running"] = False
+                        return
+
                 mid = mtg.get("id")
                 label = f"{mtg.get('body_name', '')} — {mtg.get('meeting_date', '')}"
                 pct = int(5 + (90 * i / total))
@@ -7029,6 +7073,27 @@ def api_bulk_transcript_progress():
             "error": _bulk_tx_state["error"],
             "log_lines": list(_bulk_tx_state["log_lines"]),
         })
+
+
+@app.route("/api/backfill/transcript/bulk/stop", methods=["POST"])
+def api_bulk_transcript_stop():
+    """Signal the bulk transcript backfill to stop after the current meeting."""
+    with _bulk_tx_lock:
+        if not _bulk_tx_state["running"]:
+            return jsonify({"ok": False, "error": "No bulk backfill running"}), 409
+        _bulk_tx_state["abort"] = True
+        _bulk_tx_state["log_lines"].append("⛔ Stop requested — finishing current meeting…")
+    return jsonify({"ok": True, "message": "Stop signal sent"})
+
+
+@app.route("/api/backfill/stop", methods=["POST"])
+def api_backfill_stop():
+    """Signal the regular (Legistar) backfill to stop."""
+    with _bf_lock:
+        if not _bf_state["running"]:
+            return jsonify({"ok": False, "error": "No backfill running"}), 409
+        _bf_state["abort"] = True
+    return jsonify({"ok": True, "message": "Stop signal sent"})
 
 
 @app.route("/api/debug/scrape-page")
