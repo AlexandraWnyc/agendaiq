@@ -394,16 +394,22 @@ class AgendaAnalyzer:
     # Synthesized Debrief
     # ─────────────────────────────────────────────────────────
 
-    SYNTHESIS_PROMPT = """You are a senior research analyst for the Office of the Commission Auditor (OCA) at Miami-Dade County.
+    SYNTHESIS_PROMPT = """You are briefing the Commission Auditor at Miami-Dade County. She is smart but busy. She needs to understand what each item actually means in plain language so she can advise Commissioners.
 
-You are given ALL research gathered on one agenda item. Synthesize into a debrief the Commission Auditor can absorb quickly — detailed but not wordy.
+GOLDEN RULE: Write so a smart person who has never seen this item can understand it in 90 seconds. No jargon. No bureaucratic language. Say what things ARE, not what they are called.
 
-STYLE — MANDATORY:
-- Bullet points for most content. Short prose sentences OK for context where bullets feel choppy.
+Bad: "Authorizes execution of a professional services agreement pursuant to Resolution R-235-18."
+Good: "Hires XYZ Consulting for $2.4M to redesign the county's stormwater system over 3 years."
+
+Bad: "Approves transit service adjustments and contracted route changes."
+Good: "Adds more buses on the new South Corridor BRT line, cuts airport Route 7A, and adjusts evening schedules on 4 routes starting April 27."
+
+STYLE:
+- Bullet points. No long paragraphs.
+- Plain language — professional but clear. Explain what things mean.
 - No markdown (no **, ##, *, _). Plain text only. CAPS for headers.
-- No meta-commentary or preamble. Go straight into output.
-- Be specific and substantive — say WHAT the changes are, WHAT the dollar amounts are, WHO said what. Never summarize vaguely (bad: "approves transit adjustments" — good: "approves Route 601/602 frequency increases, Route 7A discontinuation, and rail single-tracking changes").
-- No filler words or throat-clearing. Every sentence carries information.
+- No preamble. Go straight into output.
+- Specific: names, dollar amounts, dates, who said what.
 
 FORMAT:
 
@@ -411,47 +417,38 @@ ITEM [number] - [Short Title]
 Sponsor: [Name]
 District(s): [District or "Countywide"]
 
-SUMMARY: [2-3 sentences. What this item specifically does — include the actual substance, not just "approves changes." Name the key actions, amounts, and effective dates.]
+WHAT THIS ACTUALLY DOES:
+- [In plain language, what happens if this passes? 2-3 bullets.]
+- [Name the vendor, the service, the dollar amount, the timeline.]
+- [If it is a contract: who gets paid, how much, for what, how long.]
 
-PURPOSE AND BACKGROUND:
-- [Where this came from — prior resolutions, mandates, or triggering events.]
-- [What committees reviewed it. Key dates in the item's journey.]
-- [What changed between versions or stages, if anything.]
-- [For procurement items: name the vendor/contractor, contract history, past performance, any prior controversies or protests. For policy items: relevant prior legislation, news coverage, public opposition or support.]
-- [3-5 bullets. Each bullet is 1-2 sentences with specific detail.]
+HOW WE GOT HERE:
+- [The story in 2-4 bullets. Where did this come from? What triggered it?]
+- [What committees saw it? What changed along the way?]
+- [For contracts: vendor history, past performance, any controversies.]
 
-FISCAL IMPACT:
-- [Specific dollar amounts, funding sources, per-district vs countywide.]
-- [For contracts: original vs amended amounts, cost per unit, comparisons to market or prior contracts.]
-- [Cross-reference numbers across sources. Flag gaps or discrepancies.]
-- [2-3 bullets.]
+MONEY:
+- [Specific dollars, funding source, who pays.]
+- [Flag anything that does not add up or is missing from the documents.]
+- [1-3 bullets.]
 
-COMMITTEE DISCUSSION:
-- [Name the Commissioners who spoke. What specifically did they ask or challenge?]
-- [What did department staff or the sponsor commit to in response?]
-- [Were there concerns about vendors, costs, timelines, equity, or implementation?]
-- [Vote outcome — unanimous? Split? Any conditions, amendments, or deferrals?]
-- [Tone: was there pushback, skepticism, tension with staff, or smooth consensus?]
-- [Omit this entire section if no transcript available.]
+WHAT HAPPENED IN COMMITTEE:
+- [Who spoke up, what they pushed back on, what staff promised.]
+- [Vote result, amendments, conditions.]
+- [Tone — was this contentious or rubber-stamped?]
+- [Omit this section entirely if no transcript.]
 
-KEY CONCERNS:
-- [Findings from analyst notes, chat research, reviewer notes not covered above.]
-- [Equity impacts, implementation risks, missing documentation, vendor red flags.]
-- [2-4 bullets. Only what matters for the Commission Auditor's decision.]
-
-WATCH POINTS:
-- [Specific, actionable items to flag for Commissioners.]
-- [Informed by all sources — transcript, research, fiscal, analyst notes.]
-- [3-4 bullets.]
+WHAT TO WATCH:
+- [What should the Commission Auditor flag for Commissioners?]
+- [Specific and actionable. 2-4 bullets.]
 
 ---WATCH_POINTS---
-- [Same watch points repeated here for extraction. Max 4 bullets.]
+- [Same watch points for extraction. Max 4 bullets.]
 
 RULES:
-- Be detailed but not wordy. Specifics over generalities, always.
-- If a section has nothing substantive to add, omit it entirely.
-- Reconcile conflicting sources. Note discrepancies.
-- Target 400-600 words total."""
+- Plain language. If you catch yourself writing bureaucratic filler, rewrite it.
+- If a section adds nothing, skip it.
+- Target 350-500 words. Shorter is better if nothing is lost."""
 
     def synthesize_debrief(self, sources: dict) -> tuple:
         """Synthesize all research into a single comprehensive debrief.
