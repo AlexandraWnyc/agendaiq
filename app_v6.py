@@ -7031,6 +7031,46 @@ def api_bulk_transcript_progress():
         })
 
 
+@app.route("/api/debug/scrape-page")
+def api_debug_scrape_page():
+    """Diagnostic: fetch a URL from the server and return all links found.
+    Usage: /api/debug/scrape-page?url=https://...
+    """
+    import requests
+    from bs4 import BeautifulSoup
+    target_url = request.args.get("url", "")
+    if not target_url:
+        return jsonify({"error": "Pass ?url=..."}), 400
+    try:
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(target_url, timeout=30, headers=headers)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            text = a.get_text(strip=True)[:120]
+            row = a.find_parent("tr")
+            row_text = ""
+            if row:
+                row_text = row.get_text(" | ", strip=True)[:200]
+            links.append({"href": href, "text": text, "row": row_text})
+        # Also find MP3 URLs in raw source
+        import re as _re
+        mp3_in_source = _re.findall(r'https?://[^"\s\'<>]+\.mp3[^"\s\'<>]*', resp.text)
+        return jsonify({
+            "url": target_url,
+            "status": resp.status_code,
+            "page_size": len(resp.text),
+            "total_links": len(links),
+            "links": links[:200],
+            "mp3_urls_in_source": mp3_in_source[:50],
+            "snippet": resp.text[:2000],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/artifact/<int:artifact_id>/download")
 def api_artifact_download(artifact_id):
     import artifacts as art

@@ -36,7 +36,12 @@ MIN_DISK_FREE_MB = 100  # don't download if less than 100MB free
 YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
 YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@miami-dadebcc6863"
 
-# Granicus streaming archive
+# Miami-Dade webcasting pages — these have direct MP3 download links
+MIAMIDADE_ARCHIVES_URL = "https://www.miamidade.gov/global/webcasting/meetings-archives.page"
+MIAMIDADE_BCC_URL = "https://www.miamidade.gov/global/webcasting/bcc-committee-meetings.page"
+MIAMIDADE_COMMITTEES_URL = "https://www.miamidade.gov/global/webcasting/regular-and-zoning-meetings.page"
+
+# Granicus streaming archive (fallback)
 GRANICUS_ARCHIVE_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=2"
 GRANICUS_SEARCH_URL = "https://miamidade.granicus.com/ViewSearchResults.php"
 GRANICUS_RSS_URL = "https://miamidade.granicus.com/ViewPublisherRSS.php?view_id=2"
@@ -111,37 +116,107 @@ def _granicus_headers():
     return {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 
-def _find_mp3_on_clip_page(clip_id: str) -> str | None:
-    """Fetch a Granicus MediaPlayer page and extract the MP3 download URL."""
+def _scrape_miamidade_page_for_mp3(page_url: str, committee_name: str,
+                                    date_patterns: list, target_dt: datetime) -> dict | None:
+    """Scrape a Miami-Dade webcasting page for MP3 links matching committee + date.
+
+    These pages list meetings with direct MP3 audio download links.
+    We look for <a> tags with .mp3 in the href, then match the surrounding
+    text for committee name and date.
+    """
     import requests
     from bs4 import BeautifulSoup
+
+    log.info(f"  Fetching: {page_url}")
     try:
-        url = f"https://miamidade.granicus.com/MediaPlayer.php?view_id=2&clip_id={clip_id}"
-        resp = requests.get(url, timeout=20, headers=_granicus_headers())
+        resp = requests.get(page_url, timeout=30, headers=_granicus_headers())
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for a in soup.find_all("a", href=True):
-            if ".mp3" in a["href"].lower():
-                href = a["href"]
-                return href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
-        # Also check for direct download links
-        for a in soup.find_all("a", href=True):
-            if "archive-video.granicus.com" in a["href"]:
-                href = a["href"]
-                if ".mp3" in href or ".mp4" in href:
-                    # Prefer MP3 but take MP4 if that's all there is
-                    return href
     except Exception as e:
-        log.warning(f"  Failed to fetch clip page {clip_id}: {e}")
-    return None
+        log.warning(f"  Failed to fetch {page_url}: {e}")
+        return None
+
+    raw = resp.text
+    soup = BeautifulSoup(raw, "html.parser")
+
+    best_match = None
+    best_score = 0
+
+    # Strategy A: Find MP3 links in <a> tags
+    for link in soup.find_all("a", href=True):
+        href = link.get("href", "")
+        if ".mp3" not in href.lower():
+            continue
+
+        # Get context: parent row, parent div, or nearby text
+        # Try table row first
+        row = link.find_parent("tr")
+        if row:
+            row_text = row.get_text(" ", strip=True)
+        else:
+            # Try parent list item or div
+            parent = link.find_parent(["li", "div", "p", "section"])
+            row_text = parent.get_text(" ", strip=True) if parent else link.get_text(strip=True)
+
+        # Check date match
+        date_match = any(dp.lower() in row_text.lower() for dp in date_patterns)
+        if not date_match:
+            continue
+
+        # Check committee name match
+        name_score = _committee_match_score(committee_name, row_text)
+        log.info(f"  MP3 candidate: score={name_score:.2f} href={href[:80]}… text='{row_text[:100]}'")
+
+        if name_score >= 0.20 and name_score > best_score:
+            best_score = name_score
+            mp3_url = href if href.startswith("http") else f"https://www.miamidade.gov{href}"
+            best_match = {
+                "mp3_url": mp3_url,
+                "title": row_text[:120],
+                "page_url": page_url,
+                "match_score": name_score + 1.0,
+            }
+
+    # Strategy B: Also scan raw HTML for MP3 URLs not in <a> tags
+    if not best_match:
+        mp3_urls = re.findall(r'https?://[^"\s\'<>]+\.mp3[^"\s\'<>]*', raw, re.IGNORECASE)
+        for mp3_url in mp3_urls:
+            mp3_url = mp3_url.rstrip("\\\"');,}")
+            # Try to find surrounding context
+            idx = raw.find(mp3_url)
+            if idx >= 0:
+                context = raw[max(0, idx-300):idx+len(mp3_url)+100]
+                # Strip tags for matching
+                context_text = re.sub(r'<[^>]+>', ' ', context)
+                date_match = any(dp.lower() in context_text.lower() for dp in date_patterns)
+                if date_match:
+                    name_score = _committee_match_score(committee_name, context_text)
+                    if name_score >= 0.20 and name_score > best_score:
+                        best_score = name_score
+                        best_match = {
+                            "mp3_url": mp3_url,
+                            "title": context_text.strip()[:120],
+                            "page_url": page_url,
+                            "match_score": name_score + 1.0,
+                        }
+
+    if best_match:
+        log.info(f"  Found MP3: {best_match['mp3_url'][:80]}…")
+    else:
+        # Log how many MP3 links were found total (helps debug)
+        all_mp3 = [a["href"] for a in soup.find_all("a", href=True) if ".mp3" in a["href"].lower()]
+        raw_mp3 = re.findall(r'https?://[^"\s\'<>]+\.mp3', raw, re.IGNORECASE)
+        log.info(f"  No match on {page_url} ({len(all_mp3)} MP3 <a> tags, {len(raw_mp3)} MP3 URLs in source)")
+
+    return best_match
 
 
 def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
-    """Search Granicus streaming archive for an MP3 matching committee + date.
+    """Search for an MP3 audio recording matching committee + date.
 
-    Strategy 1: Main page (has MP3 links directly, last ~10 meetings)
-    Strategy 2: Keyword search → find clip_id → fetch clip page for MP3
-    Strategy 3: Date search → find clip_id → fetch clip page for MP3
+    Strategy 1: Miami-Dade meetings archive page (ALL meetings, direct MP3 links)
+    Strategy 2: Miami-Dade BCC committee meetings page
+    Strategy 3: Miami-Dade regular & zoning meetings page
+    Strategy 4: Granicus archive page (fallback, recent ~10 meetings only)
 
     Returns: {"mp3_url": str, "title": str, "page_url": str} or None
     """
@@ -154,18 +229,39 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
         log.warning(f"  Invalid meeting date: {meeting_date}")
         return None
 
+    # Build date patterns to match against page text
     date_patterns = [
-        target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}",
-        target_dt.strftime("%b %d, %Y"),
-        target_dt.strftime("%b") + f"  {target_dt.day}, {target_dt.year}",
-        target_dt.strftime("%B %d, %Y"),
-        f"{target_dt.month}/{target_dt.day}/{target_dt.year}",
+        target_dt.strftime("%b") + f" {target_dt.day}, {target_dt.year}",   # "Apr 7, 2026"
+        target_dt.strftime("%b %d, %Y"),                                     # "Apr 07, 2026"
+        target_dt.strftime("%b") + f"  {target_dt.day}, {target_dt.year}",  # "Apr  7, 2026"
+        target_dt.strftime("%B %d, %Y"),                                     # "April 07, 2026"
+        target_dt.strftime("%B") + f" {target_dt.day}, {target_dt.year}",   # "April 7, 2026"
+        f"{target_dt.month}/{target_dt.day}/{target_dt.year}",              # "4/7/2026"
+        target_dt.strftime("%m/%d/%Y"),                                      # "04/07/2026"
     ]
 
-    log.info(f"  Searching Granicus for '{committee_name}' on {meeting_date}")
+    log.info(f"  Searching for '{committee_name}' on {meeting_date}")
 
-    # ── Strategy 1: Main page (last ~10 meetings, has direct MP3 links) ──
-    log.info(f"  Granicus main_page: {GRANICUS_ARCHIVE_URL}")
+    # ── Strategy 1: Miami-Dade meetings archive (ALL meetings in one page) ──
+    result = _scrape_miamidade_page_for_mp3(
+        MIAMIDADE_ARCHIVES_URL, committee_name, date_patterns, target_dt)
+    if result:
+        return result
+
+    # ── Strategy 2: BCC committee meetings page ──
+    result = _scrape_miamidade_page_for_mp3(
+        MIAMIDADE_BCC_URL, committee_name, date_patterns, target_dt)
+    if result:
+        return result
+
+    # ── Strategy 3: Regular & zoning meetings page ──
+    result = _scrape_miamidade_page_for_mp3(
+        MIAMIDADE_COMMITTEES_URL, committee_name, date_patterns, target_dt)
+    if result:
+        return result
+
+    # ── Strategy 4: Granicus archive (fallback, last ~10 meetings) ──
+    log.info(f"  Granicus fallback: {GRANICUS_ARCHIVE_URL}")
     try:
         resp = requests.get(GRANICUS_ARCHIVE_URL, timeout=30, headers=_granicus_headers())
         resp.raise_for_status()
@@ -189,7 +285,6 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
             if not any(dp.lower() in row_date_text.lower() for dp in date_patterns):
                 continue
             name_score = _committee_match_score(committee_name, row_name)
-            log.info(f"  Main page candidate: '{row_name}' date='{row_date_text}' score={name_score:.2f}")
             if name_score >= 0.25 and (name_score + 1.0) > best_score:
                 best_score = name_score + 1.0
                 best_match = {
@@ -200,84 +295,28 @@ def search_granicus_mp3(committee_name: str, meeting_date: str) -> dict | None:
                 }
 
         if best_match:
-            log.info(f"  Found MP3 on main page: {best_match['mp3_url'][:80]}...")
+            log.info(f"  Granicus fallback found: {best_match['mp3_url'][:80]}…")
             return best_match
     except Exception as e:
-        log.warning(f"  Main page fetch failed: {e}")
+        log.warning(f"  Granicus fallback failed: {e}")
 
-    # ── Strategy 2: Keyword search → get clip_id → fetch MP3 from clip page ──
-    search_words = [w for w in committee_name.split()
-                    if w.lower() not in ('of', 'and', 'the', 'for', 'in', 'committee',
-                                         'cmte', 'ad', 'hoc', 'miami-dade')]
-    search_term = search_words[0] if search_words else committee_name.split()[0]
-
-    for search_label, kw in [("keyword", search_term), ("date", target_dt.strftime("%m/%d/%Y"))]:
-        search_url = f"{GRANICUS_SEARCH_URL}?view_id=2&keywords={kw}"
-        log.info(f"  Granicus {search_label} search: {search_url[:100]}")
-        try:
-            resp = requests.get(search_url, timeout=30, headers=_granicus_headers())
-            resp.raise_for_status()
-            soup = BeautifulSoup(resp.text, "html.parser")
-
-            # Search results have rows with: Name | Date | Duration | Agenda | (empty) | Video
-            # No MP3 links — but Video links contain clip_id
-            for row in soup.find_all("tr"):
-                cells = row.find_all("td")
-                if len(cells) < 3:
-                    continue
-
-                row_name = cells[0].get_text(strip=True)
-                row_date_text = cells[1].get_text(strip=True)
-
-                # Date match
-                if not any(dp.lower() in row_date_text.lower() for dp in date_patterns):
-                    continue
-
-                # Name match
-                name_score = _committee_match_score(committee_name, row_name)
-                if name_score < 0.25:
-                    continue
-
-                log.info(f"  Search hit: '{row_name}' date='{row_date_text}' score={name_score:.2f}")
-
-                # Extract clip_id from any link in this row
-                clip_id = None
-                for a in row.find_all("a", href=True):
-                    m = re.search(r'clip_id=(\d+)', a["href"])
-                    if m:
-                        clip_id = m.group(1)
-                        break
-
-                if not clip_id:
-                    log.info(f"  No clip_id found in row links")
-                    continue
-
-                log.info(f"  Found clip_id={clip_id}, fetching MP3 URL…")
-                mp3_url = _find_mp3_on_clip_page(clip_id)
-                if mp3_url:
-                    log.info(f"  Found MP3: {mp3_url[:80]}...")
-                    return {
-                        "mp3_url": mp3_url,
-                        "title": row_name,
-                        "page_url": search_url,
-                        "match_score": name_score + 1.0,
-                    }
-                else:
-                    log.info(f"  Clip page {clip_id} had no MP3 link")
-
-        except Exception as e:
-            log.warning(f"  Granicus {search_label} search failed: {e}")
-
-    log.info(f"  No MP3 found on Granicus for '{committee_name}' {meeting_date}")
+    log.info(f"  No MP3 found for '{committee_name}' {meeting_date}")
     return None
 
 
 def download_mp3(mp3_url: str, output_dir: Path) -> Path | None:
     """Download an MP3 file from Granicus or similar source.
 
+    Only downloads MP3 files. Skips MP4/video files to avoid disk issues.
     Returns the local file path, or None on failure.
     """
     import requests
+
+    # Only allow MP3 downloads — skip video files
+    url_lower = mp3_url.lower()
+    if any(ext in url_lower for ext in (".mp4", ".m3u8", ".m4v", ".webm")):
+        log.warning(f"  Skipping non-MP3 media: {mp3_url[:80]}… (only MP3 supported)")
+        return None
 
     output_dir.mkdir(parents=True, exist_ok=True)
     filename = "meeting_audio.mp3"
@@ -286,7 +325,8 @@ def download_mp3(mp3_url: str, output_dir: Path) -> Path | None:
     log.info(f"  Downloading MP3: {mp3_url[:80]}…")
 
     try:
-        resp = requests.get(mp3_url, timeout=300, stream=True)
+        resp = requests.get(mp3_url, timeout=300, stream=True,
+                            headers=_granicus_headers())
         resp.raise_for_status()
 
         total = int(resp.headers.get("content-length", 0))
