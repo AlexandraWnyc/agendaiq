@@ -410,28 +410,30 @@ FORMAT:
 
 • ITEM [number] – [Short Title]
 
-• Sponsor: [name]
+• Sponsor: [Commissioner or Department name]
 
-• What this does: [1-2 sentences in plain English. What changes if this passes? Be specific — routes, amounts, dates.]
+• 1-sentence summary: [1-2 sentences in plain English. What changes if this passes? Be specific — routes, amounts, dates.]
 
-• District(s): [district or "Countywide"]
+• District(s): [Affected district(s), or "Countywide"]
 
-• Key Facts:
-  • [What triggered this — mandate, contract requirement, prior action. Explain terms.]
+• Purpose and Background:
+  • [What triggered this — mandate, contract requirement, prior action. Explain technical terms in parentheses on first use.]
   • [What specifically changes — services added, removed, modified. Dates.]
-  • [History — what happened before this item, prior lineups/cycles, past savings or costs]
+  • [History — what happened before, prior cycles, past savings or costs from similar actions]
   • [Committee review, public input, or legislative history if any]
   • [3-5 bullets. Each bullet 1-2 sentences with specific detail from the source documents.]
 
-• Money:
+• Fiscal Impact:
   • [How much does this cost and what is the money for? Be specific.]
   • [Where does the money come from? What fund, budget line, or offset?]
-  • [Any projected savings, past savings from similar actions, or future cost implications mentioned in the materials]
+  • [Any projected savings, past savings, or future cost implications mentioned in the materials]
   • [2-4 bullets. Every dollar amount must come from the source documents.]
 
-• What to ask the department:
-  • [Specific questions about information not addressed in the materials. Frame as questions.]
-  • [2-3 bullets MAX. Only include if there are genuine gaps.]
+• Additional Notes:
+  • [ONLY info not already stated above. Implementation details, equity concerns, committee discussion.]
+  • [1-2 bullets MAX. If nothing new: "None beyond above."]
+
+• WATCH POINTS: [2-3 specific questions or areas to monitor for the Commission Auditor. Frame gaps as questions to ask, not accusations. Neutral tone.]
 
 ---WATCH_POINTS---
 • [Max 3 bullets. Key things to monitor or ask about. Neutral, specific.]
