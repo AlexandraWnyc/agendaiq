@@ -800,8 +800,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div><h1>AgendaIQ</h1><small>Office of the Commission Auditor · Miami-Dade</small></div>
   </div>
   <nav>
-    <button class="nb on" id="nb-dashboard" onclick="showPg('dashboard')" title="Overview of all work">Home</button>
-    <button class="nb" id="nb-process" onclick="showPg('process')" title="Analyze a new agenda">Analyze</button>
+    <button class="nb on" id="nb-dashboard" onclick="showPg('dashboard')" title="Overview and analyze">Home</button>
     <button class="nb" id="nb-meetings" onclick="showPg('meetings')" title="All saved meetings — pick one to open">Meetings</button>
     <button class="nb" id="nb-search" onclick="showPg('search')" title="Find any item by keyword, file #, or sponsor">Search</button>
     <button class="nb" id="nb-workflow" onclick="showPg('workflow')" title="Track all assigned items across meetings">
@@ -1046,10 +1045,10 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       </div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:.6rem;margin-top:.75rem">
-      <button class="qa-tile" onclick="showPg('process')">
+      <button class="qa-tile" onclick="document.getElementById('d-single').focus()">
         <div class="qa-icon" style="background:rgba(255,255,255,.2)">▶</div>
         <div><div class="qa-title">Analyze an agenda</div>
-          <div class="qa-sub">Pick a date, get item-by-item briefs</div></div>
+          <div class="qa-sub">Pick a date below to get started</div></div>
       </button>
       <button class="qa-tile" onclick="showPg('myitems')">
         <div class="qa-icon" style="background:rgba(255,255,255,.2)">📝</div>
@@ -1075,38 +1074,15 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div class="stat"><div class="n" id="s-mtgs">—</div><div class="l">Meetings</div></div>
     <div class="stat"><div class="n" id="s-open">—</div><div class="l">Open Items</div></div>
   </div>
-  <div class="g2">
+  <!-- Analyze + Stats row -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1.1rem">
     <div>
-      <div class="card">
-        <div class="ch"><div class="ch-left"><div class="cicon">📊</div>By Status</div></div>
-        <div class="cb" id="dash-status"></div>
-      </div>
-    </div>
-    <div>
-      <div class="card">
-        <div class="ch">
-          <div class="ch-left"><div class="cicon">🕒</div>Recent Activity</div>
-          <button class="btn btn-o btn-sm" onclick="showPg('workflow')">View All →</button>
-        </div>
-        <div class="tbl-wrap">
-          <table><thead><tr><th>File #</th><th>Title</th><th>Date</th><th>Body</th><th>Status</th><th>Assigned</th></tr></thead>
-          <tbody id="dash-recent"></tbody></table>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════════════════════ PROCESS ═══════════════════════════ -->
-<div class="pg" id="pg-process">
-  <div class="g2">
-    <div>
-      <div class="card">
-        <div class="ch"><div class="ch-left"><div class="cicon">⚙️</div>Analyze a new agenda</div></div>
+      <div class="card" style="height:100%">
+        <div class="ch"><div class="ch-left"><div class="cicon">⚙️</div>Analyze a New Agenda</div></div>
         <div class="cb">
           <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
             padding:.55rem .8rem;margin-bottom:.85rem;font-size:.76rem;color:#1e3a8a;line-height:1.5">
-            Pick a meeting date and which committees to include. The tool will pull each agenda item, summarize it, flag watchpoints, and save everything to the Meetings list.
+            Pick a meeting date and committees. AgendaIQ will pull each agenda item, summarize it, flag watchpoints, and save everything.
           </div>
           <label>Date Mode</label>
           <div class="toggle">
@@ -1132,7 +1108,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       </div>
     </div>
     <div>
-      <div class="card">
+      <div class="card" style="height:100%">
         <div class="ch"><div class="ch-left"><div class="cicon">📊</div>Progress</div></div>
         <div class="cb">
           <div class="srow"><div class="sdot" id="sdot"></div>
@@ -1141,16 +1117,36 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           <div class="pw"><div class="pb" id="pb"></div></div>
           <div class="logbox" id="logbox"></div>
         </div>
-      </div>
-      <div class="card" id="result-card" style="display:none">
-        <div class="ch"><div class="ch-left"><div class="cicon">📁</div>Output Files</div>
-          <button class="btn btn-o btn-sm" onclick="showPg('workflow')">View in Workflow →</button>
+        <div class="card" id="result-card" style="display:none;margin:0;border:none;box-shadow:none">
+          <div class="ch"><div class="ch-left"><div class="cicon">📁</div>Output Files</div>
+            <button class="btn btn-o btn-sm" onclick="showPg('meetings')">View in Meetings →</button>
+          </div>
+          <div class="cb" id="result-body"></div>
         </div>
-        <div class="cb" id="result-body"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card" style="height:100%">
+        <div class="ch"><div class="ch-left"><div class="cicon">📊</div>By Status</div></div>
+        <div class="cb" id="dash-status"></div>
       </div>
     </div>
   </div>
+
+  <div class="card">
+    <div class="ch">
+      <div class="ch-left"><div class="cicon">🕒</div>Recent Activity</div>
+      <button class="btn btn-o btn-sm" onclick="showPg('workflow')">View All →</button>
+    </div>
+    <div class="tbl-wrap">
+      <table><thead><tr><th>File #</th><th>Title</th><th>Date</th><th>Body</th><th>Status</th><th>Assigned</th></tr></thead>
+      <tbody id="dash-recent"></tbody></table>
+    </div>
+  </div>
 </div>
+
+<!-- Process page removed — merged into Home/Dashboard -->
+<div class="pg" id="pg-process" style="display:none"></div>
 
 <!-- ═══════════════════════════ SEARCH ═══════════════════════════ -->
 <div class="pg" id="pg-search">
@@ -1207,7 +1203,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div style="flex:1;min-width:140px"><label style="margin-bottom:.2rem">Search</label>
       <input type="text" id="wf-f-search" placeholder="Search all fields…" oninput="loadWorkflow()" style="margin:0;font-size:.82rem"></div>
     <div style="margin-left:auto;display:flex;gap:.4rem;align-items:flex-end;flex-wrap:wrap">
-      <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="showReviewQueue()" title="Items awaiting your review">📋 My Review Queue</button>
+      <button class="btn btn-sm" style="background:#059669;color:#fff;border:none" onclick="showPg('myitems');setTimeout(()=>switchMyItemsView('reviews'),50)" title="Items awaiting your review">📋 Review Queue</button>
       <button class="btn btn-o btn-sm" onclick="bulkAssign()">Bulk Assign</button>
       <button class="btn btn-o btn-sm" onclick="bulkStatus()">Bulk Status</button>
     </div>
@@ -1562,36 +1558,13 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 
   <div class="card" style="margin-bottom:1.1rem">
     <div class="ch">
-      <div class="ch-left"><div class="cicon">⬇</div>Exports</div>
+      <div class="ch-left"><div class="cicon">📊</div>Actions</div>
       <div style="display:flex;gap:.4rem;align-items:center">
         <button class="btn btn-p btn-sm" onclick="openMeetingPrep(currentMeetingId)"
           style="background:#059669;border-color:#059669;font-weight:700"
-          title="Open the Meeting Prep view for Director briefing">
-          📊 Meeting Prep
+          title="Open the Meeting Prep view — assign items, review, export, and process data">
+          📊 Open Meeting Prep →
         </button>
-        <button class="btn btn-s btn-sm" id="md-final-btn" onclick="genFinal()" disabled>✓ Generate Final Export</button>
-        <button class="btn btn-o btn-sm" id="md-regen-btn" onclick="regenDraft()">↻ Regenerate Draft</button>
-        <div style="position:relative;display:inline-block" id="md-process-wrap">
-          <button class="btn btn-o btn-sm" onclick="document.getElementById('md-process-menu').classList.toggle('show')"
-            title="Run data processing operations on this meeting">
-            ⚙ Process ▾
-          </button>
-          <div id="md-process-menu" class="dropdown-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:280px;padding:.4rem 0">
-            <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Data Operations</div>
-            <button class="dropdown-item" onclick="backfillMeetingUrls();document.getElementById('md-process-menu').style.display='none'" id="md-urls-btn"
-              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-              🔗 Fetch URLs & Lifecycle — Pull Legistar links and legislative history for all items
-            </button>
-            <button class="dropdown-item" onclick="backfillTranscript();document.getElementById('md-process-menu').style.display='none'" id="md-transcript-btn"
-              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-              🎙 Fetch Transcripts — Find recordings and generate per-item discussion summaries
-            </button>
-            <button class="dropdown-item" onclick="reanalyzeMeetingItems();document.getElementById('md-process-menu').style.display='none'" id="md-reanalyze-btn"
-              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-              🤖 Re-analyze All Items — Re-run AI analysis using latest data
-            </button>
-          </div>
-        </div>
       </div>
     </div>
     <div id="md-operation-progress" style="display:none;margin:0 1rem .5rem;padding:.5rem .75rem;border-radius:.5rem;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem"></div>
@@ -1715,12 +1688,19 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 <div class="pg" id="pg-myitems">
   <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:.6rem 1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:#166534">
     <span style="font-size:1rem">👤</span>
-    <span><strong>My Items</strong> — Your assigned items grouped by meeting. To see the full meeting context with all items and risk levels, open that meeting's <strong>Meeting Prep</strong> from the <strong>Meetings</strong> page.</span>
+    <span><strong>My Items</strong> — Your assigned items and review queue. To see all items in a meeting, open <strong>Meeting Prep</strong> from the <strong>Meetings</strong> page.</span>
     <button class="page-help-btn" onclick="togglePageHelp('myitems')" title="Help for this page">?</button>
+  </div>
+  <!-- View toggle: My Assignments vs Review Queue -->
+  <div style="display:flex;gap:0;margin-bottom:.75rem">
+    <button class="btn btn-sm mi-view-tab on" id="mi-tab-assignments" onclick="switchMyItemsView('assignments')"
+      style="border-radius:6px 0 0 6px;font-weight:600">📝 My Assignments</button>
+    <button class="btn btn-o btn-sm mi-view-tab" id="mi-tab-reviews" onclick="switchMyItemsView('reviews')"
+      style="border-radius:0 6px 6px 0;font-weight:600">📋 Review Queue <span id="mi-review-count-badge" style="display:none;background:#dc2626;color:#fff;border-radius:10px;padding:0 6px;font-size:.65rem;margin-left:4px"></span></button>
   </div>
   <div class="card" style="margin-bottom:1rem">
     <div class="cb" style="padding:.85rem 1.1rem;display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
-      <div>
+      <div id="mi-researcher-wrap">
         <label style="margin-bottom:.2rem">Researcher</label>
         <select id="mi-researcher" onchange="loadMyItems()" style="margin:0"></select>
       </div>
@@ -1771,7 +1751,41 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <div id="mp-stats" style="display:flex;gap:1.5rem;flex:1"></div>
         <div style="display:flex;gap:.4rem;align-items:center">
           <button class="btn btn-o btn-sm" onclick="autoAssignMeeting()" title="AI distributes items fairly across team based on complexity, fiscal impact, and workload">🎯 Auto-Assign</button>
-          <button class="btn btn-o btn-sm" onclick="exportMeetingPrepExcel()">📋 Export Excel</button>
+          <div style="position:relative;display:inline-block" id="mp-process-wrap">
+            <button class="btn btn-o btn-sm" onclick="document.getElementById('mp-process-menu').style.display=document.getElementById('mp-process-menu').style.display==='none'?'block':'none'"
+              title="Data processing and export operations">
+              ⚙ Actions ▾
+            </button>
+            <div id="mp-process-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:340px;padding:.4rem 0">
+              <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Exports</div>
+              <button onclick="exportMeetingPrepExcel();this.closest('#mp-process-menu').style.display='none'"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                📋 Export Excel — Download current meeting prep as spreadsheet
+              </button>
+              <button id="mp-regen-btn" onclick="regenDraft();this.closest('#mp-process-menu').style.display='none'"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                ⟳ Regenerate Draft — Rebuild the draft Word + Excel from latest data
+              </button>
+              <button id="mp-final-btn" onclick="genFinal();this.closest('#mp-process-menu').style.display='none'"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                ★ Generate Final Export — Create finished package (all items must be Finalized)
+              </button>
+              <div style="border-top:1px solid var(--gray-100);margin:.3rem 0"></div>
+              <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Data Operations</div>
+              <button onclick="backfillMeetingUrls();this.closest('#mp-process-menu').style.display='none'" id="mp-urls-btn"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                🔗 Fetch URLs & Lifecycle — Pull Legistar links and legislative history
+              </button>
+              <button onclick="backfillTranscript();this.closest('#mp-process-menu').style.display='none'" id="mp-transcript-btn"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                🎙 Fetch Transcripts — Find recordings and generate discussion summaries
+              </button>
+              <button onclick="reanalyzeMeetingItems();this.closest('#mp-process-menu').style.display='none'" id="mp-reanalyze-btn"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                🤖 Re-analyze All Items — Re-run AI analysis using latest data
+              </button>
+            </div>
+          </div>
           <button class="btn btn-p btn-sm" id="mp-compile-btn" onclick="compileFinalAnalysis()"
             style="background:#059669;border-color:#059669">✨ Compile Final Analysis</button>
         </div>
@@ -1985,6 +1999,8 @@ try {
 } catch(_){}
 
 function showPg(name) {
+  // Redirect old process page to dashboard (merged)
+  if (name==='process') name='dashboard';
   document.querySelectorAll('.pg').forEach(p => p.classList.remove('on'));
   document.querySelectorAll('.nb').forEach(b => b.classList.remove('on'));
   document.getElementById('pg-'+name).classList.add('on');
@@ -2034,7 +2050,7 @@ async function loadDashboard() {
     </div>`;
   }
   if (d.pending_review_count > 0) {
-    bars.innerHTML += `<div class="alert-bar ab-green" onclick="showPg('workflow');setTimeout(showReviewQueue,100)">
+    bars.innerHTML += `<div class="alert-bar ab-green" onclick="showPg('myitems');setTimeout(()=>switchMyItemsView('reviews'),50)">
       <span class="icon">📋</span>
       <span class="txt"><strong>${d.pending_review_count} item${d.pending_review_count>1?'s':''} awaiting review</strong> — drafts ready for reviewer approval</span>
       <span class="count">Review Queue →</span>
@@ -2072,7 +2088,7 @@ async function loadDashboard() {
       <td>${badge(r.workflow_status)}</td>
       <td style="font-size:.75rem">${esc(r.assigned_to||'—')}</td>
     </tr>`).join('') ||
-    '<tr><td colspan="6" style="padding:1.25rem;color:var(--gray-400)">No data yet. Run a process job to populate.</td></tr>';
+    '<tr><td colspan="6" style="padding:1.25rem;color:var(--gray-400)">No data yet. Analyze an agenda from the Home page to populate.</td></tr>';
 }
 
 function filterWorkflow(filter) {
@@ -3282,7 +3298,7 @@ function _mdProgress(html, show=true) {
 async function backfillMeetingUrls() {
   const mid = currentMeetingId;
   if (!mid) { toast('No meeting loaded', 'err'); return; }
-  const btn = document.getElementById('md-urls-btn');
+  const btn = document.getElementById('md-urls-btn') || document.getElementById('mp-urls-btn');
   if (btn) { btn.disabled = true; btn.textContent = '🔗 Running…'; }
   _mdProgress('<b>🔗 URLs + Lifecycle Backfill</b><br>Starting…');
 
@@ -3329,7 +3345,7 @@ async function backfillMeetingUrls() {
 async function reanalyzeMeetingItems() {
   const mid = currentMeetingId;
   if (!mid) { toast('No meeting loaded', 'err'); return; }
-  const btn = document.getElementById('md-reanalyze-btn');
+  const btn = document.getElementById('md-reanalyze-btn') || document.getElementById('mp-reanalyze-btn');
   if (btn) { btn.disabled = true; btn.textContent = '🤖 Running…'; }
   _mdProgress('<b>🤖 AI Re-analysis</b><br>Queuing all items…');
 
@@ -5202,7 +5218,7 @@ function _txGetPanel() {
 }
 
 async function backfillTranscript() {
-  const btn = document.getElementById('md-transcript-btn');
+  const btn = (document.getElementById('md-transcript-btn') || document.getElementById('mp-transcript-btn'));
   if (btn) btn.disabled = true;
 
   const mid = currentMeetingId;
@@ -5224,7 +5240,7 @@ async function backfillTranscript() {
 }
 
 async function _txAutoFetch(videoUrl) {
-  const btn = document.getElementById('md-transcript-btn');
+  const btn = (document.getElementById('md-transcript-btn') || document.getElementById('mp-transcript-btn'));
   const mid = currentMeetingId;
   const panel = _txGetPanel();
   panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>Searching for meeting recording…';
@@ -5281,13 +5297,13 @@ function _txShowPaste() {
       style="width:100%;font-size:.75rem;font-family:monospace;margin-bottom:.4rem"></textarea>
     <div style="display:flex;gap:.4rem">
       <button class="btn btn-p btn-sm" onclick="_txSubmitPaste()">🎙 Analyze Transcript</button>
-      <button class="btn btn-o btn-sm" onclick="document.getElementById('tx-progress').style.display='none';document.getElementById('md-transcript-btn').disabled=false">Cancel</button>
+      <button class="btn btn-o btn-sm" onclick="document.getElementById('tx-progress').style.display='none';(document.getElementById('md-transcript-btn') || document.getElementById('mp-transcript-btn')).disabled=false">Cancel</button>
     </div>`;
 }
 
 async function _txSubmitPaste() {
   const panel = _txGetPanel();
-  const btn = document.getElementById('md-transcript-btn');
+  const btn = (document.getElementById('md-transcript-btn') || document.getElementById('mp-transcript-btn'));
   const mid = currentMeetingId;
   const rawText = (document.getElementById('tx-paste-area')?.value || '').trim();
   const videoUrl = (document.getElementById('tx-video-url')?.value || '').trim();
@@ -5519,13 +5535,8 @@ function filterMeetingsTable() {
         ${m.final_available ? '✓ Final available' : (m.total ? 'Draft only' : '—')}
       </td>
       <td onclick="event.stopPropagation()">
-        <div style="display:flex;gap:.3rem;justify-content:flex-end;flex-wrap:wrap">
+        <div style="display:flex;gap:.3rem;justify-content:flex-end">
           <button class="btn btn-o btn-xs" onclick="openMeeting(${m.id})">Open →</button>
-          <button class="btn btn-o btn-xs" onclick="regenDraft(${m.id},this)"
-            title="Regenerate the draft Excel + Word from the latest DB state">⟳ Draft</button>
-          <button class="btn btn-p btn-xs" onclick="genFinal(${m.id},this)"
-            ${m.finalized === m.total && m.total > 0 ? '' : 'disabled title="All items must be Finalized"'}
-            >★ Export Whole Agenda</button>
           <button class="btn btn-xs" onclick="deleteMeeting(${m.id},'${esc(m.body_name)} (${esc(m.date)})',this)"
             style="background:#fef2f2;color:#dc2626;border:1px solid #fca5a5"
             title="Delete this meeting and all its items">🗑</button>
@@ -5607,14 +5618,16 @@ function renderMeetingDetail(pkg) {
     ${links.length ? `<div style="margin-top:.75rem;display:flex;gap:.4rem;flex-wrap:wrap">${links.join('')}</div>`:''}
   `;
 
-  // Final export gating
-  const finalBtn = document.getElementById('md-final-btn');
-  if (s.total > 0 && s.finalized === s.total) {
-    finalBtn.disabled = false;
-    finalBtn.title = 'All items finalized — ready to generate final export';
-  } else {
-    finalBtn.disabled = true;
-    finalBtn.title = `${s.finalized}/${s.total} items finalized — all must be finalized to generate final export`;
+  // Final export gating (button may be on Meeting Detail or Meeting Prep)
+  const finalBtn = document.getElementById('md-final-btn') || document.getElementById('mp-final-btn');
+  if (finalBtn) {
+    if (s.total > 0 && s.finalized === s.total) {
+      finalBtn.disabled = false;
+      finalBtn.title = 'All items finalized — ready to generate final export';
+    } else {
+      finalBtn.disabled = true;
+      finalBtn.title = `${s.finalized}/${s.total} items finalized — all must be finalized to generate final export`;
+    }
   }
 
   // Artifacts
@@ -5966,7 +5979,7 @@ async function exportItem(appId, btn) {
 async function regenDraft(meetingId, btnEl) {
   const id = meetingId || currentMeetingId;
   if (!id) return;
-  const btn = btnEl || document.getElementById('md-regen-btn');
+  const btn = btnEl || document.getElementById('md-regen-btn') || document.getElementById('mp-regen-btn');
   const prev = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = '…'; }
   const r = await fetch(`/api/meeting/${id}/regenerate`, {method:'POST'});
@@ -5987,7 +6000,7 @@ async function regenDraft(meetingId, btnEl) {
 async function genFinal(meetingId, btnEl) {
   const id = meetingId || currentMeetingId;
   if (!id) return;
-  const btn = btnEl || document.getElementById('md-final-btn');
+  const btn = btnEl || document.getElementById('md-final-btn') || document.getElementById('mp-final-btn');
   const prev = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = 'Generating…'; }
   const r = await fetch(`/api/meeting/${id}/finalize`, {method:'POST'});
@@ -6008,8 +6021,29 @@ async function genFinal(meetingId, btnEl) {
 }
 
 // ════════════════════════════════════════════════════════════
-// My Items (researcher workload)
+// My Items (researcher workload + review queue)
 // ════════════════════════════════════════════════════════════
+let _miView = 'assignments'; // 'assignments' or 'reviews'
+
+function switchMyItemsView(view) {
+  _miView = view;
+  document.querySelectorAll('.mi-view-tab').forEach(t => {
+    t.classList.remove('on');
+    t.classList.add('btn-o');
+  });
+  const active = document.getElementById('mi-tab-' + view);
+  active.classList.add('on');
+  active.classList.remove('btn-o');
+  // In review mode, hide researcher dropdown (reviews are always "me as reviewer")
+  const rWrap = document.getElementById('mi-researcher-wrap');
+  if (view === 'reviews') {
+    rWrap.style.display = 'none';
+  } else {
+    rWrap.style.display = '';
+  }
+  loadMyItems();
+}
+
 function initMyItemsFilters() {
   const rs = document.getElementById('mi-researcher');
   const st = document.getElementById('mi-status');
@@ -6048,21 +6082,44 @@ function _renderMiRows(items) {
 }
 
 async function loadMyItems() {
-  const who = document.getElementById('mi-researcher').value;
   const status = document.getElementById('mi-status').value;
   const due = document.getElementById('mi-due').value;
   const search = (document.getElementById('mi-search')?.value||'').trim().toLowerCase();
   const container = document.getElementById('mi-tree-container');
-  if (!who) {
-    container.innerHTML = '<div style="padding:1.25rem;color:var(--gray-400);text-align:center">Pick a researcher (top-right user menu) to view your assigned items.</div>';
-    document.getElementById('mi-count').textContent = '';
-    return;
+
+  let url, rows;
+  if (_miView === 'reviews') {
+    // Review Queue: fetch all items, then filter to reviewer=currentUser and status=Draft Complete or In Review
+    if (!currentUser) {
+      container.innerHTML = '<div style="padding:1.25rem;color:var(--gray-400);text-align:center">Pick your name from the "Acting as…" dropdown to see your review queue.</div>';
+      document.getElementById('mi-count').textContent = '';
+      return;
+    }
+    url = '/api/workflow?';
+    if (status) url += `status=${encodeURIComponent(status)}&`;
+    if (due) url += `due=${encodeURIComponent(due)}&`;
+    const r = await fetch(url);
+    rows = (await r.json()).filter(a =>
+      (a.reviewer||'').toLowerCase() === currentUser.toLowerCase() &&
+      ['Draft Complete','In Review'].includes(a.workflow_status)
+    );
+    // Update review count badge
+    const badge = document.getElementById('mi-review-count-badge');
+    if (badge) { badge.textContent = rows.length; badge.style.display = rows.length ? '' : 'none'; }
+  } else {
+    // Assignments view
+    const who = document.getElementById('mi-researcher').value;
+    if (!who) {
+      container.innerHTML = '<div style="padding:1.25rem;color:var(--gray-400);text-align:center">Pick a researcher (top-right user menu) to view your assigned items.</div>';
+      document.getElementById('mi-count').textContent = '';
+      return;
+    }
+    url = `/api/workflow?assigned=${encodeURIComponent(who)}`;
+    if (status) url += `&status=${encodeURIComponent(status)}`;
+    if (due) url += `&due=${encodeURIComponent(due)}`;
+    const r = await fetch(url);
+    rows = await r.json();
   }
-  let url = `/api/workflow?assigned=${encodeURIComponent(who)}`;
-  if (status) url += `&status=${encodeURIComponent(status)}`;
-  if (due) url += `&due=${encodeURIComponent(due)}`;
-  const r = await fetch(url);
-  let rows = await r.json();
 
   // Keyword search across all fields
   if (search) {
@@ -6280,7 +6337,7 @@ document.addEventListener('click', e => {
     panel.style.display = 'none';
   }
   // Close process dropdown menus on outside click
-  ['md-process-menu','mtg-process-menu'].forEach(id => {
+  ['md-process-menu','mtg-process-menu','mp-process-menu'].forEach(id => {
     const m = document.getElementById(id);
     if (m && m.style.display !== 'none' && !m.contains(e.target) && !m.previousElementSibling?.contains(e.target)) {
       m.style.display = 'none';
@@ -6935,7 +6992,7 @@ let _tourStep = 0;
 
 const TOURS = {
   dashboard: [
-    {el:'#nb-process', title:'Analyze an Agenda', body:'Start here. Pick a meeting date, select committees, and AgendaIQ will scrape Legistar, pull PDFs, and run AI analysis on every item.'},
+    {el:'#run-btn', title:'Analyze an Agenda', body:'Start here. Pick a meeting date, select committees, and AgendaIQ will scrape Legistar, pull PDFs, and run AI analysis on every item. The analyze form is right here on your Home page.'},
     {el:'#nb-meetings', title:'Saved Meetings', body:'All your analyzed meetings live here. Open one to see its items, run exports, or jump into Meeting Prep.'},
     {el:'#nb-search', title:'Search Everything', body:'Find any item across all meetings by file number, keyword, or sponsor name. Searches inside AI analysis text too.'},
     {el:'.user-sel', title:'Set Your Name', body:'Pick your name here. This controls which items show as "yours" and who gets credit for notes and assignments.'},
@@ -6947,12 +7004,11 @@ const TOURS = {
   'meeting-prep': [
     {el:'.mp-filter[data-filter="HIGH"]', title:'Risk Levels', body:'AI classifies each item during analysis. HIGH = sole source, no-bid, eminent domain, tax increases. MEDIUM = new ordinances, change orders. LOW = routine. Hover any badge to see why.'},
     {el:'#mp-analyst-filter', title:'Filter by Analyst', body:'See only items assigned to a specific person. Use "Download View" to export just their items.'},
-    {el:'#mp-search', title:'Search Within Meeting', body:'Search titles, file numbers, AI analysis text, notes — everything. Works across all fields.'},
+    {el:'#mp-process-wrap', title:'Actions Menu', body:'All operations in one place: export Excel, regenerate drafts, generate final packages, fetch URLs, transcripts, and re-run AI analysis.'},
     {el:'#mp-compile-btn', title:'Compile Final Analysis', body:'When all items are reviewed, this generates the final briefing document combining all debriefs, notes, and watch points.'},
   ],
   'meeting-detail': [
-    {el:'#md-process-wrap', title:'Process Menu', body:'All data operations in one place: fetch URLs, transcripts, or re-run AI analysis. Use this after the initial scrape if you need to refresh data.'},
-    {el:'#md-final-btn', title:'Generate Final Export', body:'Creates the finished Excel + Word package for the Commission Auditor. Only available after the draft is generated.'},
+    {el:'.btn-p', title:'Open Meeting Prep', body:'Your main workspace. Assign items, review analysis, export packages, and run data operations — all in one place.'},
   ],
 };
 
@@ -6963,7 +7019,7 @@ const PAGE_HELP = {
     content: `<p>Your command center. Shows upcoming meetings, overdue items, and quick stats.</p>
       <hr><h4>Quick Actions</h4>
       <ul>
-        <li><strong>Analyze</strong> — Scrape and analyze a new meeting agenda</li>
+        <li><strong>Analyze (on this page)</strong> — Pick a date and committees to scrape and analyze a new agenda</li>
         <li><strong>Meetings</strong> — Browse all saved meeting packages</li>
         <li><strong>Search</strong> — Find any item across all meetings</li>
       </ul>
@@ -6984,6 +7040,7 @@ const PAGE_HELP = {
         <li><strong>Risk badges</strong> are set by AI during analysis. Hover to see the reason.</li>
         <li><strong>Auto-Assign</strong> distributes unassigned items fairly across your team by complexity</li>
         <li><strong>Synthesize</strong> (inside an item) gathers ALL research and generates the final structured debrief</li>
+        <li><strong>Actions ▾</strong> menu has all exports (Excel, Draft, Final) and data operations (URLs, Transcripts, Re-analyze)</li>
         <li><strong>Download View</strong> exports the current filtered set as Excel</li>
       </ul>
       <hr><h4>Workflow</h4>
@@ -6996,12 +7053,11 @@ const PAGE_HELP = {
   },
   meetings: {
     title: 'Saved Meetings',
-    content: `<p>All meetings you have analyzed. Click any meeting to see its items, run data operations, or open Meeting Prep.</p>
+    content: `<p>All meetings you have analyzed. Click any meeting to open it, then go to Meeting Prep for all actions.</p>
       <hr><h4>Buttons</h4>
       <ul>
-        <li><strong>Process All</strong> — Bulk operations: fetch URLs, transcripts, re-analyze</li>
-        <li><strong>Meeting Prep</strong> — The main workspace for briefing preparation</li>
-        <li><strong>Exports</strong> — Generate draft or final Word + Excel packages</li>
+        <li><strong>Process All</strong> — Bulk operations: fetch URLs, transcripts, re-analyze across all meetings</li>
+        <li><strong>Open →</strong> — Opens the meeting detail, then use Meeting Prep for everything else</li>
       </ul>`
   },
   workflow: {
@@ -7022,7 +7078,12 @@ const PAGE_HELP = {
   },
   myitems: {
     title: 'My Items',
-    content: `<p>Your personally assigned items grouped by meeting date. Quick view of your workload across all meetings.</p>
+    content: `<p>Your personally assigned items and review queue, grouped by meeting date.</p>
+      <hr><h4>Two Views</h4>
+      <ul>
+        <li><strong>My Assignments</strong> — Items assigned to you as the analyst/researcher</li>
+        <li><strong>Review Queue</strong> — Items where you are the reviewer and the analyst has submitted a draft for your approval</li>
+      </ul>
       <hr><h4>Tips</h4>
       <ul>
         <li>Click any item to open it and add notes, submit for review, or run synthesis</li>
