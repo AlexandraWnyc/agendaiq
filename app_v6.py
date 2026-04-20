@@ -1833,7 +1833,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
             <th style="width:65px">Item #</th>
             <th style="cursor:pointer" onclick="mpSort('title')">Body</th>
             <th style="width:70px">Status</th>
-            <th style="width:300px">Notes / Final Analysis</th>
+            <th style="width:300px">Preview</th>
           </tr></thead>
           <tbody id="mp-tbody">
             <tr><td colspan="9" style="padding:1.5rem;color:var(--gray-400);text-align:center">Loading…</td></tr>
@@ -6712,11 +6712,7 @@ function renderMeetingPrepTable() {
 
     if (hasWatch) notesPreview += '<span class="mp-watch-badge">👁️ WATCH</span> ';
 
-    if (brief) {
-      // Show first ~200 chars of final analysis
-      notesPreview += '<strong>Final Analysis:</strong> ' + esc(brief.slice(0, 250));
-      if (brief.length > 250) notesPreview += '…';
-    } else if (summary) {
+    if (summary) {
       // Extract first meaningful line from AI summary
       const firstLine = summary.split('\n').find(l => l.trim() && !l.startsWith('ITEM') && !l.startsWith('---')) || summary;
       notesPreview += esc(firstLine.slice(0, 250));
@@ -6772,80 +6768,126 @@ function mpToggleExpand(itemId) {
 }
 
 function renderMpDetail(item) {
-  const summary = (item.ai_summary_for_appearance || '').trim();
-  const brief = (item.finalized_brief || '').trim();
+  const ai = (item.ai_summary_for_appearance || '').trim();
   const wp = (item.watch_points_for_appearance || '').trim();
   const analystNotes = (item.analyst_working_notes || '').trim();
   const reviewerNotes = (item.reviewer_notes || '').trim();
   const legHist = (item.leg_history_summary || '').trim();
 
-  let sections = '';
+  // Parse the AI debrief into structured sections (same as the drawer)
+  const parsed = _parseDebriefSections(ai);
 
-  // Executive Summary / Final Analysis (full width)
-  if (brief) {
-    sections += `<div class="mp-detail-section mp-full">
-      <h4>📋 Final Analysis <span class="mp-source-tag mp-src-ai">COMPILED</span></h4>
-      <div class="mp-detail-text">${esc(brief)}</div>
+  let html = '';
+
+  if (parsed) {
+    // ── Structured debrief: same color-coded cards as the drawer ──
+    const itemTitle = parsed.item || item.appearance_title || item.short_title || '';
+    const sponsor = parsed.sponsor || '';
+    const summary = parsed.summary || '';
+    const district = parsed.district || '';
+
+    // Header card (blue) — title, sponsor, summary
+    html += `<div style="background:linear-gradient(135deg,#f0f9ff,#e0f2fe);border:1px solid #bae6fd;border-radius:8px;padding:.85rem 1rem;margin-bottom:.6rem">
+      <div style="font-size:.88rem;font-weight:700;color:#0c4a6e;margin-bottom:.3rem">${esc(itemTitle)}</div>
+      ${sponsor ? '<div style="font-size:.76rem;color:#475569;margin-bottom:.2rem"><strong>Sponsor:</strong> ' + esc(sponsor) + '</div>' : ''}
+      ${district ? '<div style="font-size:.76rem;color:#475569;margin-bottom:.3rem"><strong>District:</strong> ' + esc(district) + '</div>' : ''}
+      ${summary ? '<div style="font-size:.82rem;color:#1e293b;line-height:1.5;padding:.4rem .5rem;background:#fff;border-radius:6px;border-left:3px solid #0ea5e9">' + esc(summary) + '</div>' : ''}
+    </div>`;
+
+    // Two-column layout for sections
+    html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:.6rem;margin-bottom:.6rem">';
+
+    // Purpose & Background (teal)
+    if (parsed.background) {
+      html += `<div style="border-radius:8px;border:1px solid #e2e8f0;padding:.65rem .85rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#0f766e;margin-bottom:.4rem">PURPOSE & BACKGROUND</div>
+        ${_renderBullets(parsed.background)}
+      </div>`;
+    }
+
+    // Fiscal Impact (amber border)
+    if (parsed.fiscal) {
+      html += `<div style="border-radius:8px;border:1px solid #e2e8f0;border-left:3px solid #f59e0b;padding:.65rem .85rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#b45309;margin-bottom:.4rem">FISCAL IMPACT</div>
+        ${_renderBullets(parsed.fiscal)}
+      </div>`;
+    }
+
+    // Additional Notes
+    if (parsed.notes && !parsed.notes.toLowerCase().includes('none beyond above')) {
+      html += `<div style="border-radius:8px;border:1px solid #e2e8f0;padding:.65rem .85rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:.4rem">ADDITIONAL NOTES</div>
+        ${_renderBullets(parsed.notes)}
+      </div>`;
+    }
+
+    // Watch Points (yellow)
+    const watchContent = parsed.watch || wp;
+    if (watchContent) {
+      html += `<div style="border-radius:8px;background:#fefce8;border:1px solid #fde68a;padding:.65rem .85rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#92400e;margin-bottom:.4rem">WATCH POINTS</div>
+        ${_renderBullets(watchContent)}
+      </div>`;
+    }
+
+    html += '</div>'; // close grid
+
+    // Legislative History
+    if (parsed.leghistory || legHist) {
+      const legContent = parsed.leghistory || legHist;
+      html += `<div style="border-radius:8px;border:1px solid #e2e8f0;padding:.65rem .85rem;margin-bottom:.6rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:.4rem">LEGISLATIVE HISTORY</div>
+        <div style="font-size:.8rem;line-height:1.5;color:#475569">${esc(legContent)}</div>
+      </div>`;
+    }
+
+  } else if (ai) {
+    // ── Unparsed AI text (not yet synthesized) — show as simple card ──
+    html += `<div style="border-radius:8px;border:1px solid #e2e8f0;padding:.65rem .85rem;margin-bottom:.6rem">
+      <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:.4rem">AI ANALYSIS</div>
+      <div style="font-size:.8rem;line-height:1.5;color:#334155;white-space:pre-line">${esc(ai)}</div>
+    </div>`;
+
+    // Watch Points separate if they exist and weren't in the AI text
+    if (wp && !ai.toLowerCase().includes('watch point')) {
+      html += `<div style="border-radius:8px;background:#fefce8;border:1px solid #fde68a;padding:.65rem .85rem;margin-bottom:.6rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#92400e;margin-bottom:.4rem">WATCH POINTS</div>
+        <div style="font-size:.8rem;line-height:1.5;color:#92400e;white-space:pre-line">${esc(wp)}</div>
+      </div>`;
+    }
+  } else {
+    html += `<div style="padding:1rem;color:var(--gray-400);text-align:center;font-size:.85rem">
+      ⏳ No analysis available yet. Click <strong>Re-analyze</strong> below or open the item to run synthesis.
     </div>`;
   }
 
-  // AI Debrief
-  if (summary) {
-    sections += `<div class="mp-detail-section ${brief ? '' : 'mp-full'}">
-      <h4>🤖 AI Debrief <span class="mp-source-tag mp-src-ai">AI</span></h4>
-      <div class="mp-detail-text">${esc(summary)}</div>
-    </div>`;
-  }
-
-  // Watch Points
-  if (wp) {
-    sections += `<div class="mp-detail-section">
-      <h4>👁️ Watch Points</h4>
-      <div class="mp-detail-text" style="color:#991b1b">${esc(wp)}</div>
-    </div>`;
-  }
-
-  // Analyst Notes
-  if (analystNotes) {
-    sections += `<div class="mp-detail-section">
-      <h4>📝 Analyst Notes <span class="mp-source-tag mp-src-analyst">ANALYST</span></h4>
-      <div class="mp-detail-text">${esc(analystNotes)}</div>
-    </div>`;
-  }
-
-  // Reviewer Notes
-  if (reviewerNotes) {
-    sections += `<div class="mp-detail-section">
-      <h4>✅ Reviewer Notes</h4>
-      <div class="mp-detail-text">${esc(reviewerNotes)}</div>
-    </div>`;
-  }
-
-  // Legislative History
-  if (legHist) {
-    sections += `<div class="mp-detail-section">
-      <h4>📜 Legislative History <span class="mp-source-tag mp-src-leg">LEG</span></h4>
-      <div class="mp-detail-text">${esc(legHist)}</div>
-    </div>`;
+  // Analyst & Reviewer Notes (compact row)
+  if (analystNotes || reviewerNotes) {
+    html += '<div style="display:flex;gap:.6rem;margin-bottom:.6rem">';
+    if (analystNotes) {
+      html += `<div style="flex:1;border-radius:8px;border:1px solid #e2e8f0;padding:.65rem .85rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#475569;margin-bottom:.4rem">📝 ANALYST NOTES</div>
+        <div style="font-size:.8rem;line-height:1.5;color:#334155;white-space:pre-line">${esc(analystNotes)}</div>
+      </div>`;
+    }
+    if (reviewerNotes) {
+      html += `<div style="flex:1;border-radius:8px;border:1px solid #bbf7d0;background:#f0fdf4;padding:.65rem .85rem">
+        <div style="font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#166534;margin-bottom:.4rem">✅ REVIEWER NOTES</div>
+        <div style="font-size:.8rem;line-height:1.5;color:#334155;white-space:pre-line">${esc(reviewerNotes)}</div>
+      </div>`;
+    }
+    html += '</div>';
   }
 
   // Chat indicator
   if (item.chat_message_count > 0) {
-    sections += `<div class="mp-detail-section">
-      <h4>💬 AI Chat <span class="mp-source-tag mp-src-chat">CHAT</span></h4>
-      <div class="mp-detail-text">${item.chat_message_count} messages in chat history. Open the item drawer to view full conversation.</div>
-    </div>`;
+    html += `<div style="font-size:.78rem;color:var(--gray-500);margin-bottom:.6rem">💬 ${item.chat_message_count} AI chat messages — open the item to view.</div>`;
   }
 
-  if (!sections) {
-    sections = '<div class="mp-detail-section mp-full"><h4>No analysis available yet</h4><div class="mp-detail-text">This item has not been analyzed. Run AI analysis from the meeting detail view or click Re-analyze below.</div></div>';
-  }
-
-  return `<div class="mp-detail">
-    <div class="mp-detail-grid">${sections}</div>
-    <div class="mp-detail-actions">
+  return `<div class="mp-detail" style="padding:.85rem 1rem">
+    ${html}
+    <div class="mp-detail-actions" style="display:flex;gap:.4rem;border-top:1px solid var(--gray-100);padding-top:.6rem;margin-top:.3rem">
       <button class="btn btn-o btn-xs" onclick="event.stopPropagation();openDrawerFromPrep(${item.id})">📄 Open Full Item</button>
-      <button class="btn btn-o btn-xs" onclick="event.stopPropagation();compileSingleItem(${item.id})">✨ Compile Final Analysis</button>
       <button class="btn btn-o btn-xs" onclick="event.stopPropagation();reanalyzeSingleFromPrep(${item.id})">🔄 Re-analyze</button>
     </div>
   </div>`;
