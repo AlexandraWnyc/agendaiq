@@ -1751,27 +1751,41 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <div id="mp-stats" style="display:flex;gap:1.5rem;flex:1"></div>
         <div style="display:flex;gap:.4rem;align-items:center">
           <button class="btn btn-o btn-sm" onclick="autoAssignMeeting()" title="AI distributes items fairly across team based on complexity, fiscal impact, and workload">🎯 Auto-Assign</button>
-          <div style="position:relative;display:inline-block" id="mp-process-wrap">
-            <button class="btn btn-o btn-sm" onclick="document.getElementById('mp-process-menu').style.display=document.getElementById('mp-process-menu').style.display==='none'?'block':'none'"
-              title="Data processing and export operations">
-              ⚙ Actions ▾
+          <!-- Export dropdown -->
+          <div style="position:relative;display:inline-block">
+            <button class="btn btn-p btn-sm" onclick="document.getElementById('mp-export-menu').style.display=document.getElementById('mp-export-menu').style.display==='none'?'block':'none'"
+              style="background:#059669;border-color:#059669"
+              title="Export meeting prep data">
+              📥 Export ▾
             </button>
-            <div id="mp-process-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:340px;padding:.4rem 0">
-              <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Exports</div>
-              <button onclick="exportMeetingPrepExcel();this.closest('#mp-process-menu').style.display='none'"
+            <div id="mp-export-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:340px;padding:.4rem 0">
+              <button onclick="downloadFilteredView();this.closest('#mp-export-menu').style.display='none'"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                📋 Export Excel — Download current meeting prep as spreadsheet
+                📋 Download Current View — Excel of what you see now (respects filters)
               </button>
-              <button id="mp-regen-btn" onclick="regenDraft();this.closest('#mp-process-menu').style.display='none'"
+              <button onclick="exportMeetingPrepExcel();this.closest('#mp-export-menu').style.display='none'"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                ⟳ Regenerate Draft — Rebuild the draft Word + Excel from latest data
-              </button>
-              <button id="mp-final-btn" onclick="genFinal();this.closest('#mp-process-menu').style.display='none'"
-                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                ★ Generate Final Export — Create finished package (all items must be Finalized)
+                📊 Export Full Meeting — Excel with all items (ignores filters)
               </button>
               <div style="border-top:1px solid var(--gray-100);margin:.3rem 0"></div>
-              <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Data Operations</div>
+              <button id="mp-regen-btn" onclick="regenDraft();this.closest('#mp-export-menu').style.display='none'"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                ⟳ Regenerate Draft Package — Rebuild draft Word + Excel from latest data
+              </button>
+              <button id="mp-final-btn" onclick="genFinal();this.closest('#mp-export-menu').style.display='none'"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                ★ Final Package — Finished Word + Excel for delivery (all items must be Finalized)
+              </button>
+            </div>
+          </div>
+          <!-- Data operations dropdown -->
+          <div style="position:relative;display:inline-block" id="mp-process-wrap">
+            <button class="btn btn-o btn-sm" onclick="document.getElementById('mp-process-menu').style.display=document.getElementById('mp-process-menu').style.display==='none'?'block':'none'"
+              title="Refresh source data for all items">
+              ⚙ Data ▾
+            </button>
+            <div id="mp-process-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:320px;padding:.4rem 0">
+              <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Refresh Source Data</div>
               <button onclick="backfillMeetingUrls();this.closest('#mp-process-menu').style.display='none'" id="mp-urls-btn"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
                 🔗 Fetch URLs & Lifecycle — Pull Legistar links and legislative history
@@ -1782,12 +1796,10 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
               </button>
               <button onclick="reanalyzeMeetingItems();this.closest('#mp-process-menu').style.display='none'" id="mp-reanalyze-btn"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                🤖 Re-analyze All Items — Re-run AI analysis using latest data
+                🤖 Re-read All PDFs — Re-run AI analysis on every item
               </button>
             </div>
           </div>
-          <button class="btn btn-p btn-sm" id="mp-compile-btn" onclick="compileFinalAnalysis()"
-            style="background:#059669;border-color:#059669">✨ Compile Final Analysis</button>
         </div>
       </div>
       <div id="mp-compile-status" style="display:none;margin-top:.6rem;font-size:.78rem;color:var(--gray-600)"></div>
@@ -1810,9 +1822,6 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
           </select>
         </span>
         <div style="margin-left:auto;display:flex;gap:.4rem;align-items:center">
-          <button class="btn btn-o btn-xs" onclick="downloadFilteredView()" title="Download all items in the current filtered view as a single Excel file">
-            ⬇ Download View
-          </button>
           <input type="text" id="mp-search" placeholder="Search items… (title, item #, file #)"
             oninput="mpSearchItems()"
             style="padding:.35rem .7rem;border:1px solid var(--gray-200);border-radius:6px;font-size:.78rem;width:240px;outline:none">
@@ -2408,7 +2417,7 @@ async function loadWorkflow() {
       <td><span class="file-link">${a.file_number}</span></td>
       <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.short_title||'')}</td>
       <td style="font-size:.72rem">${esc(a.committee_item_number||a.bcc_item_number||a.raw_agenda_item_number||'')}</td>
-      <td style="font-size:.72rem">${esc(a.agenda_stage||'')}</td>
+      <td style="font-size:.72rem">${esc((a.agenda_stage||'').toUpperCase())}</td>
       <td onclick="event.stopPropagation()">
         <select class="inline-status" onchange="quickStatus(${a.id},this.value)">
           ${['New','Assigned','In Progress','Draft Complete','In Review','Needs Revision','Finalized','Archived']
@@ -2596,7 +2605,7 @@ async function openDrawer(fileNum, appId) {
     matter.control_body && `<span>Control: ${esc(matter.control_body)}</span>`,
     meetingInfo.meeting_date && `<span>Meeting: ${meetingInfo.meeting_date}</span>`,
     meetingInfo.body_name && `<span>${esc(meetingInfo.body_name)}</span>`,
-    appData?.agenda_stage && `<span>Stage: ${esc(appData.agenda_stage)}</span>`,
+    appData?.agenda_stage && `<span>Stage: ${esc(appData.agenda_stage.toUpperCase())}</span>`,
     priorCount > 0 ? `<span style="color:#fef3c7;background:rgba(146,64,14,.55);padding:.1rem .5rem;border-radius:10px">↔ ${priorCount} prior appearance${priorCount>1?'s':''}</span>` : '',
     appData?.carried_forward_from_prior ? '<span style="color:#fde68a;font-weight:600">↩ Carried Forward</span>' : '',
     appData?.matter_url ? `<a target="_blank" href="${esc(appData.matter_url)}" style="color:#fff;text-decoration:underline">↗ Legistar Item</a>` : '',
@@ -2870,44 +2879,50 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
   body.innerHTML = `
     ${debriefHTML}
     ${renderItemEvolution(allApps, app)}
-    <div class="ds" id="debrief-backfill-section" style="border-radius:8px;background:#f8fafc">
-      <div class="ds-title"><span>DATA & ANALYSIS</span></div>
-      <div style="font-size:.74rem;color:var(--gray-400);margin-bottom:.5rem">
-        Fetch missing data or re-run analysis for this item.
-      </div>
-      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
-        <button class="btn btn-s btn-sm" onclick="runBackfillForItem('all')" id="bf-all-btn"
-          title="Fetch URLs, lifecycle history, transcripts, then run AI analysis">
-          ⚡ Process Item
-        </button>
-        <button class="btn btn-s btn-sm" onclick="reanalyzeAppearance()" id="bf-ai-btn"
-          title="Re-run AI analysis on this item using latest data">
-          🤖 Re-analyze
-        </button>
-      </div>
-      <details style="margin-top:.4rem">
-        <summary style="font-size:.72rem;color:var(--gray-400);cursor:pointer">More options</summary>
-        <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem">
-          <button class="btn btn-s btn-sm" onclick="runBackfillForItem('urls')" id="bf-urls-btn">🔗 Backfill URLs</button>
-          <button class="btn btn-s btn-sm" onclick="runBackfillForItem('transcript')" id="bf-tx-btn">🎙 Backfill Transcript</button>
-          <button class="btn btn-s btn-sm" onclick="reanalyzeAllAppearances()" id="bf-ai-all-btn">🤖 Re-analyze All Appearances</button>
-        </div>
-      </details>
-      <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
-    </div>
     <div class="ds" style="border:2px solid #6d28d9;background:#faf5ff;border-radius:8px">
-      <div class="ds-title" style="color:#6d28d9"><span>SYNTHESIZE DEBRIEF</span></div>
+      <div class="ds-title" style="color:#6d28d9"><span>GENERATE DEBRIEF</span></div>
       <div style="font-size:.74rem;color:var(--gray-500);margin-bottom:.5rem">
-        Gather all research sources and produce the final structured debrief.
+        AI reads all available research (PDF, notes, chat, transcripts, legislative history) and writes the structured debrief above.
       </div>
       <div style="display:flex;gap:.5rem;align-items:center">
         <button class="btn btn-sm" style="background:#6d28d9;color:#fff;border:none;font-weight:600"
           onclick="synthesizeDebrief()" id="synth-btn">
-          🧠 Synthesize All Sources
+          🧠 Generate Debrief
         </button>
         <span id="synth-status" style="font-size:.72rem;color:var(--gray-400)"></span>
       </div>
     </div>
+    <details style="margin-top:.4rem" id="debrief-backfill-section">
+      <summary style="font-size:.74rem;color:var(--gray-400);cursor:pointer;padding:.3rem 0">Advanced: refresh source data</summary>
+      <div style="background:#f8fafc;border-radius:8px;padding:.65rem .85rem;margin-top:.4rem">
+        <div style="font-size:.72rem;color:var(--gray-400);margin-bottom:.5rem">
+          Use these if source data is missing or stale. Usually you won't need them — the initial analysis pulls everything automatically.
+        </div>
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button class="btn btn-s btn-sm" onclick="runBackfillForItem('all')" id="bf-all-btn"
+            title="Fetch URLs, lifecycle, transcripts, then re-read the PDF and regenerate the AI summary">
+            ⚡ Refresh Everything
+          </button>
+          <button class="btn btn-s btn-sm" onclick="reanalyzeAppearance()" id="bf-ai-btn"
+            title="Re-read the PDF and regenerate just the AI summary and watch points (doesn't fetch new data)">
+            🤖 Re-read PDF
+          </button>
+          <button class="btn btn-s btn-sm" onclick="runBackfillForItem('urls')" id="bf-urls-btn"
+            title="Fetch Legistar URLs and legislative history only">
+            🔗 Fetch URLs
+          </button>
+          <button class="btn btn-s btn-sm" onclick="runBackfillForItem('transcript')" id="bf-tx-btn"
+            title="Find the meeting recording and generate a transcript">
+            🎙 Fetch Transcript
+          </button>
+          <button class="btn btn-s btn-sm" onclick="reanalyzeAllAppearances()" id="bf-ai-all-btn"
+            title="Re-read PDFs for every appearance of this item across all meetings">
+            🤖 Re-read All Appearances
+          </button>
+        </div>
+        <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
+      </div>
+    </details>
   `;
   saveBtn.style.display='';
 }
@@ -3252,7 +3267,7 @@ async function synthesizeDebrief() {
     const d = await r.json();
     if (!d.ok) {
       if(status) status.textContent='❌ ' + (d.error||'Failed');
-      if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
+      if(btn){ btn.disabled=false; btn.textContent='🧠 Generate Debrief'; }
       return;
     }
     // Poll for completion
@@ -3263,14 +3278,14 @@ async function synthesizeDebrief() {
         if (sr.status === 'done') {
           clearInterval(poll);
           if(status) status.textContent='✓ Synthesis complete!';
-          if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
+          if(btn){ btn.disabled=false; btn.textContent='🧠 Generate Debrief'; }
           toast('Debrief synthesized from all sources', 'ok');
           // Refresh drawer to show new debrief
           if(currentFileNum) openDrawer(currentFileNum, currentAppId);
         } else if (sr.status === 'error') {
           clearInterval(poll);
           if(status) status.textContent='❌ ' + (sr.error||'Synthesis failed');
-          if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
+          if(btn){ btn.disabled=false; btn.textContent='🧠 Generate Debrief'; }
         }
       } catch(e) { /* keep polling */ }
     }, 4000);
@@ -3278,13 +3293,13 @@ async function synthesizeDebrief() {
     setTimeout(() => {
       clearInterval(poll);
       if(btn && btn.disabled){
-        btn.disabled=false; btn.textContent='🧠 Synthesize All Sources';
+        btn.disabled=false; btn.textContent='🧠 Generate Debrief';
         if(status) status.textContent='⏳ Still running — refresh to check results';
       }
     }, 180000);
   } catch(e) {
     if(status) status.textContent='❌ ' + (e.message||e);
-    if(btn){ btn.disabled=false; btn.textContent='🧠 Synthesize All Sources'; }
+    if(btn){ btn.disabled=false; btn.textContent='🧠 Generate Debrief'; }
   }
 }
 
@@ -3484,7 +3499,7 @@ async function renderDrawerLifecycle(body, appData, matter) {
       const meta = [];
       if(e.committee_item_number) meta.push(`Cmte #${esc(e.committee_item_number)}`);
       if(e.bcc_item_number)       meta.push(`BCC #${esc(e.bcc_item_number)}`);
-      if(e.agenda_stage)          meta.push(esc(e.agenda_stage));
+      if(e.agenda_stage)          meta.push(esc(e.agenda_stage.toUpperCase()));
       if(e.has_notes)             meta.push('★ notes');
 
       // Change detection between appearances
@@ -5520,7 +5535,7 @@ function filterMeetingsTable() {
     return `<tr class="clickable" onclick="openMeeting(${m.id})">
       <td style="white-space:nowrap;font-weight:600">${fmtDate(m.meeting_date)}</td>
       <td>${esc(m.body_name||'')}</td>
-      <td style="font-size:.75rem">${esc(m.meeting_type||'—')}</td>
+      <td style="font-size:.75rem">${esc((m.meeting_type||'—').toUpperCase())}</td>
       <td>${m.total}</td>
       <td>
         <div style="display:flex;align-items:center;gap:.4rem">
@@ -5611,7 +5626,7 @@ function renderMeetingDetail(pkg) {
     <div style="display:flex;gap:.85rem;flex-wrap:wrap;align-items:center;font-size:.82rem;color:var(--gray-600)">
       <div><strong>Body:</strong> ${esc(m.body_name||'')}</div>
       <div><strong>Date:</strong> ${fmtDate(m.meeting_date)}</div>
-      ${m.meeting_type ? `<div><strong>Type:</strong> ${esc(m.meeting_type)}</div>`:''}
+      ${m.meeting_type ? `<div><strong>Type:</strong> ${esc(m.meeting_type.toUpperCase())}</div>`:''}
       ${m.agenda_status ? `<div><strong>Agenda:</strong> ${esc(m.agenda_status)}</div>`:''}
       ${m.last_exported_at ? `<div><strong>Last export:</strong> ${m.last_exported_at.slice(0,16).replace('T',' ')}</div>`:''}
     </div>
@@ -6337,7 +6352,7 @@ document.addEventListener('click', e => {
     panel.style.display = 'none';
   }
   // Close process dropdown menus on outside click
-  ['md-process-menu','mtg-process-menu','mp-process-menu'].forEach(id => {
+  ['md-process-menu','mtg-process-menu','mp-process-menu','mp-export-menu'].forEach(id => {
     const m = document.getElementById(id);
     if (m && m.style.display !== 'none' && !m.contains(e.target) && !m.previousElementSibling?.contains(e.target)) {
       m.style.display = 'none';
