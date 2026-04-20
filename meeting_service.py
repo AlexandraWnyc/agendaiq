@@ -95,9 +95,12 @@ def list_saved_meetings(limit: int = 200) -> list[dict]:
         meeting_ids = [d["id"] for d in out]
         placeholders = ",".join("?" * len(meeting_ids))
         with get_db() as conn:
+            # Check if short_title column exists (older DBs may lack it)
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(appearances)").fetchall()}
+            title_expr = "COALESCE(short_title,'') || ' ' || COALESCE(appearance_title,'')" if "short_title" in cols else "COALESCE(appearance_title,'')"
             kw_rows = conn.execute(
                 f"""SELECT meeting_id,
-                           GROUP_CONCAT(COALESCE(short_title,'') || ' ' || COALESCE(appearance_title,''), ' ') as item_keywords
+                           GROUP_CONCAT({title_expr}, ' ') as item_keywords
                     FROM appearances
                     WHERE meeting_id IN ({placeholders})
                     GROUP BY meeting_id""",
