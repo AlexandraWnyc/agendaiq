@@ -760,6 +760,29 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 .mp-stat-val{font-size:1.3rem;font-weight:700;color:var(--blue)}
 .mp-stat-label{font-size:.65rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.4px}
 .mp-sort-icon{font-size:.7rem;opacity:.5}
+
+/* ── Guided Tour ── */
+.tour-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:9998;transition:opacity .2s}
+.tour-spotlight{position:absolute;box-shadow:0 0 0 9999px rgba(0,0,0,.45);border-radius:8px;z-index:9999;pointer-events:none;transition:all .3s}
+.tour-card{position:fixed;z-index:10000;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.2);padding:1.1rem 1.3rem;max-width:340px;min-width:260px;animation:tourFadeIn .25s}
+@keyframes tourFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.tour-card h4{margin:0 0 .4rem;font-size:.88rem;color:#1e293b}
+.tour-card p{margin:0 0 .8rem;font-size:.8rem;line-height:1.5;color:#475569}
+.tour-card .tour-actions{display:flex;justify-content:space-between;align-items:center}
+.tour-card .tour-step{font-size:.7rem;color:#94a3b8}
+.tour-card .tour-next{background:#2563eb;color:#fff;border:none;padding:.4rem 1rem;border-radius:6px;font-size:.78rem;font-weight:600;cursor:pointer}
+.tour-card .tour-next:hover{background:#1d4ed8}
+.tour-card .tour-skip{background:none;border:none;color:#94a3b8;font-size:.72rem;cursor:pointer;text-decoration:underline}
+
+/* ── Page Help Icon ── */
+.page-help-btn{background:none;border:1px solid var(--gray-200);border-radius:999px;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:var(--gray-400);cursor:pointer;margin-left:.4rem}
+.page-help-btn:hover{background:var(--gray-100);color:var(--gray-600)}
+.help-panel{display:none;position:fixed;right:1rem;top:4.5rem;width:340px;max-height:70vh;overflow-y:auto;background:#fff;border:1px solid var(--border);border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.12);z-index:200;padding:1rem 1.2rem}
+.help-panel.open{display:block}
+.help-panel h4{margin:0 0 .5rem;font-size:.88rem;color:#1e293b}
+.help-panel p,.help-panel li{font-size:.8rem;line-height:1.55;color:#475569}
+.help-panel ul{margin:.3rem 0;padding-left:1.2rem}
+.help-panel hr{border:none;border-top:1px solid var(--gray-200);margin:.6rem 0}
 </style>
 </head>
 <body>
@@ -779,14 +802,13 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
   <nav>
     <button class="nb on" id="nb-dashboard" onclick="showPg('dashboard')" title="Overview of all work">Home</button>
     <button class="nb" id="nb-process" onclick="showPg('process')" title="Analyze a new agenda">Analyze</button>
-    <button class="nb" id="nb-meetings" onclick="showPg('meetings')" title="Review past meeting packages">Meetings</button>
-    <button class="nb" id="nb-search" onclick="showPg('search')" title="Find any past item">Search</button>
-    <button class="nb" id="nb-workflow" onclick="showPg('workflow')" title="Track assigned work">
-      Workflow<span class="alert-badge" id="overdue-badge" style="display:none">0</span>
+    <button class="nb" id="nb-meetings" onclick="showPg('meetings')" title="All saved meetings — pick one to open">Meetings</button>
+    <button class="nb" id="nb-search" onclick="showPg('search')" title="Find any item by keyword, file #, or sponsor">Search</button>
+    <button class="nb" id="nb-workflow" onclick="showPg('workflow')" title="Track all assigned items across meetings">
+      Team Tracker<span class="alert-badge" id="overdue-badge" style="display:none">0</span>
     </button>
-    <button class="nb" id="nb-myitems" onclick="showPg('myitems')" title="Items assigned to you">My Items</button>
+    <button class="nb" id="nb-myitems" onclick="showPg('myitems')" title="Items assigned to you across all meetings">My Items</button>
     <button class="nb" id="nb-settings" onclick="showPg('settings')" title="Team & configuration">Settings</button>
-    <button class="nb" id="nb-help" onclick="showPg('help')" title="Help & Reference guide">Help</button>
   </nav>
   <div style="margin-left:auto;display:flex;align-items:center;gap:.55rem;">
     <button class="nb" onclick="showHelp()" title="Quick tour of AgendaIQ"
@@ -1163,6 +1185,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 
 <!-- ═══════════════════════════ WORKFLOW ═══════════════════════════ -->
 <div class="pg" id="pg-workflow">
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:.6rem 1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:#1e40af">
+    <span style="font-size:1rem">📋</span>
+    <span><strong>Team Tracker</strong> — All assigned items across every meeting. To work on items for a specific meeting, go to <strong>Meetings</strong> and open <strong>Meeting Prep</strong>.</span>
+    <button class="page-help-btn" onclick="togglePageHelp('workflow')" title="Help for this page">?</button>
+  </div>
   <div class="wf-filters">
     <div><label style="margin-bottom:.2rem">Status</label>
       <select id="wf-f-status" onchange="loadWorkflow()" style="margin:0"><option value="">All</option></select></div>
@@ -1686,6 +1713,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 
 <!-- ═══════════════════════════ MY ITEMS ═══════════════════════════ -->
 <div class="pg" id="pg-myitems">
+  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:.6rem 1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:#166534">
+    <span style="font-size:1rem">👤</span>
+    <span><strong>My Items</strong> — Your assigned items grouped by meeting. To see the full meeting context with all items and risk levels, open that meeting's <strong>Meeting Prep</strong> from the <strong>Meetings</strong> page.</span>
+    <button class="page-help-btn" onclick="togglePageHelp('myitems')" title="Help for this page">?</button>
+  </div>
   <div class="card" style="margin-bottom:1rem">
     <div class="cb" style="padding:.85rem 1.1rem;display:flex;gap:.75rem;align-items:flex-end;flex-wrap:wrap">
       <div>
@@ -6893,6 +6925,263 @@ async function exportMeetingPrepExcel() {
     alert('Excel export failed: ' + e.message);
   }
 }
+
+// ════════════════════════════════════════════════════════════════
+// Guided Tour Engine
+// ════════════════════════════════════════════════════════════════
+const _tourSeen = JSON.parse(localStorage.getItem('agendaiq_tours')||'{}');
+let _tourActive = null;
+let _tourStep = 0;
+
+const TOURS = {
+  dashboard: [
+    {el:'#nb-process', title:'Analyze an Agenda', body:'Start here. Pick a meeting date, select committees, and AgendaIQ will scrape Legistar, pull PDFs, and run AI analysis on every item.'},
+    {el:'#nb-meetings', title:'Saved Meetings', body:'All your analyzed meetings live here. Open one to see its items, run exports, or jump into Meeting Prep.'},
+    {el:'#nb-search', title:'Search Everything', body:'Find any item across all meetings by file number, keyword, or sponsor name. Searches inside AI analysis text too.'},
+    {el:'.user-sel', title:'Set Your Name', body:'Pick your name here. This controls which items show as "yours" and who gets credit for notes and assignments.'},
+  ],
+  meetings: [
+    {el:'.tbl-wrap', title:'Your Meeting Packages', body:'Each row is one meeting you have analyzed. Click the meeting date to see all its items.'},
+    {el:'#mtg-f-body', title:'Filter by Committee', body:'Narrow down to a specific committee body — BCC, Transportation, Finance, etc.'},
+  ],
+  'meeting-prep': [
+    {el:'.mp-filter[data-filter="HIGH"]', title:'Risk Levels', body:'AI classifies each item during analysis. HIGH = sole source, no-bid, eminent domain, tax increases. MEDIUM = new ordinances, change orders. LOW = routine. Hover any badge to see why.'},
+    {el:'#mp-analyst-filter', title:'Filter by Analyst', body:'See only items assigned to a specific person. Use "Download View" to export just their items.'},
+    {el:'#mp-search', title:'Search Within Meeting', body:'Search titles, file numbers, AI analysis text, notes — everything. Works across all fields.'},
+    {el:'#mp-compile-btn', title:'Compile Final Analysis', body:'When all items are reviewed, this generates the final briefing document combining all debriefs, notes, and watch points.'},
+  ],
+  'meeting-detail': [
+    {el:'#md-process-wrap', title:'Process Menu', body:'All data operations in one place: fetch URLs, transcripts, or re-run AI analysis. Use this after the initial scrape if you need to refresh data.'},
+    {el:'#md-final-btn', title:'Generate Final Export', body:'Creates the finished Excel + Word package for the Commission Auditor. Only available after the draft is generated.'},
+  ],
+};
+
+// Page-specific help content
+const PAGE_HELP = {
+  dashboard: {
+    title: 'Home Dashboard',
+    content: `<p>Your command center. Shows upcoming meetings, overdue items, and quick stats.</p>
+      <hr><h4>Quick Actions</h4>
+      <ul>
+        <li><strong>Analyze</strong> — Scrape and analyze a new meeting agenda</li>
+        <li><strong>Meetings</strong> — Browse all saved meeting packages</li>
+        <li><strong>Search</strong> — Find any item across all meetings</li>
+      </ul>
+      <hr><h4>Risk Levels</h4>
+      <ul>
+        <li><strong style="color:#dc2626">HIGH</strong> — Sole source, no-bid, eminent domain, tax increases, contracts extended 3+ times, controversial vendors, IG findings</li>
+        <li><strong style="color:#d97706">MEDIUM</strong> — New ordinances, interlocal agreements, change orders, standard procurement, zoning</li>
+        <li><strong style="color:#16a34a">LOW</strong> — Renewals, standard resolutions, consent items, reports, street namings</li>
+        <li><strong style="color:#6366f1">CEREMONIAL</strong> — Proclamations, recognitions, honorary resolutions</li>
+      </ul>`
+  },
+  'meeting-prep': {
+    title: 'Meeting Prep',
+    content: `<p>Your primary workspace for preparing the Commission Auditor briefing. Every item for this meeting is listed with its AI risk level, assignment, and analysis status.</p>
+      <hr><h4>Key Features</h4>
+      <ul>
+        <li><strong>Click any row</strong> to expand and see the full debrief, notes, and actions</li>
+        <li><strong>Risk badges</strong> are set by AI during analysis. Hover to see the reason.</li>
+        <li><strong>Auto-Assign</strong> distributes unassigned items fairly across your team by complexity</li>
+        <li><strong>Synthesize</strong> (inside an item) gathers ALL research and generates the final structured debrief</li>
+        <li><strong>Download View</strong> exports the current filtered set as Excel</li>
+      </ul>
+      <hr><h4>Workflow</h4>
+      <ul>
+        <li>Assign items to analysts using the Researcher column or Auto-Assign</li>
+        <li>Analysts add notes and submit for review</li>
+        <li>Reviewer approves or sends back for revision</li>
+        <li>When ready, Compile Final Analysis for the meeting package</li>
+      </ul>`
+  },
+  meetings: {
+    title: 'Saved Meetings',
+    content: `<p>All meetings you have analyzed. Click any meeting to see its items, run data operations, or open Meeting Prep.</p>
+      <hr><h4>Buttons</h4>
+      <ul>
+        <li><strong>Process All</strong> — Bulk operations: fetch URLs, transcripts, re-analyze</li>
+        <li><strong>Meeting Prep</strong> — The main workspace for briefing preparation</li>
+        <li><strong>Exports</strong> — Generate draft or final Word + Excel packages</li>
+      </ul>`
+  },
+  workflow: {
+    title: 'Team Tracker',
+    content: `<p>Cross-meeting view of all assigned items across the team. Use this to track overdue items, see who needs help, and manage the review queue.</p>
+      <hr><h4>When to Use This vs Meeting Prep</h4>
+      <ul>
+        <li><strong>Meeting Prep</strong> — Work on items for ONE specific meeting (briefing prep, synthesis, exports)</li>
+        <li><strong>Team Tracker</strong> — See ALL items across ALL meetings (overdue tracking, workload balancing, review queue)</li>
+      </ul>
+      <hr><h4>Filters</h4>
+      <ul>
+        <li><strong>Status</strong> — Filter by workflow stage (Assigned, In Progress, Submitted, etc.)</li>
+        <li><strong>Assigned To</strong> — See one person's items or unassigned items</li>
+        <li><strong>Due Date</strong> — Find overdue or upcoming items</li>
+        <li><strong>Meeting</strong> — Narrow to a specific meeting's items</li>
+      </ul>`
+  },
+  myitems: {
+    title: 'My Items',
+    content: `<p>Your personally assigned items grouped by meeting date. Quick view of your workload across all meetings.</p>
+      <hr><h4>Tips</h4>
+      <ul>
+        <li>Click any item to open it and add notes, submit for review, or run synthesis</li>
+        <li>Items are grouped by meeting — expand/collapse each meeting section</li>
+        <li>Use the <strong>Status</strong> and <strong>Due Date</strong> filters to prioritize your work</li>
+      </ul>`
+  },
+};
+
+function startTour(pageName) {
+  const steps = TOURS[pageName];
+  if (!steps || !steps.length) return;
+  _tourActive = pageName;
+  _tourStep = 0;
+  _showTourStep();
+}
+
+function _showTourStep() {
+  // Clean up previous
+  document.querySelectorAll('.tour-overlay,.tour-card,.tour-spotlight').forEach(e=>e.remove());
+
+  const steps = TOURS[_tourActive];
+  if (!steps || _tourStep >= steps.length) {
+    _endTour();
+    return;
+  }
+  const step = steps[_tourStep];
+  const target = document.querySelector(step.el);
+
+  // Overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'tour-overlay';
+  overlay.onclick = () => _endTour();
+  document.body.appendChild(overlay);
+
+  // Card
+  const card = document.createElement('div');
+  card.className = 'tour-card';
+  card.innerHTML = `
+    <h4>${step.title}</h4>
+    <p>${step.body}</p>
+    <div class="tour-actions">
+      <span class="tour-step">${_tourStep+1} of ${steps.length}</span>
+      <div>
+        <button class="tour-skip" onclick="event.stopPropagation();_endTour()">Skip tour</button>
+        <button class="tour-next" onclick="event.stopPropagation();_nextTourStep()">
+          ${_tourStep === steps.length-1 ? 'Done' : 'Next'}
+        </button>
+      </div>
+    </div>
+  `;
+
+  if (target) {
+    const rect = target.getBoundingClientRect();
+    // Position card below or above target
+    let top = rect.bottom + 12;
+    let left = Math.max(12, rect.left);
+    if (top + 200 > window.innerHeight) top = rect.top - 220;
+    if (left + 350 > window.innerWidth) left = window.innerWidth - 360;
+    card.style.top = top + 'px';
+    card.style.left = left + 'px';
+
+    // Spotlight
+    const spot = document.createElement('div');
+    spot.className = 'tour-spotlight';
+    spot.style.top = (rect.top - 4) + 'px';
+    spot.style.left = (rect.left - 4) + 'px';
+    spot.style.width = (rect.width + 8) + 'px';
+    spot.style.height = (rect.height + 8) + 'px';
+    document.body.appendChild(spot);
+  } else {
+    // No target found — center the card
+    card.style.top = '50%';
+    card.style.left = '50%';
+    card.style.transform = 'translate(-50%, -50%)';
+  }
+  document.body.appendChild(card);
+}
+
+function _nextTourStep() {
+  _tourStep++;
+  _showTourStep();
+}
+
+function _endTour() {
+  document.querySelectorAll('.tour-overlay,.tour-card,.tour-spotlight').forEach(e=>e.remove());
+  if (_tourActive) {
+    _tourSeen[_tourActive] = true;
+    localStorage.setItem('agendaiq_tours', JSON.stringify(_tourSeen));
+  }
+  _tourActive = null;
+  _tourStep = 0;
+}
+
+// Check if tour should auto-start when a page is shown
+function _maybeStartTour(pageName) {
+  if (!_tourSeen[pageName] && TOURS[pageName]) {
+    setTimeout(() => startTour(pageName), 600);
+  }
+}
+
+// Per-page help panel
+let _helpPanelOpen = false;
+function togglePageHelp(pageName) {
+  let panel = document.getElementById('page-help-panel');
+  if (panel && _helpPanelOpen) {
+    panel.remove();
+    _helpPanelOpen = false;
+    return;
+  }
+  if (panel) panel.remove();
+
+  const helpData = PAGE_HELP[pageName];
+  if (!helpData) return;
+
+  panel = document.createElement('div');
+  panel.id = 'page-help-panel';
+  panel.className = 'help-panel open';
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.5rem">
+      <h4 style="margin:0">${helpData.title}</h4>
+      <button onclick="togglePageHelp()" style="background:none;border:none;font-size:1.1rem;cursor:pointer;color:var(--gray-400)">x</button>
+    </div>
+    ${helpData.content}
+    <hr>
+    <button onclick="togglePageHelp();startTour('${pageName}')" style="background:none;border:1px solid var(--blue);color:var(--blue);border-radius:6px;padding:.35rem .8rem;font-size:.76rem;cursor:pointer;width:100%">
+      Replay guided tour
+    </button>
+  `;
+  document.body.appendChild(panel);
+  _helpPanelOpen = true;
+}
+
+// Override showHelp to use the current page
+function showHelp() {
+  const currentPg = document.querySelector('.pg:not([style*="display:none"]):not([style*="display: none"])');
+  if (currentPg) {
+    const pgId = currentPg.id.replace('pg-','');
+    if (PAGE_HELP[pgId]) {
+      togglePageHelp(pgId);
+      return;
+    }
+  }
+  // Fallback: show dashboard help
+  togglePageHelp('dashboard');
+}
+
+// Hook into showPg to trigger tours
+const _origShowPg = showPg;
+showPg = function(pg) {
+  _origShowPg(pg);
+  // Close help panel if open
+  if (_helpPanelOpen) {
+    const p = document.getElementById('page-help-panel');
+    if (p) p.remove();
+    _helpPanelOpen = false;
+  }
+  _maybeStartTour(pg);
+};
 </script>
 </body>
 </html>"""
