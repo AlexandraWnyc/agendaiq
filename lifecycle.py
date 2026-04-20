@@ -326,15 +326,19 @@ def rebuild_for_matter(matter_id: int, raw_history: str) -> int:
 
 def backfill_urls_and_lifecycle(pdf_dir: Path,
                                  only_missing_urls: bool = False,
-                                 progress_callback=None) -> dict:
+                                 progress_callback=None,
+                                 meeting_id=None) -> dict:
     """
-    For every matter in the DB:
+    For every matter in the DB (or just the matters in a given meeting):
       - Re-hit matter.asp via the scraper
       - Update each appearance's matter_url / item_pdf_url / local PDF path
       - Parse the leg history and rebuild its matter_timeline
 
     When only_missing_urls=True, skip matters whose appearances already have
     matter_url populated (useful for a quick first pass).
+
+    When meeting_id is provided, only backfill matters that appear in that
+    specific meeting (much faster for single-meeting operations).
 
     Returns summary dict.
     """
@@ -357,7 +361,17 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                "timeline_events": 0, "errors": 0}
 
     with get_db() as conn:
-        matters = conn.execute("SELECT id, file_number FROM matters").fetchall()
+        if meeting_id:
+            # Only get matters that appear in this specific meeting
+            matters = conn.execute("""
+                SELECT DISTINCT m.id, m.file_number
+                FROM matters m
+                JOIN appearances a ON a.matter_id = m.id
+                WHERE a.meeting_id = ?
+            """, (meeting_id,)).fetchall()
+            log.info(f"Scoped backfill to meeting {meeting_id}: {len(matters)} matters")
+        else:
+            matters = conn.execute("SELECT id, file_number FROM matters").fetchall()
 
     total = len(matters)
     for i, m in enumerate(matters, 1):

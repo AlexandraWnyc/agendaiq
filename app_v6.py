@@ -1924,6 +1924,20 @@ let currentFileNum = null;
   checkActiveJobs();
   // Start notification polling
   _startNotifPolling();
+
+  // ── Restore page from URL hash on refresh ──
+  const h = location.hash.replace('#','');
+  if (h) {
+    const meetMatch = h.match(/^meeting\/(\d+)$/);
+    const prepMatch = h.match(/^prep\/(\d+)$/);
+    if (meetMatch) {
+      openMeeting(parseInt(meetMatch[1]));
+    } else if (prepMatch) {
+      openMeetingPrep(parseInt(prepMatch[1]));
+    } else if (document.getElementById('pg-'+h)) {
+      showPg(h, true);
+    }
+  }
 })();
 
 // ════════════════════════════════════════════════════════════
@@ -2022,7 +2036,7 @@ try {
   }
 } catch(_){}
 
-function showPg(name) {
+function showPg(name, skipHash) {
   // Redirect old process page to dashboard (merged)
   if (name==='process') name='dashboard';
   document.querySelectorAll('.pg').forEach(p => p.classList.remove('on'));
@@ -2030,6 +2044,13 @@ function showPg(name) {
   document.getElementById('pg-'+name).classList.add('on');
   const nb = document.getElementById('nb-'+name);
   if (nb) nb.classList.add('on');
+  // Persist current page in URL hash so refresh stays on the same page
+  if (!skipHash) {
+    let hash = name;
+    if (name==='meeting-detail' && currentMeetingId) hash = 'meeting/' + currentMeetingId;
+    else if (name==='meeting-prep' && currentMeetingId) hash = 'prep/' + currentMeetingId;
+    location.hash = hash;
+  }
   if (name==='dashboard') loadDashboard();
   if (name==='workflow')  loadWorkflow();
   if (name==='settings')  loadSettings();
@@ -3191,8 +3212,9 @@ async function runBackfillForItem(type) {
   try {
     if (type === 'urls' || type === 'all') {
       if(prog) prog.textContent='Backfilling URLs + lifecycle…';
+      const meetingId = _drData?.appData?.meeting_id || currentMeetingId;
       await fetch('/api/backfill/urls-and-lifecycle', {method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({only_missing: true})});
+        body: JSON.stringify({only_missing: true, meeting_id: meetingId})});
     }
     if (type === 'transcript' || type === 'all') {
       if(prog) prog.textContent='Starting transcript backfill…';
@@ -8464,16 +8486,18 @@ def _bf_progress(msg: str):
     _bf_log(msg)
 
 
-def _run_backfill(only_missing: bool):
+def _run_backfill(only_missing: bool, meeting_id=None):
     import lifecycle as lc
     try:
         from paths import PDF_CACHE_DIR
         pdf_dir = PDF_CACHE_DIR
-        _bf_log(f"Starting backfill (only_missing={only_missing})…")
+        scope = f" for meeting {meeting_id}" if meeting_id else ""
+        _bf_log(f"Starting backfill (only_missing={only_missing}){scope}…")
         summary = lc.backfill_urls_and_lifecycle(
             pdf_dir,
             only_missing_urls=only_missing,
             progress_callback=_bf_progress,
+            meeting_id=meeting_id,
         )
         with _bf_lock:
             _bf_state["summary"] = summary
@@ -8498,9 +8522,10 @@ def _run_backfill(only_missing: bool):
 def api_backfill():
     """Kick off the backfill in a background thread. Returns immediately.
     Poll /api/backfill/progress or subscribe to /api/backfill/stream for
-    live updates."""
+    live updates.  Pass meeting_id to scope to a single meeting's items."""
     payload = request.get_json(silent=True) or {}
     only_missing = bool(payload.get("only_missing", True))
+    meeting_id = payload.get("meeting_id")
     with _bf_lock:
         if _bf_state["running"]:
             return jsonify({"ok": False, "error": "Already running",
@@ -8511,7 +8536,7 @@ def api_backfill():
             "current": "queued…", "events": [], "summary": None, "error": None,
             "abort": False,
         })
-    t = _threading.Thread(target=_run_backfill, args=(only_missing,), daemon=True)
+    t = _threading.Thread(target=_run_backfill, args=(only_missing, meeting_id), daemon=True)
     t.start()
     return jsonify({"ok": True, "started": True, "progress": _bf_public_state()})
 
