@@ -1522,7 +1522,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <option>Draft</option><option>In Progress</option>
         <option>Final Ready</option><option>Final Generated</option>
       </select>
-      <input type="text" id="mtg-f-search" placeholder="Search meetings…" oninput="filterMeetingsTable()"
+      <input type="text" id="mtg-f-search" placeholder="Search meetings and items…" oninput="filterMeetingsTable()"
         style="margin:0;font-size:.82rem;flex:1;min-width:140px;max-width:260px">
     </div>
     <div class="tbl-wrap">
@@ -5477,7 +5477,7 @@ function filterMeetingsTable() {
   if (bodyF) rows = rows.filter(m=>(m.body_name||'').toLowerCase()===bodyF);
   if (statusF) rows = rows.filter(m=>m.status===statusF);
   if (q) rows = rows.filter(m=>{
-    const hay = [m.body_name, m.meeting_date, m.meeting_type, m.status].join(' ').toLowerCase();
+    const hay = [m.body_name, m.meeting_date, m.meeting_type, m.status, m.search_keywords||''].join(' ').toLowerCase();
     return hay.includes(q);
   });
   // Apply sort

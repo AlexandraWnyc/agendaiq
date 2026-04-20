@@ -88,6 +88,25 @@ def list_saved_meetings(limit: int = 200) -> list[dict]:
         d = dict(r)
         d.update(compute_meeting_status(d["id"]))
         out.append(d)
+
+    # Build search keywords: concatenate item titles for each meeting so
+    # the meetings list is searchable by item content (e.g., "microsoft")
+    if out:
+        meeting_ids = [d["id"] for d in out]
+        placeholders = ",".join("?" * len(meeting_ids))
+        with get_db() as conn:
+            kw_rows = conn.execute(
+                f"""SELECT meeting_id,
+                           GROUP_CONCAT(COALESCE(short_title,'') || ' ' || COALESCE(appearance_title,''), ' ') as item_keywords
+                    FROM appearances
+                    WHERE meeting_id IN ({placeholders})
+                    GROUP BY meeting_id""",
+                meeting_ids,
+            ).fetchall()
+        kw_map = {r["meeting_id"]: r["item_keywords"] or "" for r in kw_rows}
+        for d in out:
+            d["search_keywords"] = kw_map.get(d["id"], "")
+
     return out
 
 
