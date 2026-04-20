@@ -1931,7 +1931,7 @@ let currentFileNum = null;
     const meetMatch = h.match(/^meeting\/(\d+)$/);
     const prepMatch = h.match(/^prep\/(\d+)$/);
     if (meetMatch) {
-      openMeeting(parseInt(meetMatch[1]));
+      openMeetingPrep(parseInt(meetMatch[1]));
     } else if (prepMatch) {
       openMeetingPrep(parseInt(prepMatch[1]));
     } else if (document.getElementById('pg-'+h)) {
@@ -2484,7 +2484,7 @@ async function loadWorkflow() {
         <span style="margin:0 .5rem">·</span>
         <span>${esc(body||'')}</span>
         <span style="margin-left:.75rem;font-weight:400;color:#64748b;font-size:.8rem">${total} item(s) · ${finalized}/${total} finalized (${pct}%)</span>
-        ${mid?`<button class="btn btn-o btn-xs" style="float:right" onclick="event.stopPropagation();openMeeting(${mid})">Open meeting →</button>`:''}
+        ${mid?`<button class="btn btn-o btn-xs" style="float:right" onclick="event.stopPropagation();openMeetingPrep(${mid})">Open meeting →</button>`:''}
       </td></tr>`;
     const body_rows=rows.map(a=>{
       const h=mkRow(a);
@@ -3386,7 +3386,7 @@ async function backfillMeetingUrls() {
           _mdProgress(`<b>🔗 URLs + Lifecycle</b><br>
             <span style="color:#15803d">✓ Done</span> — ${s.matters||0} matters · ${s.urls_filled||0} links · ${s.pdfs_downloaded||0} PDFs · ${s.timeline_events||0} lifecycle events`);
           if (btn) { btn.disabled = false; btn.textContent = '🔗 Backfill URLs + Lifecycle'; }
-          if (currentMeetingId) openMeeting(currentMeetingId);
+          if (currentMeetingId) refreshCurrentMeeting();
           setTimeout(() => _mdProgress('', false), 10000);
         }
       } catch(_){}
@@ -3427,7 +3427,7 @@ async function reanalyzeMeetingItems() {
         clearInterval(poll);
         _mdProgress(`<b>🤖 AI Re-analysis</b><br><span style="color:#15803d">✓ Should be complete — refresh to see results</span>`);
         if (btn) { btn.disabled = false; btn.textContent = '🤖 Re-analyze All Items'; }
-        if (currentMeetingId) openMeeting(currentMeetingId);
+        if (currentMeetingId) refreshCurrentMeeting();
       }
     }, 3000);
   } catch(e) {
@@ -5442,7 +5442,7 @@ function _handleTranscriptResult(d, panel, btn) {
       (d.video_url ? `<br><a href="${esc(d.video_url)}" target="_blank" style="font-size:.75rem">▶ Watch Recording</a>` : '');
     toast(`Transcript backfill complete — ${d.items_updated} items updated`, 'ok');
     // Refresh the meeting detail view to show new notes
-    if (currentMeetingId) openMeeting(currentMeetingId);
+    if (currentMeetingId) refreshCurrentMeeting();
   } else {
     panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' +
       esc((d && (d.message || d.error)) || 'Failed');
@@ -5572,7 +5572,7 @@ function filterMeetingsTable() {
       'Draft':'b-New','In Progress':'b-InProgress',
       'Final Ready':'b-DraftComplete','Final Generated':'b-Finalized',
       'Empty':'b-Archived'}[m.status] || 'b-New';
-    return `<tr class="clickable" onclick="openMeeting(${m.id})">
+    return `<tr class="clickable" onclick="openMeetingPrep(${m.id})">
       <td style="white-space:nowrap;font-weight:600">${fmtDate(m.meeting_date)}</td>
       <td>${esc(m.body_name||'')}</td>
       <td style="font-size:.75rem">${esc((m.meeting_type||'—').toUpperCase())}</td>
@@ -5591,7 +5591,6 @@ function filterMeetingsTable() {
       </td>
       <td onclick="event.stopPropagation()">
         <div style="display:flex;gap:.3rem;justify-content:flex-end">
-          <button class="btn btn-o btn-xs" onclick="openMeeting(${m.id})">Open →</button>
           <button class="btn btn-xs" onclick="deleteMeeting(${m.id},'${esc(m.body_name)} (${esc(m.date)})',this)"
             style="background:#fef2f2;color:#dc2626;border:1px solid #fca5a5"
             title="Delete this meeting and all its items">🗑</button>
@@ -5618,6 +5617,17 @@ async function deleteMeeting(meetingId, label, btn) {
   } catch(e) {
     toast(`Error: ${e.message}`, 'err');
     btn.disabled = false; btn.textContent = prev;
+  }
+}
+
+function refreshCurrentMeeting() {
+  // Refresh whichever meeting view is currently active
+  if (!currentMeetingId) return;
+  const prepPage = document.getElementById('pg-meeting-prep');
+  if (prepPage && prepPage.classList.contains('on')) {
+    loadMeetingPrep(currentMeetingId);
+  } else {
+    openMeeting(currentMeetingId);
   }
 }
 
@@ -5827,7 +5837,7 @@ async function applyBulkAssign() {
     document.getElementById('bulk-due-date').value = '';
     document.getElementById('bulk-status').value = '';
     // Refresh the grid
-    if (currentMeetingId) openMeeting(currentMeetingId);
+    if (currentMeetingId) refreshCurrentMeeting();
   } else {
     toast(d.error || 'Bulk assign failed', 'err');
   }
@@ -6028,7 +6038,7 @@ async function exportItem(appId, btn) {
     });
   }
   // Reload to pick up artifacts
-  if (currentMeetingId) openMeeting(currentMeetingId);
+  if (currentMeetingId) refreshCurrentMeeting();
 }
 
 async function regenDraft(meetingId, btnEl) {
@@ -6048,7 +6058,7 @@ async function regenDraft(meetingId, btnEl) {
       a.download = f.name || f.label || ''; a.target='_self'; document.body.appendChild(a); a.click(); a.remove();
     });
   }
-  if (currentMeetingId === id) openMeeting(id);
+  if (currentMeetingId === id) refreshCurrentMeeting();
   else loadSavedMeetings();
 }
 
@@ -6071,7 +6081,7 @@ async function genFinal(meetingId, btnEl) {
       a.download = f.name || f.label || ''; a.target='_self'; document.body.appendChild(a); a.click(); a.remove();
     });
   }
-  if (currentMeetingId === id) openMeeting(id);
+  if (currentMeetingId === id) refreshCurrentMeeting();
   else loadSavedMeetings();
 }
 
@@ -6427,7 +6437,7 @@ async function loadNotifications() {
       const unreadDot = !n.is_read ? '<span style="width:8px;height:8px;border-radius:50%;background:#3b82f6;flex-shrink:0"></span>' : '';
       const meta = n.metadata ? JSON.parse(n.metadata) : {};
       const meetingLink = n.meeting_id
-        ? ` <button class="btn btn-o btn-xs" style="font-size:.6rem;padding:1px 5px" onclick="event.stopPropagation();openMeeting(${n.meeting_id})">View</button>`
+        ? ` <button class="btn btn-o btn-xs" style="font-size:.6rem;padding:1px 5px" onclick="event.stopPropagation();openMeetingPrep(${n.meeting_id})">View</button>`
         : '';
       return `<div style="padding:.6rem 1rem;border-bottom:1px solid #f1f5f9;cursor:pointer;
         background:${n.is_read?'#fff':'#f0f9ff'};display:flex;gap:.5rem;align-items:flex-start"
