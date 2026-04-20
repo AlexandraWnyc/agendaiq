@@ -1827,6 +1827,21 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
             style="padding:.35rem .7rem;border:1px solid var(--gray-200);border-radius:6px;font-size:.78rem;width:240px;outline:none">
         </div>
       </div>
+      <!-- Legend key -->
+      <div id="mp-legend" style="display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;margin-top:.55rem;padding-top:.5rem;border-top:1px solid var(--gray-100);font-size:.68rem;color:var(--gray-400)">
+        <span style="font-weight:700;text-transform:uppercase;letter-spacing:.5px">Key:</span>
+        <span>🔴 <b style="color:var(--gray-600)">HIGH</b> — sole source, no-bid, eminent domain, large contracts</span>
+        <span>🟡 <b style="color:var(--gray-600)">MEDIUM</b> — ordinance changes, interlocal agreements, change orders</span>
+        <span>⚪ <b style="color:var(--gray-600)">LOW</b> — routine renewals, consent agenda, reports</span>
+        <span>ℹ️ <b style="color:var(--gray-600)">CEREMONIAL</b> — proclamations, recognitions</span>
+        <span style="border-left:1px solid var(--gray-200);padding-left:.7rem">👁️ <b style="color:#9d174d">WATCH</b> — flagged questions or concerns to raise</span>
+        <span style="border-left:1px solid var(--gray-200);padding-left:.7rem">
+          <span class="mp-source-tag mp-src-ai" style="font-size:.6rem">AI</span> AI debrief
+          <span class="mp-source-tag mp-src-leg" style="font-size:.6rem;margin-left:4px">LEG</span> legislative history
+          <span class="mp-source-tag mp-src-analyst" style="font-size:.6rem;margin-left:4px">NOTES</span> analyst notes
+          <span class="mp-source-tag mp-src-chat" style="font-size:.6rem;margin-left:4px">CHAT</span> discussion
+        </span>
+      </div>
     </div>
 
     <!-- Items table -->
