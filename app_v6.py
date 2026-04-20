@@ -6748,7 +6748,7 @@ function renderMeetingPrepTable() {
       notesPreview += esc(firstLine.slice(0, 250));
       if (firstLine.length > 250) notesPreview += '…';
     } else {
-      notesPreview += '<em style="color:var(--gray-400)">⏳ Awaiting analysis</em>';
+      notesPreview += '<em style="color:var(--gray-400)">⏳ Awaiting analysis</em> <button class="btn btn-xs" onclick="event.stopPropagation();reanalyzeSingleFromPrep('+item.id+')" style="background:#7c3aed;color:#fff;border:none;font-size:.65rem;padding:.15rem .5rem;border-radius:4px;margin-left:.4rem;cursor:pointer">🔄 Analyze Now</button>';
     }
 
     // Source tags
