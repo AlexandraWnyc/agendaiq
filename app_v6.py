@@ -2790,19 +2790,22 @@ function _renderBullets(text) {
   return esc(text).split('\n').map(line => {
     const trimmed = line.trim();
     if (!trimmed) return '';
-    // Sub-bullet (indented)
-    if (trimmed.match(/^\s*•\s/) || line.startsWith('  ')) {
-      const content = trimmed.replace(/^•\s*/, '');
-      // Check for label pattern "Label: content"
-      const labelMatch = content.match(/^([A-Z][^:]{2,30}):\s+(.+)/);
-      if (labelMatch) {
-        return '<div style="padding:.2rem 0 .2rem 1rem;font-size:.82rem;line-height:1.5"><strong style="color:#334155">' +
-          labelMatch[1] + ':</strong> ' + labelMatch[2] + '</div>';
-      }
+    const content = trimmed.replace(/^[-•*]\s*/, '');
+    // Check for label/header pattern "Label: content" (bolded label, no bullet)
+    const labelMatch = content.match(/^([A-Z][A-Za-z &\/]{1,35}):\s+(.+)/);
+    if (labelMatch) {
+      return '<div style="padding:.2rem 0;font-size:.82rem;line-height:1.5"><strong style="color:#334155">' +
+        labelMatch[1] + ':</strong> ' + labelMatch[2] + '</div>';
+    }
+    // Section header lines (all-caps, or just a label with colon and nothing after) — no bullet
+    if (content.match(/^[A-Z][A-Z &\/]{2,}:?\s*$/) || content.match(/^[A-Z][^:]{1,30}:\s*$/)) {
+      return '<div style="padding:.3rem 0 .1rem;font-size:.82rem;font-weight:700;color:#334155;line-height:1.5">' + content + '</div>';
+    }
+    // Sub-bullet (indented or started with bullet char)
+    if (trimmed.match(/^[-•*]\s/) || line.startsWith('  ')) {
       return '<div style="padding:.2rem 0 .2rem 1rem;font-size:.82rem;line-height:1.5">• ' + content + '</div>';
     }
-    // Top-level line
-    const content = trimmed.replace(/^•\s*/, '');
+    // Top-level line — plain text, no bullet
     return '<div style="padding:.2rem 0;font-size:.82rem;line-height:1.5">' + content + '</div>';
   }).join('');
 }
@@ -6666,7 +6669,9 @@ async function downloadFilteredView() {
     const a = document.createElement('a');
     a.href = url;
     a.download = `meeting_prep_${mpCurrentFilter || 'all'}${mpAnalystFilter ? '_' + mpAnalystFilter : ''}.xlsx`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   } catch(e) {
     alert('Export failed: ' + e.message);
@@ -6674,6 +6679,7 @@ async function downloadFilteredView() {
 }
 
 function getFilteredItems() {
+  if (!mpData || !mpData.items) return [];
   let items = [...mpData.items];
   const search = (document.getElementById('mp-search').value || '').trim().toLowerCase();
 
