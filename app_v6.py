@@ -4,7 +4,8 @@ Matter Detail Drawer · Workflow Audit Trail · Due-Date Alerts · Cross-linking
 """
 import os, sys, uuid, json, queue, threading, logging
 from pathlib import Path
-from flask import Flask, Response, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request, send_file, g
+from flask_login import login_required, current_user
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -8033,19 +8034,21 @@ def favicon():
 
 
 @app.route("/api/committees")
+@login_required
 def api_committees():
     from scraper import MiamiDadeScraper
     return jsonify(sorted(MiamiDadeScraper().get_committees().keys()))
 
 
 @app.route("/api/stats")
+@login_required
 def api_stats():
     from search import get_dashboard_stats
     from workflow import get_overdue_appearances, get_due_soon_appearances, get_unassigned_appearances
-    d = get_dashboard_stats()
-    d["overdue_count"]    = len(get_overdue_appearances())
-    d["due_soon_count"]   = len(get_due_soon_appearances(7))
-    d["unassigned_count"] = len(get_unassigned_appearances())
+    d = get_dashboard_stats(org_id=g.org_id)
+    d["overdue_count"]    = len(get_overdue_appearances(org_id=g.org_id))
+    d["due_soon_count"]   = len(get_due_soon_appearances(7, org_id=g.org_id))
+    d["unassigned_count"] = len(get_unassigned_appearances(org_id=g.org_id))
     # Count items pending review (Draft Complete status)
     d["pending_review_count"] = d.get("by_status", {}).get("Draft Complete", 0)
     d["needs_revision_count"] = d.get("by_status", {}).get("Needs Revision", 0)
@@ -8053,6 +8056,7 @@ def api_stats():
 
 
 @app.route("/api/search")
+@login_required
 def api_search():
     from search import search_by_file_number, search_by_keyword, search_by_sponsor
     file_num = request.args.get("file")
@@ -8060,16 +8064,17 @@ def api_search():
     sponsor  = request.args.get("sponsor")
     limit    = int(request.args.get("limit", 30))
     if file_num:
-        result = search_by_file_number(file_num)
+        result = search_by_file_number(file_num, org_id=g.org_id)
         return jsonify({"type": "matter", "data": result})
     elif keyword:
-        return jsonify({"type": "list", "data": search_by_keyword(keyword, limit)})
+        return jsonify({"type": "list", "data": search_by_keyword(keyword, limit, org_id=g.org_id)})
     elif sponsor:
-        return jsonify({"type": "list", "data": search_by_sponsor(sponsor, limit)})
+        return jsonify({"type": "list", "data": search_by_sponsor(sponsor, limit, org_id=g.org_id)})
     return jsonify({"type": "list", "data": []})
 
 
 @app.route("/api/workflow/batch-assign", methods=["POST"])
+@login_required
 def api_workflow_batch_assign():
     """Assign multiple appearances at once. Creates a single Planner task with subtasks.
 
@@ -8096,11 +8101,11 @@ def api_workflow_batch_assign():
     meeting_date = ""
     body_name = ""
     for aid in ids:
-        old_app = get_appearance_by_id(aid) or {}
+        old_app = get_appearance_by_id(aid, org_id=g.org_id) or {}
         old_assignee = old_app.get("assigned_to") or ""
 
         try:
-            wf.assign_appearance(aid, person, by, force=force)
+            wf.assign_appearance(aid, person, by, force=force, org_id=g.org_id)
         except wf.CaseAssignmentConflict as cac:
             return jsonify({
                 "error":   "case_assignment_conflict",
@@ -8112,12 +8117,12 @@ def api_workflow_batch_assign():
                          '"force": true in the JSON body to override.'),
             }), 409
         if due:
-            wf.set_due_date(aid, due, by)
+            wf.set_due_date(aid, due, by, org_id=g.org_id)
 
         # Collect enriched data for Planner task
-        new_app = get_appearance_by_id(aid) or {}
-        mt = get_meeting_by_id(new_app.get("meeting_id", 0)) or {}
-        matter = get_matter_by_file_number(new_app.get("file_number", "")) or {}
+        new_app = get_appearance_by_id(aid, org_id=g.org_id) or {}
+        mt = get_meeting_by_id(new_app.get("meeting_id", 0), org_id=g.org_id) or {}
+        matter = get_matter_by_file_number(new_app.get("file_number", ""), org_id=g.org_id) or {}
         enriched = dict(new_app)
         enriched.setdefault("short_title", matter.get("short_title", ""))
         enriched["meeting_date"] = mt.get("meeting_date", "")
@@ -8149,9 +8154,9 @@ def api_workflow_batch_assign():
     try:
         import planner_sync as ps
         # Build enriched appearance for the Teams message (use first item)
-        first = get_appearance_by_id(ids[0]) or {}
-        mt = get_meeting_by_id(first.get("meeting_id", 0)) or {}
-        matter = get_matter_by_file_number(first.get("file_number", "")) or {}
+        first = get_appearance_by_id(ids[0], org_id=g.org_id) or {}
+        mt = get_meeting_by_id(first.get("meeting_id", 0), org_id=g.org_id) or {}
+        matter = get_matter_by_file_number(first.get("file_number", ""), org_id=g.org_id) or {}
         enriched = dict(first)
         enriched.setdefault("short_title", matter.get("short_title", ""))
         enriched["meeting_date"] = mt.get("meeting_date", "")
@@ -8167,42 +8172,45 @@ def api_workflow_batch_assign():
 
 
 @app.route("/api/appearance/<int:app_id>")
+@login_required
 def api_appearance(app_id):
     from repository import get_appearance_by_id, get_matter_by_file_number, get_meeting_by_id
-    a = get_appearance_by_id(app_id)
+    a = get_appearance_by_id(app_id, org_id=g.org_id)
     if not a:
         return jsonify({"error": "not found"}), 404
-    m  = get_matter_by_file_number(a["file_number"]) or {}
-    mt = get_meeting_by_id(a["meeting_id"]) or {}
+    m  = get_matter_by_file_number(a["file_number"], org_id=g.org_id) or {}
+    mt = get_meeting_by_id(a["meeting_id"], org_id=g.org_id) or {}
     a["meeting_date"] = mt.get("meeting_date", "")
     a["body_name"]    = mt.get("body_name", "")
     # Attach all appearances for this matter so the Summary tab can render
     # Meeting Notes across every stage with timestamps.
     if m.get("id"):
         from repository import get_all_appearances_for_matter as _gaam
-        apps = _gaam(m["id"]) or []
+        apps = _gaam(m["id"], org_id=g.org_id) or []
         # enrich each with its meeting date/body so the UI can label by stage
         for ap in apps:
-            ap_mt = get_meeting_by_id(ap.get("meeting_id")) or {}
+            ap_mt = get_meeting_by_id(ap.get("meeting_id"), org_id=g.org_id) or {}
             ap["meeting_date"] = ap_mt.get("meeting_date", "")
             ap["body_name"]    = ap_mt.get("body_name", "")
         m["appearances"] = apps
         # Attach the living legislative-status timeline (parsed from Legistar)
         try:
             from lifecycle import get_timeline_for_matter as _gtm
-            m["timeline"] = _gtm(m["id"]) or []
+            m["timeline"] = _gtm(m["id"], org_id=g.org_id) or []
         except Exception:
             m["timeline"] = []
     return jsonify({"appearance": a, "matter": m})
 
 
 @app.route("/api/appearance/<int:app_id>/history")
+@login_required
 def api_appearance_history(app_id):
     from workflow import get_history
-    return jsonify(get_history(app_id))
+    return jsonify(get_history(app_id, org_id=g.org_id))
 
 
 @app.route("/api/appearance/<int:app_id>/workflow", methods=["POST"])
+@login_required
 def api_workflow_update(app_id):
     import workflow as wf
     from repository import get_appearance_by_id, get_meeting_by_id, get_matter_by_file_number
@@ -8210,16 +8218,16 @@ def api_workflow_update(app_id):
     by = d.get("changed_by") or "system"
 
     # Snapshot old values before changes (for notification logic)
-    old_app = get_appearance_by_id(app_id) or {}
+    old_app = get_appearance_by_id(app_id, org_id=g.org_id) or {}
     old_assignee = old_app.get("assigned_to") or ""
     old_status   = old_app.get("workflow_status") or ""
 
-    if d.get("status"):       wf.set_workflow_status(app_id, d["status"], by)
+    if d.get("status"):       wf.set_workflow_status(app_id, d["status"], by, org_id=g.org_id)
     if d.get("assigned_to") is not None:
         _force = (request.args.get("force", "").lower() in ("1", "true", "yes")
                   or bool(d.get("force")))
         try:
-            wf.assign_appearance(app_id, d["assigned_to"], by, force=_force)
+            wf.assign_appearance(app_id, d["assigned_to"], by, force=_force, org_id=g.org_id)
         except wf.CaseAssignmentConflict as cac:
             return jsonify({
                 "error":   "case_assignment_conflict",
@@ -8233,16 +8241,16 @@ def api_workflow_update(app_id):
                          "across researchers."),
             }), 409
     if d.get("reviewer") is not None:
-        wf.set_reviewer(app_id, d["reviewer"], by)
+        wf.set_reviewer(app_id, d["reviewer"], by, org_id=g.org_id)
     # due_date: present key with "" means clear it; truthy sets it
-    if "due_date" in d:        wf.set_due_date(app_id, d.get("due_date") or "", by)
-    if d.get("priority"):     wf.set_priority(app_id, d["priority"], by)
+    if "due_date" in d:        wf.set_due_date(app_id, d.get("due_date") or "", by, org_id=g.org_id)
+    if d.get("priority"):     wf.set_priority(app_id, d["priority"], by, org_id=g.org_id)
 
     # ── Smart notifications ──────────────────────────────────────
     try:
-        new_app = get_appearance_by_id(app_id) or {}
-        mt = get_meeting_by_id(new_app.get("meeting_id", 0)) or {}
-        matter = get_matter_by_file_number(new_app.get("file_number", "")) or {}
+        new_app = get_appearance_by_id(app_id, org_id=g.org_id) or {}
+        mt = get_meeting_by_id(new_app.get("meeting_id", 0), org_id=g.org_id) or {}
+        matter = get_matter_by_file_number(new_app.get("file_number", ""), org_id=g.org_id) or {}
         # Enrich appearance dict for email templates
         enriched = dict(new_app)
         enriched.setdefault("short_title", matter.get("short_title", ""))
@@ -8289,6 +8297,7 @@ def api_workflow_update(app_id):
 
 
 @app.route("/api/appearances/bulk-assign", methods=["POST"])
+@login_required
 def api_bulk_assign():
     """Bulk-update assigned_to, reviewer, due_date, and/or workflow_status
     for multiple appearances at once."""
@@ -8312,7 +8321,7 @@ def api_bulk_assign():
         try:
             if assigned_to is not None:
                 try:
-                    wf.assign_appearance(aid, assigned_to, by, force=force)
+                    wf.assign_appearance(aid, assigned_to, by, force=force, org_id=g.org_id)
                 except wf.CaseAssignmentConflict as cac:
                     conflicts.append({
                         "appearance_id": aid,
@@ -8321,11 +8330,11 @@ def api_bulk_assign():
                     })
                     continue  # skip this id, keep going with the rest
             if reviewer is not None:
-                wf.set_reviewer(aid, reviewer, by)
+                wf.set_reviewer(aid, reviewer, by, org_id=g.org_id)
             if due_date is not None:
-                wf.set_due_date(aid, due_date, by)
+                wf.set_due_date(aid, due_date, by, org_id=g.org_id)
             if status:
-                wf.set_workflow_status(aid, status, by)
+                wf.set_workflow_status(aid, status, by, org_id=g.org_id)
             count += 1
         except Exception as e:
             app.logger.warning(f"Bulk assign error for appearance {aid}: {e}")
@@ -8342,6 +8351,7 @@ def api_bulk_assign():
 
 
 @app.route("/api/workflow-history/clear", methods=["POST"])
+@login_required
 def api_clear_workflow_history():
     """Clear all workflow history and reset all workflow statuses to 'New'.
     Intended for wiping test data."""
@@ -8350,7 +8360,7 @@ def api_clear_workflow_history():
     reset_status = d.get("reset_status", True)
 
     with _db.get_db() as conn:
-        conn.execute("DELETE FROM workflow_history")
+        conn.execute("DELETE FROM workflow_history WHERE org_id=?", (g.org_id,))
         count = conn.execute("SELECT changes()").fetchone()[0]
         if reset_status:
             conn.execute("""UPDATE appearances SET
@@ -8358,7 +8368,7 @@ def api_clear_workflow_history():
                 assigned_to=NULL, reviewer=NULL,
                 assigned_date=NULL, due_date=NULL,
                 completion_date=NULL,
-                updated_at=?""", (now_iso(),))
+                updated_at=? WHERE org_id=?""", (now_iso(), g.org_id))
             reset_count = conn.execute("SELECT changes()").fetchone()[0]
         else:
             reset_count = 0
@@ -8371,6 +8381,7 @@ def api_clear_workflow_history():
 
 
 @app.route("/api/meetings/fix-dates", methods=["POST"])
+@login_required
 def api_fix_meeting_dates():
     """Normalize all meeting dates to ISO format and merge duplicates.
     Also fixes meeting_type for BCC meetings incorrectly typed as 'committee'."""
@@ -8382,19 +8393,22 @@ def api_fix_meeting_dates():
         _normalize_meeting_dates(conn)
         # Count how many meetings now have ISO dates
         fixed = conn.execute(
-            "SELECT COUNT(*) FROM meetings WHERE meeting_date LIKE '____-__-__'"
+            "SELECT COUNT(*) FROM meetings WHERE meeting_date LIKE '____-__-__' AND org_id=?",
+            (g.org_id,)
         ).fetchone()[0]
         # Fix BCC meetings incorrectly typed as committee
         conn.execute("""
             UPDATE meetings SET meeting_type='bcc'
             WHERE LOWER(body_name) LIKE '%board of county commissioner%'
               AND meeting_type != 'bcc'
-        """)
+              AND org_id=?
+        """, (g.org_id,))
         bcc_fixed = conn.execute("SELECT changes()").fetchone()[0]
     return jsonify({"ok": True, "meetings_normalized": fixed, "bcc_type_fixed": bcc_fixed})
 
 
 @app.route("/api/meetings/<int:meeting_id>", methods=["DELETE"])
+@login_required
 def api_delete_meeting(meeting_id):
     """Delete a meeting and all its appearances, cleaning up all FK dependencies."""
     import db as _db
@@ -8402,7 +8416,7 @@ def api_delete_meeting(meeting_id):
         with _db.get_db() as conn:
             # Get appearance IDs for this meeting
             app_ids = [r[0] for r in conn.execute(
-                "SELECT id FROM appearances WHERE meeting_id=?", (meeting_id,)
+                "SELECT id FROM appearances WHERE meeting_id=? AND org_id=?", (meeting_id, g.org_id)
             ).fetchall()]
             app_count = len(app_ids)
 
@@ -8442,7 +8456,7 @@ def api_delete_meeting(meeting_id):
             except Exception:
                 pass
             # Delete the meeting
-            conn.execute("DELETE FROM meetings WHERE id=?", (meeting_id,))
+            conn.execute("DELETE FROM meetings WHERE id=? AND org_id=?", (meeting_id, g.org_id))
             deleted = conn.execute("SELECT changes()").fetchone()[0]
 
         return jsonify({"ok": True, "meeting_deleted": deleted > 0,
@@ -8452,6 +8466,7 @@ def api_delete_meeting(meeting_id):
 
 
 @app.route("/api/appearance/<int:app_id>/notes", methods=["POST"])
+@login_required
 def api_notes_update(app_id):
     import workflow as wf
     d = request.get_json(force=True)
@@ -8459,23 +8474,24 @@ def api_notes_update(app_id):
     if d.get("replace"):
         # Full-replace mode: overwrite the entire field
         if "analyst_working_notes" in d:
-            wf.replace_working_notes(app_id, d["analyst_working_notes"], changed_by=by)
+            wf.replace_working_notes(app_id, d["analyst_working_notes"], changed_by=by, org_id=g.org_id)
         if "reviewer_notes" in d:
-            wf.replace_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
+            wf.replace_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by, org_id=g.org_id)
         if "internal_notes" in d:
             with get_db() as conn:
                 conn.execute(
-                    "UPDATE appearances SET internal_notes=?, updated_at=? WHERE id=?",
-                    (d["internal_notes"], now_iso(), app_id)
+                    "UPDATE appearances SET internal_notes=?, updated_at=? WHERE id=? AND org_id=?",
+                    (d["internal_notes"], now_iso(), app_id, g.org_id)
                 )
     else:
-        if d.get("working_notes"):   wf.append_working_notes(app_id, d["working_notes"], changed_by=by)
-        if d.get("reviewer_notes"):  wf.append_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by)
-    if "finalized_brief" in d:   wf.set_finalized_brief(app_id, d.get("finalized_brief") or "", changed_by=by)
+        if d.get("working_notes"):   wf.append_working_notes(app_id, d["working_notes"], changed_by=by, org_id=g.org_id)
+        if d.get("reviewer_notes"):  wf.append_reviewer_notes(app_id, d["reviewer_notes"], changed_by=by, org_id=g.org_id)
+    if "finalized_brief" in d:   wf.set_finalized_brief(app_id, d.get("finalized_brief") or "", changed_by=by, org_id=g.org_id)
     return jsonify({"ok": True})
 
 
 @app.route("/api/appearance/<int:app_id>/submit-for-review", methods=["POST"])
+@login_required
 def api_submit_for_review(app_id):
     """Snapshot current debrief + notes state, then change status to Draft Complete."""
     import workflow as wf
@@ -8484,8 +8500,8 @@ def api_submit_for_review(app_id):
     now = now_iso()
     with get_db() as conn:
         row = conn.execute(
-            "SELECT ai_summary_for_appearance, analyst_working_notes FROM appearances WHERE id=?",
-            (app_id,)
+            "SELECT ai_summary_for_appearance, analyst_working_notes FROM appearances WHERE id=? AND org_id=?",
+            (app_id, g.org_id)
         ).fetchone()
         if row:
             conn.execute(
@@ -8494,16 +8510,17 @@ def api_submit_for_review(app_id):
                    analyst_notes_snapshot_on_submit=?,
                    resubmission_comment=NULL,
                    updated_at=?
-                   WHERE id=?""",
+                   WHERE id=? AND org_id=?""",
                 (row["ai_summary_for_appearance"] or "",
                  row["analyst_working_notes"] or "",
-                 now, app_id)
+                 now, app_id, g.org_id)
             )
-    wf.set_workflow_status(app_id, "Draft Complete", changed_by=by)
+    wf.set_workflow_status(app_id, "Draft Complete", changed_by=by, org_id=g.org_id)
     return jsonify({"ok": True})
 
 
 @app.route("/api/appearance/<int:app_id>/resubmit", methods=["POST"])
+@login_required
 def api_resubmit_for_review(app_id):
     """Save resubmission comment, re-snapshot, change status to Draft Complete."""
     import workflow as wf
@@ -8513,8 +8530,8 @@ def api_resubmit_for_review(app_id):
     now = now_iso()
     with get_db() as conn:
         row = conn.execute(
-            "SELECT ai_summary_for_appearance, analyst_working_notes FROM appearances WHERE id=?",
-            (app_id,)
+            "SELECT ai_summary_for_appearance, analyst_working_notes FROM appearances WHERE id=? AND org_id=?",
+            (app_id, g.org_id)
         ).fetchone()
         if row:
             conn.execute(
@@ -8523,13 +8540,13 @@ def api_resubmit_for_review(app_id):
                    debrief_snapshot_on_submit=?,
                    analyst_notes_snapshot_on_submit=?,
                    updated_at=?
-                   WHERE id=?""",
+                   WHERE id=? AND org_id=?""",
                 (comment,
                  row["ai_summary_for_appearance"] or "",
                  row["analyst_working_notes"] or "",
-                 now, app_id)
+                 now, app_id, g.org_id)
             )
-    wf.set_workflow_status(app_id, "Draft Complete", changed_by=by)
+    wf.set_workflow_status(app_id, "Draft Complete", changed_by=by, org_id=g.org_id)
     wf.log_history(app_id, "resubmit",
                    note=f"Resubmitted after revision. Comment: {comment[:200]}" if comment else "Resubmitted after revision",
                    changed_by=by)
@@ -8537,15 +8554,17 @@ def api_resubmit_for_review(app_id):
 
 
 @app.route("/api/appearance/<int:app_id>/ai", methods=["POST"])
+@login_required
 def api_ai_update(app_id):
     import workflow as wf
     d = request.get_json(force=True)
     by = d.get("changed_by") or "system"
-    wf.update_ai_summary(app_id, d.get("summary", ""), d.get("watch_points"), by)
+    wf.update_ai_summary(app_id, d.get("summary", ""), d.get("watch_points"), by, org_id=g.org_id)
     return jsonify({"ok": True})
 
 
 @app.route("/api/appearance/<int:app_id>/export", methods=["POST"])
+@login_required
 def api_export_appearance(app_id):
     """Per-item export: generate Excel + Word for JUST this appearance.
     Registers them as item-level artifacts."""
@@ -8553,7 +8572,7 @@ def api_export_appearance(app_id):
     from exporters import export_for_appearance
     import artifacts as art
     import workflow as wf
-    a = get_appearance_by_id(app_id)
+    a = get_appearance_by_id(app_id, org_id=g.org_id)
     if not a:
         return jsonify({"error": "not found"}), 404
 
@@ -8593,27 +8612,30 @@ def api_export_appearance(app_id):
 # ── Saved Meetings / Meeting package API ──────────────────────
 
 @app.route("/api/meetings")
+@login_required
 def api_meetings():
     import meeting_service
-    return jsonify(meeting_service.list_saved_meetings())
+    return jsonify(meeting_service.list_saved_meetings(org_id=g.org_id))
 
 
 @app.route("/api/meeting/<int:meeting_id>")
+@login_required
 def api_meeting_detail(meeting_id):
     import meeting_service
-    pkg = meeting_service.get_meeting_package(meeting_id)
+    pkg = meeting_service.get_meeting_package(meeting_id, org_id=g.org_id)
     if not pkg:
         return jsonify({"error": "not found"}), 404
     return jsonify(pkg)
 
 
 @app.route("/api/appearance/<int:app_id>/reanalyze", methods=["POST"])
+@login_required
 def api_appearance_reanalyze(app_id):
     """Re-run AI analysis on a single appearance. Uses the item PDF text
     (or just the title if no PDF) and stores the result. Runs in a background
     thread so the UI doesn't block."""
     from repository import get_appearance_by_id, get_matter_by_file_number
-    a = get_appearance_by_id(app_id)
+    a = get_appearance_by_id(app_id, org_id=g.org_id)
     if not a:
         return jsonify({"error": "not found"}), 404
 
@@ -8712,11 +8734,12 @@ def api_appearance_reanalyze(app_id):
 _synth_status = {}  # app_id -> {status, error}
 
 @app.route("/api/appearance/<int:app_id>/synthesize", methods=["POST"])
+@login_required
 def api_synthesize_debrief(app_id):
     """Gather ALL research sources and synthesize a comprehensive debrief.
     Runs in background thread — poll /api/appearance/<id>/synthesize/status."""
     from repository import get_appearance_by_id
-    a = get_appearance_by_id(app_id)
+    a = get_appearance_by_id(app_id, org_id=g.org_id)
     if not a:
         return jsonify({"error": "not found"}), 404
 
@@ -8832,6 +8855,7 @@ def api_synthesize_debrief(app_id):
 
 
 @app.route("/api/appearance/<int:app_id>/synthesize/status")
+@login_required
 def api_synthesize_status(app_id):
     s = _synth_status.get(app_id, {"status": "idle", "error": None})
     return jsonify(s)
@@ -8841,6 +8865,7 @@ def api_synthesize_status(app_id):
 _batch_reanalysis = {}  # matter_id -> {total, completed, done}
 
 @app.route("/api/matter/<int:matter_id>/reanalyze-all", methods=["POST"])
+@login_required
 def api_matter_reanalyze_all(matter_id):
     """Re-run AI analysis on ALL appearances of a matter (item)."""
     from repository import get_all_appearances_for_matter
@@ -8936,22 +8961,24 @@ def api_matter_reanalyze_all(matter_id):
 
 
 @app.route("/api/matter/<int:matter_id>/reanalyze-progress")
+@login_required
 def api_matter_reanalyze_progress(matter_id):
     info = _batch_reanalysis.get(matter_id, {"total": 0, "completed": 0, "done": True})
     return jsonify(info)
 
 
 @app.route("/api/meeting/<int:meeting_id>/reanalyze-all", methods=["POST"])
+@login_required
 def api_meeting_reanalyze_all(meeting_id):
     """Re-run AI analysis on ALL items in a meeting."""
     from repository import get_meeting_by_id
     import db as _db
-    meeting = get_meeting_by_id(meeting_id)
+    meeting = get_meeting_by_id(meeting_id, org_id=g.org_id)
     if not meeting:
         return jsonify({"error": "meeting not found"}), 404
 
     with _db.get_db() as conn:
-        apps = conn.execute("SELECT id FROM appearances WHERE meeting_id=?", (meeting_id,)).fetchall()
+        apps = conn.execute("SELECT id FROM appearances WHERE meeting_id=? AND org_id=?", (meeting_id, g.org_id)).fetchall()
 
     if not apps:
         return jsonify({"error": "no appearances in meeting"}), 404
@@ -9023,45 +9050,50 @@ def api_meeting_reanalyze_all(meeting_id):
 
 
 @app.route("/api/meeting/<int:meeting_id>/regenerate", methods=["POST"])
+@login_required
 def api_meeting_regenerate(meeting_id):
     import meeting_service
-    registered = meeting_service.generate_draft_export(meeting_id, Path("output"))
+    registered = meeting_service.generate_draft_export(meeting_id, Path("output"), org_id=g.org_id)
     return jsonify({"ok": True, "artifacts": registered})
 
 
 @app.route("/api/meeting/<int:meeting_id>/finalize", methods=["POST"])
+@login_required
 def api_meeting_finalize(meeting_id):
     import meeting_service
-    ok, msg, registered = meeting_service.generate_final_export(meeting_id, Path("output"))
+    ok, msg, registered = meeting_service.generate_final_export(meeting_id, Path("output"), org_id=g.org_id)
     return jsonify({"ok": ok, "message": msg, "artifacts": registered})
 
 
 @app.route("/api/meeting/<int:meeting_id>/artifacts")
+@login_required
 def api_meeting_artifacts(meeting_id):
     import artifacts as art
-    return jsonify(art.get_current_artifacts_for_meeting(meeting_id))
+    return jsonify(art.get_current_artifacts_for_meeting(meeting_id, org_id=g.org_id))
 
 
 # ── Lifecycle / backfill endpoints ────────────────────────────
 
 @app.route("/api/matter/<int:matter_id>/timeline")
+@login_required
 def api_matter_timeline(matter_id):
     import lifecycle as lc
-    return jsonify(lc.get_timeline_for_matter(matter_id))
+    return jsonify(lc.get_timeline_for_matter(matter_id, org_id=g.org_id))
 
 
 @app.route("/api/appearance/<int:appearance_id>/timeline")
+@login_required
 def api_appearance_timeline(appearance_id):
     """Return the full lifecycle for this appearance's matter + every
     appearance we have in our DB, merged and sorted chronologically."""
     import lifecycle as lc
     from repository import get_appearance_by_id, get_all_appearances_for_matter
-    app_row = get_appearance_by_id(appearance_id)
+    app_row = get_appearance_by_id(appearance_id, org_id=g.org_id)
     if not app_row:
         return jsonify({"error": "not found"}), 404
     mid = app_row["matter_id"]
-    history = lc.get_timeline_for_matter(mid)
-    apps = get_all_appearances_for_matter(mid)
+    history = lc.get_timeline_for_matter(mid, org_id=g.org_id)
+    apps = get_all_appearances_for_matter(mid, org_id=g.org_id)
     our_events = []
     for a in apps:
         our_events.append({
@@ -9082,12 +9114,13 @@ def api_appearance_timeline(appearance_id):
 
 
 @app.route("/api/appearance/<int:appearance_id>/pdf")
+@login_required
 def api_appearance_pdf(appearance_id):
     """Serve the locally-cached item PDF if we have one, otherwise redirect
     to the remote item_pdf_url."""
     from flask import send_file, redirect
     from repository import get_appearance_by_id
-    a = get_appearance_by_id(appearance_id)
+    a = get_appearance_by_id(appearance_id, org_id=g.org_id)
     if not a:
         return "Not found", 404
     lp = a.get("item_pdf_local_path") or ""
@@ -9102,28 +9135,30 @@ def api_appearance_pdf(appearance_id):
 
 
 @app.route("/api/backfill/status")
+@login_required
 def api_backfill_status():
     """Quick probe: how many appearances are missing Legistar URLs or have no
     lifecycle rows. Used by the UI to decide whether to show a nudge banner."""
     with database.get_db() as conn:
-        total = conn.execute("SELECT COUNT(*) c FROM appearances").fetchone()["c"]
+        total = conn.execute("SELECT COUNT(*) c FROM appearances WHERE org_id=?", (g.org_id,)).fetchone()["c"]
         missing_url = conn.execute(
-            "SELECT COUNT(*) c FROM appearances WHERE matter_url IS NULL OR matter_url=''"
+            "SELECT COUNT(*) c FROM appearances WHERE (matter_url IS NULL OR matter_url='') AND org_id=?",
+            (g.org_id,)
         ).fetchone()["c"]
         missing_pdf = conn.execute(
             "SELECT COUNT(*) c FROM appearances WHERE (item_pdf_url IS NULL OR item_pdf_url='') "
-            "AND (item_pdf_local_path IS NULL OR item_pdf_local_path='')"
+            "AND (item_pdf_local_path IS NULL OR item_pdf_local_path='') AND org_id=?",
+            (g.org_id,)
         ).fetchone()["c"]
-        matters = conn.execute("SELECT COUNT(*) c FROM matters").fetchone()["c"]
+        matters = conn.execute("SELECT COUNT(*) c FROM matters WHERE org_id=?", (g.org_id,)).fetchone()["c"]
         matters_with_timeline = conn.execute(
-            "SELECT COUNT(DISTINCT matter_id) c FROM matter_timeline"
+            "SELECT COUNT(DISTINCT matter_id) c FROM matter_timeline WHERE org_id=?",
+            (g.org_id,)
         ).fetchone()["c"]
-        # A matter is "unvisited" if we've never attempted lifecycle parse.
-        # Once attempted, lifecycle_refreshed_at is set — even if no events
-        # were found (rare but possible for empty/withdrawn matters).
         matters_unvisited = conn.execute(
             """SELECT COUNT(*) c FROM matters
-               WHERE lifecycle_refreshed_at IS NULL OR lifecycle_refreshed_at=''"""
+               WHERE (lifecycle_refreshed_at IS NULL OR lifecycle_refreshed_at='') AND org_id=?""",
+            (g.org_id,)
         ).fetchone()["c"]
     return jsonify({
         "total_appearances":      total,
@@ -9215,6 +9250,7 @@ def _run_backfill(only_missing: bool, meeting_id=None):
 
 
 @app.route("/api/backfill/urls-and-lifecycle", methods=["POST"])
+@login_required
 def api_backfill():
     """Kick off the backfill in a background thread. Returns immediately.
     Poll /api/backfill/progress or subscribe to /api/backfill/stream for
@@ -9255,6 +9291,7 @@ def _bf_public_state():
 
 
 @app.route("/api/backfill/progress")
+@login_required
 def api_backfill_progress():
     return jsonify(_bf_public_state())
 
@@ -9273,6 +9310,7 @@ def _tx_emit(msg, phase="transcript", pct=0):
         _tx_state["pct"] = pct
 
 @app.route("/api/backfill/transcript", methods=["POST"])
+@login_required
 def api_backfill_transcript():
     data = request.get_json(force=True)
     meeting_id = data.get("meeting_id")
@@ -9323,6 +9361,7 @@ def api_backfill_transcript():
 
 
 @app.route("/api/backfill/transcript/progress")
+@login_required
 def api_transcript_progress():
     with _tx_lock:
         return jsonify({
@@ -9353,6 +9392,7 @@ def _bulk_tx_log(msg, pct=None):
             _bulk_tx_state["log_lines"] = _bulk_tx_state["log_lines"][-50:]
 
 @app.route("/api/backfill/transcript/bulk", methods=["POST"])
+@login_required
 def api_bulk_transcript_backfill():
     with _bulk_tx_lock:
         if _bulk_tx_state["running"]:
@@ -9498,6 +9538,7 @@ def api_bulk_transcript_backfill():
 
 
 @app.route("/api/backfill/transcript/bulk/progress")
+@login_required
 def api_bulk_transcript_progress():
     with _bulk_tx_lock:
         return jsonify({
@@ -9515,6 +9556,7 @@ def api_bulk_transcript_progress():
 
 
 @app.route("/api/backfill/transcript/bulk/stop", methods=["POST"])
+@login_required
 def api_bulk_transcript_stop():
     """Signal the bulk transcript backfill to stop after the current meeting."""
     with _bulk_tx_lock:
@@ -9526,6 +9568,7 @@ def api_bulk_transcript_stop():
 
 
 @app.route("/api/backfill/stop", methods=["POST"])
+@login_required
 def api_backfill_stop():
     """Signal the regular (Legistar) backfill to stop."""
     with _bf_lock:
@@ -9536,6 +9579,7 @@ def api_backfill_stop():
 
 
 @app.route("/api/debug/scrape-page")
+@login_required
 def api_debug_scrape_page():
     """Diagnostic: fetch a URL from the server and return all links found.
     Usage: /api/debug/scrape-page?url=https://...
@@ -9576,9 +9620,10 @@ def api_debug_scrape_page():
 
 
 @app.route("/api/artifact/<int:artifact_id>/download")
+@login_required
 def api_artifact_download(artifact_id):
     import artifacts as art
-    row = art.get_artifact(artifact_id)
+    row = art.get_artifact(artifact_id, org_id=g.org_id)
     if not row:
         return "Not found", 404
     fp = Path(row["file_path"])
@@ -9588,6 +9633,7 @@ def api_artifact_download(artifact_id):
 
 
 @app.route("/api/workflow")
+@login_required
 def api_workflow():
     from datetime import datetime, timedelta
     from search import list_appearances_by_status
@@ -9599,8 +9645,8 @@ def api_workflow():
     due_filter = request.args.get("due")
 
     with _db.get_db() as conn:
-        where = ["1=1"]
-        params = []
+        where = ["a.org_id=?"]
+        params = [g.org_id]
         if status:
             where.append("a.workflow_status=?"); params.append(status)
         if reviewer:
@@ -9648,6 +9694,7 @@ def api_workflow():
 
 
 @app.route("/api/config")
+@login_required
 def api_config_get():
     cfg = notifications.load_config()
     # Don't send password over wire
@@ -9656,6 +9703,7 @@ def api_config_get():
 
 
 @app.route("/api/config", methods=["POST"])
+@login_required
 def api_config_set():
     cfg = notifications.load_config()
     new = request.get_json(force=True)
@@ -9665,6 +9713,7 @@ def api_config_set():
 
 
 @app.route("/api/test-email", methods=["POST"])
+@login_required
 def api_test_email():
     try:
         cfg = notifications.load_config()
@@ -9676,6 +9725,7 @@ def api_test_email():
 
 
 @app.route("/api/test-webhook", methods=["POST"])
+@login_required
 def api_test_webhook():
     try:
         cfg = notifications.load_config()
@@ -9686,6 +9736,7 @@ def api_test_webhook():
 
 
 @app.route("/api/test-power-automate", methods=["POST"])
+@login_required
 def api_test_power_automate():
     try:
         import planner_sync as ps
@@ -9728,6 +9779,7 @@ def _read_persisted_progress(output_dir: Path) -> list[dict]:
 
 
 @app.route("/api/run", methods=["POST"])
+@login_required
 def api_run():
     from oca_agenda_agent_v6 import process_committees
     from scraper import MiamiDadeScraper
@@ -9849,6 +9901,7 @@ def api_run():
 
 
 @app.route("/api/jobs/active")
+@login_required
 def api_jobs_active():
     """Return jobs that are still running or just finished, so the browser
     can reattach after a reload. Sorted newest first."""
@@ -9868,6 +9921,7 @@ def api_jobs_active():
 
 
 @app.route("/api/stream/<job_id>")
+@login_required
 def api_stream(job_id):
     if job_id not in JOBS:
         return jsonify({"error": "not found"}), 404
@@ -9909,6 +9963,7 @@ def api_stream(job_id):
 
 
 @app.route("/api/download/<job_id>/<filename>")
+@login_required
 def api_download(job_id, filename):
     if job_id not in JOBS:
         return "Not found", 404
@@ -9919,6 +9974,7 @@ def api_download(job_id, filename):
 
 
 @app.route("/api/save-to-output/<job_id>/<filename>", methods=["POST"])
+@login_required
 def api_save_to_output(job_id, filename):
     """County-hardware fallback: copy a job output into the server-side
     OUTPUT_DIR and return {"path": ...} instead of streaming a browser
@@ -9944,12 +10000,13 @@ def api_save_to_output(job_id, filename):
 
 
 @app.route("/api/save-artifact-to-output/<int:artifact_id>", methods=["POST"])
+@login_required
 def api_save_artifact_to_output(artifact_id):
     """Same idea for artifacts — write to OUTPUT_DIR and return a JSON path
     instead of a browser download. Useful on county workstations where
     Symantec sometimes mangles /api/artifact/X/download responses."""
     import artifacts as art
-    row = art.get_artifact(artifact_id)
+    row = art.get_artifact(artifact_id, org_id=g.org_id)
     if not row:
         return jsonify({"error": "artifact not found"}), 404
     fp = Path(row["file_path"])
@@ -9973,6 +10030,7 @@ def api_save_artifact_to_output(artifact_id):
 # ═══════════════════════════════════════════════════════════════
 
 @app.route("/api/chat/<int:appearance_id>/messages")
+@login_required
 def api_chat_history(appearance_id):
     """Return chat history for (appearance, user). Private per user."""
     user = _current_user()
@@ -9980,14 +10038,15 @@ def api_chat_history(appearance_id):
         rows = conn.execute(
             """SELECT id, role, content, web_search, appended_to, created_at
                FROM chat_messages
-               WHERE appearance_id=? AND username=?
+               WHERE appearance_id=? AND username=? AND org_id=?
                ORDER BY created_at ASC""",
-            (appearance_id, user)
+            (appearance_id, user, g.org_id)
         ).fetchall()
     return jsonify({"messages": [dict(r) for r in rows]})
 
 
 @app.route("/api/chat/<int:appearance_id>/send", methods=["POST"])
+@login_required
 def api_chat_send(appearance_id):
     """Send a user message and get an AI response. Optionally use web search. Supports file attachments."""
     import httpx
@@ -10088,8 +10147,8 @@ def api_chat_send(appearance_id):
             """SELECT a.*, m.short_title, m.full_title, m.file_number as matter_file_number
                FROM appearances a
                JOIN matters m ON m.id = a.matter_id
-               WHERE a.id=?""",
-            (appearance_id,)
+               WHERE a.id=? AND a.org_id=?""",
+            (appearance_id, g.org_id)
         ).fetchone()
         if not app_row:
             return jsonify({"error": "Appearance not found"}), 404
@@ -10097,9 +10156,9 @@ def api_chat_send(appearance_id):
 
         history = conn.execute(
             """SELECT role, content FROM chat_messages
-               WHERE appearance_id=? AND username=?
+               WHERE appearance_id=? AND username=? AND org_id=?
                ORDER BY created_at ASC""",
-            (appearance_id, user)
+            (appearance_id, user, g.org_id)
         ).fetchall()
         history = [dict(r) for r in history][-20:]
 
@@ -10110,8 +10169,8 @@ def api_chat_send(appearance_id):
             att_names += [img['name'] for img in attached_images]
             saved_msg = (user_msg + "\n" if user_msg else "") + "📎 " + ", ".join(att_names)
         conn.execute(
-            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at) VALUES (?,?,?,?,?,?)",
-            (appearance_id, user, "user", saved_msg, 0, now_iso())
+            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at, org_id) VALUES (?,?,?,?,?,?,?)",
+            (appearance_id, user, "user", saved_msg, 0, now_iso(), g.org_id)
         )
 
     # Build system prompt with full item context including PDF text
@@ -10200,14 +10259,15 @@ def api_chat_send(appearance_id):
     now2 = now_iso()
     with get_db() as conn:
         conn.execute(
-            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at) VALUES (?,?,?,?,?,?)",
-            (appearance_id, user, "assistant", ai_text, 1 if use_web else 0, now2)
+            "INSERT INTO chat_messages (appearance_id, username, role, content, web_search, created_at, org_id) VALUES (?,?,?,?,?,?,?)",
+            (appearance_id, user, "assistant", ai_text, 1 if use_web else 0, now2, g.org_id)
         )
 
     return jsonify({"role": "assistant", "content": ai_text, "created_at": now2})
 
 
 @app.route("/api/chat/<int:appearance_id>/append", methods=["POST"])
+@login_required
 def api_chat_append(appearance_id):
     """Append a chat message's content to working notes or Part 1."""
     user = _current_user()
@@ -10221,8 +10281,8 @@ def api_chat_append(appearance_id):
     # Fetch the chat message
     with get_db() as conn:
         msg_row = conn.execute(
-            "SELECT * FROM chat_messages WHERE id=? AND appearance_id=? AND username=?",
-            (msg_id, appearance_id, user)
+            "SELECT * FROM chat_messages WHERE id=? AND appearance_id=? AND username=? AND org_id=?",
+            (msg_id, appearance_id, user, g.org_id)
         ).fetchone()
     if not msg_row:
         return jsonify({"error": "Message not found"}), 404
@@ -10233,47 +10293,48 @@ def api_chat_append(appearance_id):
     with get_db() as conn:
         if target == "notes":
             existing = conn.execute(
-                "SELECT analyst_working_notes FROM appearances WHERE id=?", (appearance_id,)
+                "SELECT analyst_working_notes FROM appearances WHERE id=? AND org_id=?", (appearance_id, g.org_id)
             ).fetchone()
             old_notes = (existing["analyst_working_notes"] or "") if existing else ""
             separator = "\n\n--- AI Chat Note (added by {}) ---\n".format(user)
             new_notes = old_notes + separator + content
             conn.execute(
-                "UPDATE appearances SET analyst_working_notes=?, analyst_notes_updated_at=?, analyst_notes_updated_by=?, updated_at=? WHERE id=?",
-                (new_notes, now, user, now, appearance_id)
+                "UPDATE appearances SET analyst_working_notes=?, analyst_notes_updated_at=?, analyst_notes_updated_by=?, updated_at=? WHERE id=? AND org_id=?",
+                (new_notes, now, user, now, appearance_id, g.org_id)
             )
         elif target == "deep_research":
             existing = conn.execute(
-                "SELECT finalized_brief FROM appearances WHERE id=?", (appearance_id,)
+                "SELECT finalized_brief FROM appearances WHERE id=? AND org_id=?", (appearance_id, g.org_id)
             ).fetchone()
             old_text = (existing["finalized_brief"] or "") if existing else ""
             separator = "\n\n--- AI Chat Research (added by {}) ---\n".format(user)
             new_text = old_text + separator + content
             conn.execute(
-                "UPDATE appearances SET finalized_brief=?, finalized_brief_updated_at=?, finalized_brief_updated_by=?, updated_at=? WHERE id=?",
-                (new_text, now, user, now, appearance_id)
+                "UPDATE appearances SET finalized_brief=?, finalized_brief_updated_at=?, finalized_brief_updated_by=?, updated_at=? WHERE id=? AND org_id=?",
+                (new_text, now, user, now, appearance_id, g.org_id)
             )
         else:  # part1
             existing = conn.execute(
-                "SELECT ai_summary_for_appearance FROM appearances WHERE id=?", (appearance_id,)
+                "SELECT ai_summary_for_appearance FROM appearances WHERE id=? AND org_id=?", (appearance_id, g.org_id)
             ).fetchone()
             old_text = (existing["ai_summary_for_appearance"] or "") if existing else ""
             separator = "\n\n--- Additional Context (added by {}) ---\n".format(user)
             new_text = old_text + separator + content
             conn.execute(
-                "UPDATE appearances SET ai_summary_for_appearance=?, updated_at=? WHERE id=?",
-                (new_text, now, appearance_id)
+                "UPDATE appearances SET ai_summary_for_appearance=?, updated_at=? WHERE id=? AND org_id=?",
+                (new_text, now, appearance_id, g.org_id)
             )
 
         # Mark the chat message as appended
         conn.execute(
-            "UPDATE chat_messages SET appended_to=? WHERE id=?", (target, msg_id)
+            "UPDATE chat_messages SET appended_to=? WHERE id=? AND org_id=?", (target, msg_id, g.org_id)
         )
 
     return jsonify({"ok": True, "target": target})
 
 
 @app.route("/api/maintenance/db-size")
+@login_required
 def api_maintenance_db_size():
     """Report current database file sizes."""
     import os
@@ -10291,6 +10352,7 @@ def api_maintenance_db_size():
 
 
 @app.route("/api/maintenance/diagnose")
+@login_required
 def api_maintenance_diagnose():
     """Full diagnostic: disk, DB integrity, row counts."""
     import os
@@ -10335,6 +10397,7 @@ def api_maintenance_diagnose():
 
 
 @app.route("/api/maintenance/vacuum", methods=["POST"])
+@login_required
 def api_maintenance_vacuum():
     """Reclaim disk space: WAL checkpoint, VACUUM, clear caches."""
     results = []
@@ -10367,6 +10430,7 @@ def api_maintenance_vacuum():
 
 
 @app.route("/api/maintenance/sample-data")
+@login_required
 def api_maintenance_sample_data():
     """Quick peek at actual data — confirms whether rows exist and have content."""
     sample = {}
@@ -10374,7 +10438,8 @@ def api_maintenance_sample_data():
         with db.get_db() as conn:
             # Recent meetings
             rows = conn.execute(
-                "SELECT id, body_name, meeting_date, agenda_status FROM meetings ORDER BY meeting_date DESC LIMIT 5"
+                "SELECT id, body_name, meeting_date, agenda_status FROM meetings WHERE org_id=? ORDER BY meeting_date DESC LIMIT 5",
+                (g.org_id,)
             ).fetchall()
             sample["recent_meetings"] = [dict(r) for r in rows]
 
@@ -10382,13 +10447,16 @@ def api_maintenance_sample_data():
             rows = conn.execute(
                 "SELECT a.id, a.file_number, a.workflow_status, m.meeting_date, m.body_name "
                 "FROM appearances a JOIN meetings m ON a.meeting_id=m.id "
-                "ORDER BY m.meeting_date DESC LIMIT 5"
+                "WHERE a.org_id=? "
+                "ORDER BY m.meeting_date DESC LIMIT 5",
+                (g.org_id,)
             ).fetchall()
             sample["recent_appearances"] = [dict(r) for r in rows]
 
             # Check if any meetings have appearances
             row = conn.execute(
-                "SELECT COUNT(DISTINCT meeting_id) as meetings_with_items FROM appearances"
+                "SELECT COUNT(DISTINCT meeting_id) as meetings_with_items FROM appearances WHERE org_id=?",
+                (g.org_id,)
             ).fetchone()
             sample["meetings_with_items"] = row["meetings_with_items"]
     except Exception as e:
@@ -10402,6 +10470,7 @@ def api_maintenance_sample_data():
 # ═══════════════════════════════════════════════════════════════
 
 @app.route("/api/meeting-prep/<int:meeting_id>")
+@login_required
 def api_meeting_prep(meeting_id):
     """Return all data needed for the Meeting Prep view.
     Includes items sorted by agenda position, with chat message counts,
@@ -10409,11 +10478,11 @@ def api_meeting_prep(meeting_id):
     import meeting_service
     from repository import get_meeting_by_id
 
-    m = get_meeting_by_id(meeting_id)
+    m = get_meeting_by_id(meeting_id, org_id=g.org_id)
     if not m:
         return jsonify({"error": "not found"}), 404
 
-    pkg = meeting_service.get_meeting_package(meeting_id)
+    pkg = meeting_service.get_meeting_package(meeting_id, org_id=g.org_id)
     if not pkg:
         return jsonify({"error": "not found"}), 404
 
@@ -10425,8 +10494,8 @@ def api_meeting_prep(meeting_id):
             aid = item["id"]
             # Count chat messages per item (across all users)
             chat_row = conn.execute(
-                "SELECT COUNT(*) as cnt FROM chat_messages WHERE appearance_id=?",
-                (aid,)
+                "SELECT COUNT(*) as cnt FROM chat_messages WHERE appearance_id=? AND org_id=?",
+                (aid, g.org_id)
             ).fetchone()
             item["chat_message_count"] = chat_row["cnt"] if chat_row else 0
 
@@ -10542,6 +10611,7 @@ def _classify_risk(item):
 
 
 @app.route("/api/meeting-prep/<int:meeting_id>/auto-assign", methods=["POST"])
+@login_required
 def api_auto_assign(meeting_id):
     """Smart round-robin assignment: distributes unassigned items fairly
     across the given analysts based on item complexity (risk level, text length,
@@ -10553,7 +10623,7 @@ def api_auto_assign(meeting_id):
         return jsonify({"error": "No analysts provided"}), 400
 
     import meeting_service
-    pkg = meeting_service.get_meeting_package(meeting_id)
+    pkg = meeting_service.get_meeting_package(meeting_id, org_id=g.org_id)
     items = pkg.get("items", [])
 
     # Only assign items that don't already have an assignee
@@ -10611,8 +10681,8 @@ def api_auto_assign(meeting_id):
         for item, analyst in assignments:
             aid = item.get("appearance_id") or item.get("id")
             conn.execute(
-                "UPDATE appearances SET assigned_to=? WHERE id=?",
-                (analyst, aid)
+                "UPDATE appearances SET assigned_to=? WHERE id=? AND org_id=?",
+                (analyst, aid, g.org_id)
             )
             # Create/update workflow record
             existing = conn.execute(
@@ -10643,6 +10713,7 @@ def api_auto_assign(meeting_id):
 
 
 @app.route("/api/meeting-prep/<int:meeting_id>/compile", methods=["POST"])
+@login_required
 def api_compile_final_analysis(meeting_id):
     """Compile a Final Analysis for one or all items in a meeting.
     Gathers all available sources and produces a comprehensive synthesis."""
@@ -10653,7 +10724,7 @@ def api_compile_final_analysis(meeting_id):
     data = request.get_json(force=True) or {}
     appearance_id = data.get("appearance_id")  # None = compile all
 
-    m = get_meeting_by_id(meeting_id)
+    m = get_meeting_by_id(meeting_id, org_id=g.org_id)
     if not m:
         return jsonify({"error": "Meeting not found"}), 404
 
@@ -10662,15 +10733,15 @@ def api_compile_final_analysis(meeting_id):
             rows = conn.execute(
                 """SELECT a.*, m2.short_title, m2.full_title, m2.sponsor, m2.department
                    FROM appearances a JOIN matters m2 ON m2.id=a.matter_id
-                   WHERE a.id=? AND a.meeting_id=?""",
-                (appearance_id, meeting_id)
+                   WHERE a.id=? AND a.meeting_id=? AND a.org_id=?""",
+                (appearance_id, meeting_id, g.org_id)
             ).fetchall()
         else:
             rows = conn.execute(
                 """SELECT a.*, m2.short_title, m2.full_title, m2.sponsor, m2.department
                    FROM appearances a JOIN matters m2 ON m2.id=a.matter_id
-                   WHERE a.meeting_id=?""",
-                (meeting_id,)
+                   WHERE a.meeting_id=? AND a.org_id=?""",
+                (meeting_id, g.org_id)
             ).fetchall()
 
     if not rows:
@@ -10861,13 +10932,14 @@ IMPORTANT RULES:
 
 
 @app.route("/api/meeting-prep/<int:meeting_id>/export-excel", methods=["POST"])
+@login_required
 def api_export_meeting_prep_excel(meeting_id):
     """Export Meeting Prep as a two-sheet Excel workbook:
     Sheet 1: Summary table (compact grid)
     Sheet 2: Detailed analysis per item"""
     from repository import get_meeting_by_id
 
-    m = get_meeting_by_id(meeting_id)
+    m = get_meeting_by_id(meeting_id, org_id=g.org_id)
     if not m:
         return jsonify({"error": "not found"}), 404
 
@@ -10880,7 +10952,7 @@ def api_export_meeting_prep_excel(meeting_id):
 
     # Get enriched items
     import meeting_service
-    pkg = meeting_service.get_meeting_package(meeting_id)
+    pkg = meeting_service.get_meeting_package(meeting_id, org_id=g.org_id)
     items = pkg.get("items", [])
 
     # Sort items by agenda position
@@ -11063,11 +11135,12 @@ def api_export_meeting_prep_excel(meeting_id):
 # ── Filtered View Export ───────────────────────────────────────
 
 @app.route("/api/meeting-prep/<int:meeting_id>/export-filtered", methods=["POST"])
+@login_required
 def api_export_filtered_view(meeting_id):
     """Export a filtered subset of meeting prep items as Excel."""
     from repository import get_meeting_by_id
 
-    m = get_meeting_by_id(meeting_id)
+    m = get_meeting_by_id(meeting_id, org_id=g.org_id)
     if not m:
         return jsonify({"error": "not found"}), 404
 
@@ -11083,7 +11156,7 @@ def api_export_filtered_view(meeting_id):
         return jsonify({"error": "openpyxl not installed"}), 500
 
     import meeting_service
-    pkg = meeting_service.get_meeting_package(meeting_id)
+    pkg = meeting_service.get_meeting_package(meeting_id, org_id=g.org_id)
     all_items = pkg.get("items", [])
 
     # Filter to requested IDs
@@ -11151,6 +11224,7 @@ def api_export_filtered_view(meeting_id):
 # ── Notifications API ──────────────────────────────────────────
 
 @app.route("/api/notifications")
+@login_required
 def api_notifications():
     """Return recent non-dismissed notifications, newest first."""
     with get_db() as conn:
@@ -11158,44 +11232,50 @@ def api_notifications():
             """SELECT id, type, title, body, meeting_id, appearance_id,
                       metadata, is_read, created_at
                FROM notifications
-               WHERE dismissed=0
+               WHERE dismissed=0 AND org_id=?
                ORDER BY created_at DESC
-               LIMIT 50"""
+               LIMIT 50""",
+            (g.org_id,)
         ).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
 @app.route("/api/notifications/<int:nid>/read", methods=["POST"])
+@login_required
 def api_notification_read(nid):
     with get_db() as conn:
-        conn.execute("UPDATE notifications SET is_read=1 WHERE id=?", (nid,))
+        conn.execute("UPDATE notifications SET is_read=1 WHERE id=? AND org_id=?", (nid, g.org_id))
     return jsonify({"ok": True})
 
 
 @app.route("/api/notifications/read-all", methods=["POST"])
+@login_required
 def api_notifications_read_all():
     with get_db() as conn:
-        conn.execute("UPDATE notifications SET is_read=1 WHERE is_read=0")
+        conn.execute("UPDATE notifications SET is_read=1 WHERE is_read=0 AND org_id=?", (g.org_id,))
     return jsonify({"ok": True})
 
 
 @app.route("/api/notifications/<int:nid>/dismiss", methods=["POST"])
+@login_required
 def api_notification_dismiss(nid):
     with get_db() as conn:
-        conn.execute("UPDATE notifications SET dismissed=1 WHERE id=?", (nid,))
+        conn.execute("UPDATE notifications SET dismissed=1 WHERE id=? AND org_id=?", (nid, g.org_id))
     return jsonify({"ok": True})
 
 
 @app.route("/api/notifications/dismiss-all", methods=["POST"])
+@login_required
 def api_notifications_dismiss_all():
     with get_db() as conn:
-        conn.execute("UPDATE notifications SET dismissed=1 WHERE dismissed=0")
+        conn.execute("UPDATE notifications SET dismissed=1 WHERE dismissed=0 AND org_id=?", (g.org_id,))
     return jsonify({"ok": True})
 
 
 # ── Agenda Monitor API ────────────────────────────────────────
 
 @app.route("/api/monitor/scan", methods=["POST"])
+@login_required
 def api_monitor_scan():
     """Trigger an agenda change detection scan. Runs in background."""
     import agenda_monitor as am
@@ -11206,7 +11286,7 @@ def api_monitor_scan():
         return jsonify({"ok": False, "error": "Scan already running"}), 409
 
     def _run():
-        am.run_full_scan(auto_process=True)
+        am.run_full_scan(auto_process=True, org_id=g.org_id)
 
     t = _threading.Thread(target=_run, daemon=True)
     t.start()
@@ -11214,12 +11294,14 @@ def api_monitor_scan():
 
 
 @app.route("/api/monitor/status")
+@login_required
 def api_monitor_status():
     import agenda_monitor as am
     return jsonify(am.get_scan_status())
 
 
 @app.route("/api/monitor/start-background", methods=["POST"])
+@login_required
 def api_monitor_start():
     import agenda_monitor as am
     am.start_background_monitor()
@@ -11227,6 +11309,7 @@ def api_monitor_start():
 
 
 @app.route("/api/monitor/stop-background", methods=["POST"])
+@login_required
 def api_monitor_stop():
     import agenda_monitor as am
     am.stop_background_monitor()
@@ -11242,30 +11325,33 @@ def api_monitor_stop():
 # These endpoints are read-mostly plus a candidate-review workflow.
 
 @app.route("/api/case/<path:application_number>")
+@login_required
 def api_case_get(application_number):
     """Load a full case by application number.
 
     Returns: {case, memberships, appearances, events} or 404.
     """
     import cases as _cases
-    c = _cases.get_case_by_application_number(application_number)
+    c = _cases.get_case_by_application_number(application_number, org_id=g.org_id)
     if not c:
         return jsonify({"error": "case not found"}), 404
-    full = _cases.load_full_case(c["id"])
+    full = _cases.load_full_case(c["id"], org_id=g.org_id)
     return jsonify(full)
 
 
 @app.route("/api/case/id/<int:case_id>")
+@login_required
 def api_case_get_by_id(case_id):
     """Load a full case by internal id. Returns same shape as by-app-number."""
     import cases as _cases
-    full = _cases.load_full_case(case_id)
+    full = _cases.load_full_case(case_id, org_id=g.org_id)
     if not full:
         return jsonify({"error": "case not found"}), 404
     return jsonify(full)
 
 
 @app.route("/api/cases/candidates")
+@login_required
 def api_cases_candidates():
     """Return candidate case memberships that need researcher review.
     Query param: ?limit=N (default 100)."""
@@ -11274,23 +11360,25 @@ def api_cases_candidates():
         limit = min(int(request.args.get("limit", 100)), 500)
     except ValueError:
         limit = 100
-    rows = _cases.list_candidate_memberships(limit=limit)
+    rows = _cases.list_candidate_memberships(limit=limit, org_id=g.org_id)
     return jsonify({"candidates": rows, "count": len(rows)})
 
 
 @app.route("/api/case/membership/<int:membership_id>/confirm", methods=["POST"])
+@login_required
 def api_case_membership_confirm(membership_id):
     """Confirm a candidate membership. Body: {"confirmed_by": "..."}"""
     import cases as _cases
     body = request.get_json(silent=True) or {}
     who = body.get("confirmed_by") or body.get("user") or "unknown"
-    ok = _cases.confirm_membership(membership_id, who)
+    ok = _cases.confirm_membership(membership_id, who, org_id=g.org_id)
     if not ok:
         return jsonify({"error": "membership not found"}), 404
     return jsonify({"ok": True, "confirmed_by": who})
 
 
 @app.route("/api/case/membership/<int:membership_id>/reject", methods=["POST"])
+@login_required
 def api_case_membership_reject(membership_id):
     """Reject a candidate membership. Body: {"rejected_by": "...",
     "reason": "..."}"""
@@ -11298,13 +11386,14 @@ def api_case_membership_reject(membership_id):
     body = request.get_json(silent=True) or {}
     who = body.get("rejected_by") or body.get("user") or "unknown"
     reason = body.get("reason", "")
-    ok = _cases.reject_membership(membership_id, who, reason)
+    ok = _cases.reject_membership(membership_id, who, reason, org_id=g.org_id)
     if not ok:
         return jsonify({"error": "membership not found"}), 404
     return jsonify({"ok": True, "rejected_by": who})
 
 
 @app.route("/api/case/manual-link", methods=["POST"])
+@login_required
 def api_case_manual_link():
     """Researcher manually creates a case link.
     Body: {"application_number", "matter_id", "role_label",
@@ -11322,6 +11411,7 @@ def api_case_manual_link():
             role_label=body["role_label"],
             role_category=body.get("role_category", "review"),
             created_by=body.get("created_by", "unknown"),
+            org_id=g.org_id,
         )
         return jsonify({"ok": True, "membership_id": mid})
     except Exception as e:
@@ -11329,13 +11419,14 @@ def api_case_manual_link():
 
 
 @app.route("/api/cases/backlink", methods=["POST"])
+@login_required
 def api_cases_backlink():
     """Admin endpoint: run the linker over every matter that isn't yet
     linked to a case. Idempotent. Useful after deploying the case layer
     on a DB with historical data. Can be slow on large DBs."""
     import cases as _cases
     try:
-        summary = _cases.backlink_all_matters(verbose=False)
+        summary = _cases.backlink_all_matters(verbose=False, org_id=g.org_id)
         return jsonify({"ok": True, "summary": summary})
     except Exception as e:
         log.exception("backlink failed")
@@ -11351,16 +11442,17 @@ def api_cases_backlink():
 # case, review candidate relations, confirm/reject, and manually create.
 
 @app.route("/api/case/<path:application_number>/relations")
+@login_required
 def api_case_relations_get(application_number):
     """Return all relations touching the case identified by its
     application number. Query param: ?include_rejected=1 to include
     rejected relations."""
     import cases as _cases
-    c = _cases.get_case_by_application_number(application_number)
+    c = _cases.get_case_by_application_number(application_number, org_id=g.org_id)
     if not c:
         return jsonify({"error": "case not found"}), 404
     include_rejected = request.args.get("include_rejected", "0") in ("1", "true", "yes")
-    rels = _cases.list_relations_for_case(c["id"], include_rejected=include_rejected)
+    rels = _cases.list_relations_for_case(c["id"], include_rejected=include_rejected, org_id=g.org_id)
     return jsonify({
         "case_id":           c["id"],
         "application_number": c["application_number"],
@@ -11370,6 +11462,7 @@ def api_case_relations_get(application_number):
 
 
 @app.route("/api/cases/relations/candidates")
+@login_required
 def api_cases_relations_candidates():
     """Candidate relations awaiting researcher confirmation.
     Query param: ?limit=N (default 100, max 500)."""
@@ -11378,23 +11471,25 @@ def api_cases_relations_candidates():
         limit = min(int(request.args.get("limit", 100)), 500)
     except ValueError:
         limit = 100
-    rows = _cases.list_candidate_relations(limit=limit)
+    rows = _cases.list_candidate_relations(limit=limit, org_id=g.org_id)
     return jsonify({"candidates": rows, "count": len(rows)})
 
 
 @app.route("/api/case/relation/<int:relation_id>/confirm", methods=["POST"])
+@login_required
 def api_case_relation_confirm(relation_id):
     """Confirm a candidate relation. Body: {"confirmed_by": "..."}"""
     import cases as _cases
     body = request.get_json(silent=True) or {}
     who = body.get("confirmed_by") or body.get("user") or "unknown"
-    ok = _cases.confirm_relation(relation_id, who)
+    ok = _cases.confirm_relation(relation_id, who, org_id=g.org_id)
     if not ok:
         return jsonify({"error": "relation not found"}), 404
     return jsonify({"ok": True, "confirmed_by": who})
 
 
 @app.route("/api/case/relation/<int:relation_id>/reject", methods=["POST"])
+@login_required
 def api_case_relation_reject(relation_id):
     """Reject a candidate relation. Stays in DB so the auto-detector
     doesn't re-propose. Body: {"rejected_by": "...", "reason": "..."}"""
@@ -11402,13 +11497,14 @@ def api_case_relation_reject(relation_id):
     body = request.get_json(silent=True) or {}
     who = body.get("rejected_by") or body.get("user") or "unknown"
     reason = body.get("reason", "")
-    ok = _cases.reject_relation(relation_id, who, reason)
+    ok = _cases.reject_relation(relation_id, who, reason, org_id=g.org_id)
     if not ok:
         return jsonify({"error": "relation not found"}), 404
     return jsonify({"ok": True, "rejected_by": who})
 
 
 @app.route("/api/case/relation", methods=["POST"])
+@login_required
 def api_case_relation_create():
     """Researcher manually creates a relation.
     Body: {
@@ -11433,6 +11529,7 @@ def api_case_relation_create():
             created_by=body["created_by"],
             evidence=body.get("evidence", ""),
             direction_from_case_a=bool(body.get("direction_from_a", True)),
+            org_id=g.org_id,
         )
         if rid is None:
             return jsonify({
@@ -11452,18 +11549,20 @@ def api_case_relation_create():
 # premium (see compute_item_weight in cases.py).
 
 @app.route("/api/workload/<username>")
+@login_required
 def api_workload_user(username):
     """Return a single researcher's current active workload with
     per-item weight breakdown."""
     import cases as _cases
     try:
-        return jsonify(_cases.get_current_workload(username))
+        return jsonify(_cases.get_current_workload(username, org_id=g.org_id))
     except Exception as e:
         log.exception("workload query failed")
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/workload/all")
+@login_required
 def api_workload_all():
     """Return workload summaries for every researcher with active
     assignments, sorted ascending by total_weight. Used by the
@@ -11471,7 +11570,7 @@ def api_workload_all():
     import cases as _cases
     try:
         return jsonify({
-            "researchers": _cases.list_all_researcher_workloads(),
+            "researchers": _cases.list_all_researcher_workloads(org_id=g.org_id),
         })
     except Exception as e:
         log.exception("workload/all failed")
@@ -11479,6 +11578,7 @@ def api_workload_all():
 
 
 @app.route("/api/workload/suggest")
+@login_required
 def api_workload_suggest():
     """Suggest the least-loaded researcher as a default assignee.
 
@@ -11498,7 +11598,7 @@ def api_workload_suggest():
         except ValueError:
             return jsonify({"error": "invalid 'over' parameter"}), 400
     try:
-        suggestion = _cases.suggest_assignee(exclude=exclude, prefer_over_weight=over)
+        suggestion = _cases.suggest_assignee(exclude=exclude, prefer_over_weight=over, org_id=g.org_id)
         return jsonify({"suggestion": suggestion})
     except Exception as e:
         log.exception("workload/suggest failed")
@@ -11506,13 +11606,14 @@ def api_workload_suggest():
 
 
 @app.route("/api/case/<path:application_number>/workload")
+@login_required
 def api_case_workload(application_number):
     """Per-Case workload summary: who's assigned to each item in this
     Case and in its companion Cases, plus an aggregate weight. This
     powers the "Workload" card on the Case view — lets you see if
     assignments are fragmented across researchers before they go out."""
     import cases as _cases
-    c = _cases.get_case_by_application_number(application_number)
+    c = _cases.get_case_by_application_number(application_number, org_id=g.org_id)
     if not c:
         return jsonify({"error": "case not found"}), 404
 
@@ -11593,6 +11694,7 @@ def api_case_workload(application_number):
 
 
 @app.route("/api/appearance/<int:appearance_id>/coherence")
+@login_required
 def api_appearance_coherence(appearance_id):
     """Dry-run check: would assigning this appearance to ?assignee=X
     create a Case-coherence conflict? Used by the UI to show warnings
@@ -11602,7 +11704,7 @@ def api_appearance_coherence(appearance_id):
     if not proposed:
         return jsonify({"error": "assignee query param required"}), 400
     try:
-        report = _cases.check_case_assignment_coherence(appearance_id, proposed)
+        report = _cases.check_case_assignment_coherence(appearance_id, proposed, org_id=g.org_id)
         return jsonify(report)
     except Exception as e:
         log.exception("coherence check failed")
@@ -11616,6 +11718,7 @@ def api_appearance_coherence(appearance_id):
 # fuller timeline / diff / delta-tracking widgets are deferred.
 
 @app.route("/case/<path:application_number>")
+@login_required
 def case_view_page(application_number):
     """Render the Case view for a given application number. Fully
     server-rendered skeleton; dynamic data loads via fetch() to the
@@ -11623,7 +11726,7 @@ def case_view_page(application_number):
     # Validate the case exists before rendering — saves a 404 bounce
     # from the client fetch.
     import cases as _cases
-    c = _cases.get_case_by_application_number(application_number)
+    c = _cases.get_case_by_application_number(application_number, org_id=g.org_id)
     if not c:
         return (f"<!doctype html><meta charset=utf-8>"
                 f"<title>Case not found</title>"
