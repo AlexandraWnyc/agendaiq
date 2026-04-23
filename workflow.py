@@ -71,9 +71,42 @@ def set_workflow_status(appearance_id: int, status: str, changed_by: str = None)
     log.info(f"  Appearance {appearance_id} → status: {status}")
 
 
-def assign_appearance(appearance_id: int, assigned_to: str, changed_by: str = None):
+def assign_appearance(
+    appearance_id: int,
+    assigned_to: str,
+    changed_by: str = None,
+    force: bool = False,
+):
+    """Assign an appearance to a researcher, enforcing Case coherence.
+
+    Policy (Session 4): all items in one Case must share an assignee,
+    and the same rule extends to companion Cases (CDMP + Zoning for
+    same project). If this assignment would create a mismatch, raises
+    CaseAssignmentConflict unless force=True.
+
+    Callers who want to bypass the check (e.g. admins doing bulk
+    reassignment) pass force=True.
+    """
     app = _require_appearance(appearance_id)
     old = app.get("assigned_to") or "unassigned"
+
+    # Coherence check — lazily imported to avoid a hard dependency
+    # if cases.py is missing or failing to load (keep workflow resilient)
+    if not force and assigned_to and assigned_to.strip():
+        try:
+            from cases import check_case_assignment_coherence
+            report = check_case_assignment_coherence(appearance_id, assigned_to)
+            if not report["ok"]:
+                raise CaseAssignmentConflict(
+                    appearance_id=appearance_id,
+                    proposed=assigned_to,
+                    report=report,
+                )
+        except CaseAssignmentConflict:
+            raise
+        except Exception as _e:
+            log.warning(f"  case-coherence check failed (proceeding anyway): {_e}")
+
     now = now_iso()
     with get_db() as conn:
         conn.execute(
@@ -84,7 +117,28 @@ def assign_appearance(appearance_id: int, assigned_to: str, changed_by: str = No
             (assigned_to, now, now, appearance_id)
         )
     log_history(appearance_id, "assigned", old, assigned_to, changed_by=changed_by)
-    log.info(f"  Appearance {appearance_id} → assigned to: {assigned_to}")
+    log.info(f"  Appearance {appearance_id} → assigned to: {assigned_to}"
+             f"{' (forced)' if force else ''}")
+
+
+class CaseAssignmentConflict(Exception):
+    """Raised when assign_appearance would violate Case-coherence.
+    Carries the conflict report so callers (e.g. HTTP handlers) can
+    render a useful error to the user."""
+    def __init__(self, appearance_id: int, proposed: str, report: dict):
+        self.appearance_id = appearance_id
+        self.proposed = proposed
+        self.report = report
+        conflicts = report.get("conflicts", [])
+        summary = "; ".join(
+            f"File#{c.get('file_number')} assigned to "
+            f"{c.get('assigned_to')!r} ({c.get('scope')})"
+            for c in conflicts[:3]
+        ) or "case coherence conflict"
+        super().__init__(
+            f"Cannot assign appearance {appearance_id} to {proposed!r}: "
+            f"{summary}"
+        )
 
 
 def set_reviewer(appearance_id: int, reviewer: str, changed_by: str = None):

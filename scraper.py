@@ -173,10 +173,48 @@ class MiamiDadeScraper:
         return all_items
 
     def _parse_committee_agenda(self, html, base_url):
-        """Parse committee agenda HTML — captures sub-items like 3A1, 1G1."""
+        """Parse committee agenda HTML — captures sub-items like 3A1, 1G1.
+
+        Miami-Dade agendas use a two-tier numbering scheme:
+          - Section headers like '1G', '3A' on standalone rows.
+          - Sub-items like '1G1', '3A1' on the actual matter rows.
+        Previously we matched both with the same regex and whichever appeared
+        last won, which left matter rows labeled with their section header.
+        Now we scan every cell of the matter row itself for a sub-item code
+        (letter followed by digit) and only fall back to the section header
+        when no sub-code is present on the row.
+        """
         soup = BeautifulSoup(html, "html.parser")
         items = []
-        current_comm_item = ""
+        current_section_header = ""  # e.g. '1G', updated from header rows only
+
+        # Sub-item code: digits + letter + digits (+ optional SUPPLEMENT/SUBSTITUTE)
+        SUB_ITEM_RE = re.compile(
+            r'^(\d+[A-Z]\d+(?:\s+(?:SUPPLEMENT|SUBSTITUTE|SUB))?)\s*$',
+            re.I,
+        )
+        # Section header: digits + letter ONLY (no trailing digit)
+        SECTION_HEADER_RE = re.compile(
+            r'^(\d+[A-Z](?:\s+(?:SUPPLEMENT|SUBSTITUTE|SUB))?)\s*$',
+            re.I,
+        )
+
+        def _find_item_number_in_row(row_tds):
+            """Return the best item number found on this row, or ''.
+            Prefers sub-item codes (1G1) over section headers (1G)."""
+            best = ""
+            for td in row_tds:
+                t = td.get_text(strip=True)
+                if not t or len(t) > 30:
+                    continue
+                m = SUB_ITEM_RE.match(t)
+                if m:
+                    return m.group(1).strip().upper()  # sub-item beats everything
+                if not best:
+                    m = SECTION_HEADER_RE.match(t)
+                    if m:
+                        best = m.group(1).strip().upper()
+            return best
 
         for tr in soup.find_all("tr"):
             tds = tr.find_all("td")
@@ -184,12 +222,10 @@ class MiamiDadeScraper:
                 continue
             first_text = tds[0].get_text(strip=True)
 
-            m = re.match(
-                r'^(\d+[A-Z]\d*(?:\s+(?:SUPPLEMENT|SUBSTITUTE|SUB))?)\s*$',
-                first_text, re.I
-            )
-            if m:
-                current_comm_item = m.group(1).strip().upper()
+            # Update the running section header only from *bare* section-header rows
+            m = SECTION_HEADER_RE.match(first_text)
+            if m and not SUB_ITEM_RE.match(first_text):
+                current_section_header = m.group(1).strip().upper()
 
             for link in tr.find_all("a", href=True):
                 href = link["href"]
@@ -225,8 +261,21 @@ class MiamiDadeScraper:
                         if pdf_url:
                             break
 
+                    # Prefer a sub-item code found on THIS row (e.g. '1G1') over
+                    # the running section header (e.g. '1G'). If the matter row
+                    # has no sub-code, also check the next sibling row — some
+                    # Legistar templates put the item number on the row above
+                    # or below the matter link row.
+                    row_item = _find_item_number_in_row(tds)
+                    if not row_item:
+                        for sib in tr.find_next_siblings("tr", limit=2):
+                            row_item = _find_item_number_in_row(sib.find_all("td"))
+                            if row_item:
+                                break
+                    item_number_final = row_item or current_section_header
+
                     items.append({
-                        "committee_item_number": current_comm_item,
+                        "committee_item_number": item_number_final,
                         "matter_id": mid,
                         "item_number": mid,
                         "title": title_text,
@@ -330,46 +379,90 @@ class MiamiDadeScraper:
                 # Search all soups (main page + any frames) for fields
                 all_soups = [soup] + frame_soups
 
-                # Approach A: label and value in same TD
-                fields_same_td = {}
-                for s in all_soups:
-                    for bold in s.find_all(["b", "strong"]):
-                        ptd = bold.find_parent("td")
-                        if ptd:
-                            label = bold.get_text(strip=True).rstrip(":")
-                            full = ptd.get_text(strip=True)
-                            if ":" in full and label:
-                                val = full.split(":", 1)[1].strip()
-                                if val:
-                                    fields_same_td[label] = val
+                # Known Legistar matter-page field labels. We match these
+                # regardless of whether they're wrapped in <b>, <strong>,
+                # <font>, <span>, or no tag at all — which is why the earlier
+                # bold-only approach missed 'Title:' and 'Notes:' (Legistar
+                # often uses <font> for those rows instead of <b>).
+                KNOWN_LABELS = [
+                    "File Name", "File Number", "Title", "File Type",
+                    "Status", "Control", "Sponsors", "Sponsor",
+                    "Requester", "Introduced", "Enactment Date",
+                    "Enactment Number", "Agenda Date", "Agenda Item Number",
+                    "Notes", "On Agenda", "Final Action",
+                    "Department", "Version",
+                ]
+                # Sort longest first so "Agenda Item Number" beats "Agenda"
+                KNOWN_LABELS.sort(key=len, reverse=True)
 
-                # Approach B: label in one TD, value in next sibling TD
-                fields_sibling = {}
-                for s in all_soups:
-                    for bold in s.find_all(["b", "strong"]):
-                        label = bold.get_text(strip=True).rstrip(":")
-                        if not label:
-                            continue
-                        ptd = bold.find_parent("td")
-                        if not ptd:
-                            continue
-                        td_text = ptd.get_text(strip=True)
-                        has_value = ":" in td_text and len(td_text.split(":", 1)[1].strip()) > 0
-                        if not has_value:
-                            next_td = ptd.find_next_sibling("td")
-                            if next_td:
-                                val = next_td.get_text(strip=True)
-                                if val:
-                                    fields_sibling[label] = val
+                def _label_match(td_text: str) -> str | None:
+                    """If this TD looks like 'Label:' (with optional trailing
+                    value), return the canonical label. Else None."""
+                    t = td_text.strip().rstrip(":").strip()
+                    for lbl in KNOWN_LABELS:
+                        if t.lower() == lbl.lower():
+                            return lbl
+                        # Also catch 'Title: <value>' where value is in same TD
+                        if t.lower().startswith(lbl.lower() + ":"):
+                            return lbl
+                    return None
 
                 fields = {}
-                fields.update(fields_same_td)
-                fields.update(fields_sibling)
+
+                for s in all_soups:
+                    for td in s.find_all("td"):
+                        td_text = td.get_text(" ", strip=True)
+                        if not td_text or len(td_text) > 500:
+                            # Skip empty cells and giant body cells (which are
+                            # the *value* side, not the label side)
+                            continue
+
+                        # Case 1: label and value in same TD ('Title: ...')
+                        for lbl in KNOWN_LABELS:
+                            prefix = lbl + ":"
+                            if td_text.lower().startswith(prefix.lower()):
+                                val = td_text[len(prefix):].strip()
+                                if val and lbl not in fields:
+                                    fields[lbl] = val
+                                break
+
+                        # Case 2: label alone in this TD, value in next sibling
+                        matched_lbl = _label_match(td_text)
+                        if matched_lbl and matched_lbl not in fields:
+                            # Check same-TD didn't already fill it
+                            td_clean = td_text.strip().rstrip(":").strip()
+                            if td_clean.lower() == matched_lbl.lower():
+                                # Walk next siblings — Legistar sometimes has
+                                # a spacer <td> between label and value
+                                for sib in td.find_next_siblings("td", limit=3):
+                                    sval = sib.get_text(" ", strip=True)
+                                    if sval and len(sval) < 20000:
+                                        fields[matched_lbl] = sval
+                                        break
+
+                # For the Title field specifically, the value is often a long
+                # resolution body that spans paragraphs inside a single TD.
+                # If we captured it but it's suspiciously short, try again
+                # looking for the longest nearby TD after a 'Title:' label.
+                if fields.get("Title") and len(fields["Title"]) < 50:
+                    for s in all_soups:
+                        for td in s.find_all("td"):
+                            t = td.get_text(" ", strip=True)
+                            if t.strip().rstrip(":").strip().lower() == "title":
+                                # Grab the largest-text sibling in the next
+                                # few cells — this catches multi-line titles
+                                best = fields["Title"]
+                                for sib in td.find_next_siblings("td", limit=3):
+                                    sval = sib.get_text(" ", strip=True)
+                                    if len(sval) > len(best):
+                                        best = sval
+                                fields["Title"] = best
+                                break
 
                 item["short_title"] = fields.get("File Name", item.get("title", ""))
                 item["title"] = item["short_title"]
                 item["full_title"] = fields.get("Title", "")
-                item["sponsor"] = fields.get("Sponsors", "")
+                item["sponsor"] = fields.get("Sponsors", fields.get("Sponsor", ""))
                 item["file_type"] = fields.get("File Type", "")
                 item["status"] = fields.get("Status", "")
                 item["control"] = fields.get("Control", "")
@@ -496,7 +589,7 @@ def extract_pdf_text(pdf_path: Path) -> str:
                 if ocr_parts:
                     doc.close()
                     text = "\n".join(ocr_parts)
-                    return text[:30000] if len(text) > 30000 else text
+                    return text[:80000] if len(text) > 80000 else text
             except Exception as oe:
                 log.warning(f"  OCR unavailable or failed: {oe}")
             doc.close()
@@ -505,7 +598,11 @@ def extract_pdf_text(pdf_path: Path) -> str:
 
         doc.close()
         text = "\n".join(parts)
-        return text[:30000] if len(text) > 30000 else text
+        # Raised from 30k → 80k (April 2026): the analyzer does its own
+        # section-aware trimming down to its budget. Capping too aggressively
+        # here caused fiscal-impact attachments and legislative history pages
+        # to get dropped before the analyzer ever saw them.
+        return text[:80000] if len(text) > 80000 else text
     except Exception as e:
         log.error(f"  PDF extract failed: {e}")
         return ""
