@@ -42,6 +42,18 @@ from schema import (
 log = logging.getLogger("oca-agent")
 
 
+def _resolve_org_id(org_id=None) -> int:
+    if org_id is not None:
+        return org_id
+    try:
+        from flask import g
+        if hasattr(g, 'org_id') and g.org_id is not None:
+            return g.org_id
+    except (ImportError, RuntimeError):
+        pass
+    return 1
+
+
 # ══════════════════════════════════════════════════════════════════
 # APPLICATION-NUMBER EXTRACTION
 # ══════════════════════════════════════════════════════════════════
@@ -470,6 +482,7 @@ def link_matter_to_case(
     agenda_stage: str = "",
     body_name: str = "",
     extra_text: str = "",
+    org_id=None,
 ) -> dict:
     """Run the full linker pipeline for a single matter.
 
@@ -495,6 +508,7 @@ def link_matter_to_case(
         "extracted_numbers": list,
       }
     """
+    oid = _resolve_org_id(org_id)
     search_text = " ".join(filter(None, [
         short_title, full_title, extra_text,
     ]))
@@ -550,6 +564,7 @@ def link_matter_to_case(
         case_type_confidence=ct_conf,
         display_label=short_title[:200],
         is_synthetic=is_synthetic,
+        org_id=oid,
     )
 
     # Link status decision
@@ -567,6 +582,7 @@ def link_matter_to_case(
         link_confidence=link_confidence,
         link_method=link_method,
         link_evidence=link_evidence,
+        org_id=oid,
     )
 
     # Update the case's current stage (most recent observation wins)
@@ -574,10 +590,11 @@ def link_matter_to_case(
         case_id=case_id,
         stage_category=stage_cat,
         stage_label=stage_lbl,
+        org_id=oid,
     )
 
     # Denormalize case_id onto appearances of this matter
-    _propagate_case_to_appearances(matter_id, case_id, role_lbl)
+    _propagate_case_to_appearances(matter_id, case_id, role_lbl, org_id=oid)
 
     # ── Detect relations to OTHER cases mentioned in the same text ──
     # Every secondary number found in search_text is a candidate for a
@@ -593,6 +610,7 @@ def link_matter_to_case(
                 extracted_numbers=extracted,
                 source_text=extra_text or search_text,
                 evidence_source=f"matter {matter_id} ingest",
+                org_id=oid,
             )
             if relation_ids:
                 log.info(f"    Recorded {len(relation_ids)} candidate "
@@ -623,14 +641,16 @@ def _find_or_create_case(
     case_type_confidence: float,
     display_label: str,
     is_synthetic: bool,
+    org_id=None,
 ) -> int:
     """Upsert a case by application_number. Returns case_id."""
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     with get_db() as conn:
         row = conn.execute(
             "SELECT id, case_type, case_type_confidence FROM cases "
-            "WHERE application_number = ?",
-            (app_number,),
+            "WHERE application_number = ? AND org_id = ?",
+            (app_number, oid),
         ).fetchone()
         if row:
             # Existing case — upgrade case_type only if new classification
@@ -639,25 +659,25 @@ def _find_or_create_case(
             if case_type_confidence > (row["case_type_confidence"] or 0):
                 conn.execute(
                     "UPDATE cases SET case_type=?, case_type_confidence=?, "
-                    "updated_at=? WHERE id=?",
-                    (case_type, case_type_confidence, now, case_id),
+                    "updated_at=? WHERE id=? AND org_id = ?",
+                    (case_type, case_type_confidence, now, case_id, oid),
                 )
             else:
                 conn.execute(
-                    "UPDATE cases SET updated_at=? WHERE id=?",
-                    (now, case_id),
+                    "UPDATE cases SET updated_at=? WHERE id=? AND org_id = ?",
+                    (now, case_id, oid),
                 )
             return case_id
         # New case
         cur = conn.execute(
             "INSERT INTO cases (application_number, case_type, "
             "case_type_confidence, display_label, is_synthetic, "
-            "first_seen_date, last_activity_date, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "first_seen_date, last_activity_date, created_at, updated_at, org_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 app_number, case_type, case_type_confidence,
                 display_label, 1 if is_synthetic else 0,
-                now[:10], now[:10], now, now,
+                now[:10], now[:10], now, now, oid,
             ),
         )
         return cur.lastrowid
@@ -673,14 +693,16 @@ def _upsert_membership(
     link_confidence: float,
     link_method: str,
     link_evidence: str,
+    org_id=None,
 ) -> None:
     """Insert or update the (case, matter) membership. matter_id is unique
     across memberships, so one matter belongs to exactly one case."""
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, link_status FROM case_memberships WHERE matter_id=?",
-            (matter_id,),
+            "SELECT id, link_status FROM case_memberships WHERE matter_id=? AND org_id = ?",
+            (matter_id, oid),
         ).fetchone()
         if row:
             # Don't overwrite a researcher-confirmed/rejected link with
@@ -689,31 +711,31 @@ def _upsert_membership(
             if existing_status in ("manual", "rejected"):
                 conn.execute(
                     "UPDATE case_memberships SET role_category=?, role_label=?, "
-                    "role_confidence=?, updated_at=? WHERE id=?",
-                    (role_category, role_label, role_confidence, now, row["id"]),
+                    "role_confidence=?, updated_at=? WHERE id=? AND org_id = ?",
+                    (role_category, role_label, role_confidence, now, row["id"], oid),
                 )
                 return
             conn.execute(
                 "UPDATE case_memberships SET case_id=?, role_category=?, "
                 "role_label=?, role_confidence=?, link_status=?, "
                 "link_confidence=?, link_method=?, link_evidence=?, "
-                "updated_at=? WHERE id=?",
+                "updated_at=? WHERE id=? AND org_id = ?",
                 (
                     case_id, role_category, role_label, role_confidence,
                     link_status, link_confidence, link_method, link_evidence,
-                    now, row["id"],
+                    now, row["id"], oid,
                 ),
             )
             return
         conn.execute(
             "INSERT INTO case_memberships (case_id, matter_id, role_category, "
             "role_label, role_confidence, link_status, link_confidence, "
-            "link_method, link_evidence, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "link_method, link_evidence, created_at, updated_at, org_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 case_id, matter_id, role_category, role_label, role_confidence,
                 link_status, link_confidence, link_method, link_evidence,
-                now, now,
+                now, now, oid,
             ),
         )
 
@@ -722,6 +744,7 @@ def _update_case_current_stage(
     case_id: int,
     stage_category: str,
     stage_label: str,
+    org_id=None,
 ) -> None:
     """Update the case's current_stage, but only if the new observation
     represents a MORE advanced stage than what's already recorded.
@@ -741,12 +764,13 @@ def _update_case_current_stage(
         "closed":           7,
         "unknown":          0,
     }
+    oid = _resolve_org_id(org_id)
     new_rank = STAGE_RANK.get(stage_category, 0)
     now = now_iso()
     with get_db() as conn:
         row = conn.execute(
-            "SELECT current_stage_category FROM cases WHERE id=?",
-            (case_id,),
+            "SELECT current_stage_category FROM cases WHERE id=? AND org_id = ?",
+            (case_id, oid),
         ).fetchone()
         if not row:
             return
@@ -755,28 +779,29 @@ def _update_case_current_stage(
             conn.execute(
                 "UPDATE cases SET current_stage_category=?, "
                 "current_stage_label=?, last_activity_date=?, updated_at=? "
-                "WHERE id=?",
-                (stage_category, stage_label, now[:10], now, case_id),
+                "WHERE id=? AND org_id = ?",
+                (stage_category, stage_label, now[:10], now, case_id, oid),
             )
         else:
             # Still bump last_activity_date since we saw new activity
             conn.execute(
                 "UPDATE cases SET last_activity_date=?, updated_at=? "
-                "WHERE id=?",
-                (now[:10], now, case_id),
+                "WHERE id=? AND org_id = ?",
+                (now[:10], now, case_id, oid),
             )
 
 
 def _propagate_case_to_appearances(
-    matter_id: int, case_id: int, role_label: str
+    matter_id: int, case_id: int, role_label: str, org_id=None
 ) -> None:
     """Write case_id + role_label onto every appearance of this matter.
     Denormalized for fast case-view queries."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         conn.execute(
             "UPDATE appearances SET case_id=?, case_role_label=? "
-            "WHERE matter_id=?",
-            (case_id, role_label, matter_id),
+            "WHERE matter_id=? AND org_id = ?",
+            (case_id, role_label, matter_id, oid),
         )
 
 
@@ -969,6 +994,7 @@ def upsert_relation(
     evidence_source: str = "",
     status: str = "candidate",
     direction_from_to: tuple[int, int] | None = None,
+    org_id=None,
 ) -> int | None:
     """Insert or update a relation between two cases.
 
@@ -1002,6 +1028,7 @@ def upsert_relation(
     else:
         direction = None
 
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     try:
         with get_db() as conn:
@@ -1009,8 +1036,8 @@ def upsert_relation(
             # a duplicate insert but we want to know whether to update).
             row = conn.execute(
                 "SELECT id, confidence, status FROM case_relations "
-                "WHERE case_a_id=? AND case_b_id=? AND relation_type=?",
-                (a_id, b_id, relation_type),
+                "WHERE case_a_id=? AND case_b_id=? AND relation_type=? AND org_id = ?",
+                (a_id, b_id, relation_type, oid),
             ).fetchone()
 
             if row:
@@ -1022,18 +1049,18 @@ def upsert_relation(
                     if confidence > (row["confidence"] or 0):
                         conn.execute(
                             "UPDATE case_relations SET confidence=?, "
-                            "evidence_snippet=?, updated_at=? WHERE id=?",
-                            (confidence, evidence_snippet[:500], now, row["id"]),
+                            "evidence_snippet=?, updated_at=? WHERE id=? AND org_id = ?",
+                            (confidence, evidence_snippet[:500], now, row["id"], oid),
                         )
                     return row["id"]
                 # Otherwise update everything
                 conn.execute(
                     "UPDATE case_relations SET confidence=?, status=?, "
                     "direction=?, detection_method=?, evidence_snippet=?, "
-                    "evidence_source=?, updated_at=? WHERE id=?",
+                    "evidence_source=?, updated_at=? WHERE id=? AND org_id = ?",
                     (confidence, status, direction, detection_method,
                      evidence_snippet[:500], evidence_source[:500],
-                     now, row["id"]),
+                     now, row["id"], oid),
                 )
                 return row["id"]
 
@@ -1041,11 +1068,11 @@ def upsert_relation(
                 "INSERT INTO case_relations (case_a_id, case_b_id, "
                 "relation_type, direction, confidence, status, "
                 "detection_method, evidence_snippet, evidence_source, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, updated_at, org_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (a_id, b_id, relation_type, direction, confidence, status,
                  detection_method, evidence_snippet[:500],
-                 evidence_source[:500], now, now),
+                 evidence_source[:500], now, now, oid),
             )
             return cur.lastrowid
     except Exception as e:
@@ -1059,6 +1086,7 @@ def record_detected_relations(
     extracted_numbers: list[dict],
     source_text: str,
     evidence_source: str = "",
+    org_id=None,
 ) -> list[int]:
     """High-level: run the detector and write all findings as candidate
     relations. Returns the list of relation ids written. Only writes
@@ -1067,12 +1095,13 @@ def record_detected_relations(
     phantom rows. If the other case is missing, the relation is
     silently skipped; next scrape of the other case will find this one
     and create the link from the other direction."""
+    oid = _resolve_org_id(org_id)
     if not extracted_numbers:
         return []
     findings = detect_relations(primary_number, extracted_numbers, source_text)
     ids = []
     for f in findings:
-        other_case = get_case_by_application_number(f["other_number"])
+        other_case = get_case_by_application_number(f["other_number"], org_id=oid)
         if not other_case:
             log.debug(f"  relation skipped — other case "
                       f"{f['other_number']} not yet in DB")
@@ -1094,6 +1123,7 @@ def record_detected_relations(
             evidence_source=evidence_source,
             status="candidate",
             direction_from_to=direction,
+            org_id=oid,
         )
         if rid:
             ids.append(rid)
@@ -1105,7 +1135,7 @@ def record_detected_relations(
 # ══════════════════════════════════════════════════════════════════
 
 def list_relations_for_case(
-    case_id: int, include_rejected: bool = False
+    case_id: int, include_rejected: bool = False, org_id=None
 ) -> list[dict]:
     """Return all relations touching this case, with the OTHER case's
     summary fields joined in. Each row includes an 'other_side' dict
@@ -1122,6 +1152,7 @@ def list_relations_for_case(
       'successor'              → 'succeeds' or 'succeeded_by'
       'superseded_by'          → 'superseded_by' or 'supersedes'
     """
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         where_status = "" if include_rejected else "AND r.status != 'rejected'"
         rows = conn.execute(
@@ -1139,10 +1170,11 @@ def list_relations_for_case(
             JOIN cases c_a ON c_a.id = r.case_a_id
             JOIN cases c_b ON c_b.id = r.case_b_id
             WHERE (r.case_a_id = ? OR r.case_b_id = ?)
+              AND r.org_id = ?
               {where_status}
             ORDER BY r.status, r.confidence DESC, r.created_at DESC
             """,
-            (case_id, case_id),
+            (case_id, case_id, oid),
         ).fetchall()
 
     result = []
@@ -1193,9 +1225,10 @@ def _direction_for_case(relation_type: str, direction: str | None,
     return fwd if from_is_this else rev
 
 
-def list_candidate_relations(limit: int = 100) -> list[dict]:
+def list_candidate_relations(limit: int = 100, org_id=None) -> list[dict]:
     """Candidate relations awaiting researcher review. Joins both
     endpoints for display."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             """
@@ -1206,10 +1239,11 @@ def list_candidate_relations(limit: int = 100) -> list[dict]:
             JOIN cases c_a ON c_a.id = r.case_a_id
             JOIN cases c_b ON c_b.id = r.case_b_id
             WHERE r.status = 'candidate'
+            AND r.org_id = ?
             ORDER BY r.confidence DESC, r.created_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (oid, limit),
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -1238,6 +1272,7 @@ def build_crossref_context(
     case_id: int,
     current_matter_id: int | None = None,
     max_chars: int = 4000,
+    org_id=None,
 ) -> str:
     """Build a text block suitable for injection into an analyzer's
     prior_context describing cross-references to other items. Returns
@@ -1253,6 +1288,7 @@ def build_crossref_context(
     """
     parts = []
 
+    oid = _resolve_org_id(org_id)
     # 1. Other items in THIS case
     with get_db() as conn:
         same_case_rows = conn.execute(
@@ -1269,11 +1305,12 @@ def build_crossref_context(
             WHERE cm.case_id = ?
               AND cm.matter_id != ?
               AND cm.link_status != 'rejected'
+              AND cm.org_id = ?
               AND a.ai_summary_for_appearance IS NOT NULL
               AND LENGTH(a.ai_summary_for_appearance) > 30
             ORDER BY mt.meeting_date DESC, a.updated_at DESC
             """,
-            (case_id, current_matter_id or 0),
+            (case_id, current_matter_id or 0, oid),
         ).fetchall()
 
     for r in same_case_rows:
@@ -1309,12 +1346,13 @@ def build_crossref_context(
             LEFT JOIN appearances a ON a.matter_id = m.id
             LEFT JOIN meetings mt   ON mt.id = a.meeting_id
             WHERE (r.case_a_id = ? OR r.case_b_id = ?)
+              AND r.org_id = ?
               AND r.status != 'rejected'
               AND a.ai_summary_for_appearance IS NOT NULL
               AND LENGTH(a.ai_summary_for_appearance) > 30
             ORDER BY mt.meeting_date DESC, a.updated_at DESC
             """,
-            (case_id, case_id, case_id),
+            (case_id, case_id, case_id, oid),
         ).fetchall()
 
     for r in comp_rows:
@@ -1408,7 +1446,7 @@ def compute_item_weight(appearance: dict, case_has_companions: bool = False) -> 
     return max(1, min(5, weight))
 
 
-def get_current_workload(username: str) -> dict:
+def get_current_workload(username: str, org_id=None) -> dict:
     """Compute a researcher's CURRENT active workload. Active =
     workflow_status in ('Assigned', 'In Progress', 'Needs Revision').
     Archived / Finalized don't count.
@@ -1423,6 +1461,7 @@ def get_current_workload(username: str) -> dict:
         "cases_touched": int,
       }
     """
+    oid = _resolve_org_id(org_id)
     ACTIVE_STATUSES = ("Assigned", "In Progress", "Needs Revision", "Draft Complete")
     with get_db() as conn:
         rows = conn.execute(
@@ -1438,9 +1477,10 @@ def get_current_workload(username: str) -> dict:
             LEFT JOIN meetings mt ON mt.id = a.meeting_id
             WHERE a.assigned_to = ?
               AND a.workflow_status IN ({",".join("?" * len(ACTIVE_STATUSES))})
+              AND a.org_id = ?
             ORDER BY mt.meeting_date ASC, a.id
             """,
-            (username, *ACTIVE_STATUSES),
+            (username, *ACTIVE_STATUSES, oid),
         ).fetchall()
 
     items = [dict(r) for r in rows]
@@ -1462,8 +1502,9 @@ def get_current_workload(username: str) -> dict:
                        OR case_b_id IN ({placeholders}))
                   AND relation_type = 'companion'
                   AND status != 'rejected'
+                  AND org_id = ?
                 """,
-                (*case_ids, *case_ids, *case_ids),
+                (*case_ids, *case_ids, *case_ids, oid),
             ).fetchall()
         companion_cases = {r[0] for r in comp_rows}
 
@@ -1490,10 +1531,11 @@ def get_current_workload(username: str) -> dict:
     }
 
 
-def list_all_researcher_workloads() -> list[dict]:
+def list_all_researcher_workloads(org_id=None) -> list[dict]:
     """Return workload summaries for every researcher who has at least
     one active assignment. Useful for an "assign to least-loaded"
     picker. Sorted ascending by total_weight."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         people_rows = conn.execute(
             """
@@ -1502,14 +1544,16 @@ def list_all_researcher_workloads() -> list[dict]:
             WHERE assigned_to IS NOT NULL AND assigned_to != ''
               AND workflow_status IN
                   ('Assigned','In Progress','Needs Revision','Draft Complete')
-            """
+              AND org_id = ?
+            """,
+            (oid,),
         ).fetchall()
     workloads = []
     for r in people_rows:
         name = r[0]
         if not name:
             continue
-        w = get_current_workload(name)
+        w = get_current_workload(name, org_id=oid)
         # Strip per-item details for the summary list — too heavy to ship
         w_summary = {k: v for k, v in w.items() if k != "items"}
         workloads.append(w_summary)
@@ -1520,6 +1564,7 @@ def list_all_researcher_workloads() -> list[dict]:
 def suggest_assignee(
     exclude: list[str] | None = None,
     prefer_over_weight: int | None = None,
+    org_id=None,
 ) -> dict | None:
     """Pick the least-loaded researcher as a default assignment
     suggestion. `exclude` skips named usernames (e.g. the reviewer).
@@ -1529,8 +1574,9 @@ def suggest_assignee(
 
     Returns a dict with 'username' and 'total_weight', or None if no
     researchers have any assignments on record (bootstrapping case)."""
+    oid = _resolve_org_id(org_id)
     exclude = set(exclude or [])
-    loads = [w for w in list_all_researcher_workloads()
+    loads = [w for w in list_all_researcher_workloads(org_id=oid)
              if w["username"] not in exclude]
     if not loads:
         return None
@@ -1554,7 +1600,7 @@ def suggest_assignee(
 # Returns a detailed conflict report the UI can show.
 
 def check_case_assignment_coherence(
-    appearance_id: int, proposed_assignee: str,
+    appearance_id: int, proposed_assignee: str, org_id=None,
 ) -> dict:
     """Check if assigning appearance_id to proposed_assignee would
     conflict with existing assignments on sibling / companion items.
@@ -1569,11 +1615,12 @@ def check_case_assignment_coherence(
 
     scope is 'same_case' or 'companion_case' to distinguish strictness.
     """
+    oid = _resolve_org_id(org_id)
     proposed = (proposed_assignee or "").strip()
     with get_db() as conn:
         row = conn.execute(
-            "SELECT id, matter_id, case_id FROM appearances WHERE id=?",
-            (appearance_id,),
+            "SELECT id, matter_id, case_id FROM appearances WHERE id=? AND org_id = ?",
+            (appearance_id, oid),
         ).fetchone()
         if not row:
             return {"ok": False, "conflicts": [{"reason": "appearance not found"}],
@@ -1596,8 +1643,9 @@ def check_case_assignment_coherence(
               AND a.assigned_to != ''
               AND a.assigned_to != ?
               AND a.workflow_status NOT IN ('Archived', 'Finalized')
+              AND a.org_id = ?
             """,
-            (case_id, appearance_id, proposed),
+            (case_id, appearance_id, proposed, oid),
         ).fetchall()
 
         # Companion-case ids
@@ -1611,8 +1659,9 @@ def check_case_assignment_coherence(
             WHERE (case_a_id = ? OR case_b_id = ?)
               AND relation_type = 'companion'
               AND status != 'rejected'
+              AND org_id = ?
             """,
-            (case_id, case_id, case_id),
+            (case_id, case_id, case_id, oid),
         ).fetchall()
         companion_case_ids = [r["other_case_id"] for r in comp_rows]
 
@@ -1629,8 +1678,9 @@ def check_case_assignment_coherence(
                   AND a.assigned_to != ''
                   AND a.assigned_to != ?
                   AND a.workflow_status NOT IN ('Archived', 'Finalized')
+                  AND a.org_id = ?
                 """,
-                (*companion_case_ids, proposed),
+                (*companion_case_ids, proposed, oid),
             ).fetchall()
 
     conflicts = []
@@ -1669,25 +1719,27 @@ def check_case_assignment_coherence(
 
 
 
-def confirm_relation(relation_id: int, confirmed_by: str) -> bool:
+def confirm_relation(relation_id: int, confirmed_by: str, org_id=None) -> bool:
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     with get_db() as conn:
         cur = conn.execute(
             "UPDATE case_relations SET status='confirmed', confirmed_by=?, "
-            "confirmed_at=?, updated_at=? WHERE id=?",
-            (confirmed_by, now, now, relation_id),
+            "confirmed_at=?, updated_at=? WHERE id=? AND org_id = ?",
+            (confirmed_by, now, now, relation_id, oid),
         )
         return cur.rowcount > 0
 
 
 def reject_relation(relation_id: int, rejected_by: str,
-                    reason: str = "") -> bool:
+                    reason: str = "", org_id=None) -> bool:
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     with get_db() as conn:
         cur = conn.execute(
             "UPDATE case_relations SET status='rejected', confirmed_by=?, "
-            "confirmed_at=?, evidence_snippet=?, updated_at=? WHERE id=?",
-            (rejected_by, now, f"REJECTED: {reason}"[:500], now, relation_id),
+            "confirmed_at=?, evidence_snippet=?, updated_at=? WHERE id=? AND org_id = ?",
+            (rejected_by, now, f"REJECTED: {reason}"[:500], now, relation_id, oid),
         )
         return cur.rowcount > 0
 
@@ -1699,10 +1751,12 @@ def create_manual_relation(
     created_by: str,
     evidence: str = "",
     direction_from_case_a: bool = True,
+    org_id=None,
 ) -> int | None:
     """Researcher-created link. Both cases must already exist."""
-    a = get_case_by_application_number(case_a_app_num)
-    b = get_case_by_application_number(case_b_app_num)
+    oid = _resolve_org_id(org_id)
+    a = get_case_by_application_number(case_a_app_num, org_id=oid)
+    b = get_case_by_application_number(case_b_app_num, org_id=oid)
     if not a or not b:
         return None
     direction = None
@@ -1717,6 +1771,7 @@ def create_manual_relation(
         evidence_source="manual",
         status="manual",
         direction_from_to=direction,
+        org_id=oid,
     )
 
 
@@ -1737,10 +1792,12 @@ def record_case_event(
     result: str | None = None,
     source: str = "derived",
     notes: str | None = None,
+    org_id=None,
 ) -> int | None:
     """Insert a case_event. The unique index on (case_id, event_date,
     body_name, action, matter_id) silently prevents duplicates, so this
     is safe to call idempotently during re-scrapes."""
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     sort_key = f"{event_date or '9999-12-31'}_{event_type}"
     try:
@@ -1749,12 +1806,12 @@ def record_case_event(
                 "INSERT INTO case_events (case_id, matter_id, appearance_id, "
                 "event_date, event_type, stage_category, stage_label, "
                 "body_name, action, result, source, notes, sort_key, "
-                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "created_at, org_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     case_id, matter_id, appearance_id,
                     event_date, event_type, stage_category, stage_label,
                     body_name, action, result, source, notes, sort_key,
-                    now,
+                    now, oid,
                 ),
             )
             return cur.lastrowid
@@ -1768,24 +1825,27 @@ def record_case_event(
 # QUERY HELPERS
 # ══════════════════════════════════════════════════════════════════
 
-def get_case_by_application_number(app_number: str) -> dict | None:
+def get_case_by_application_number(app_number: str, org_id=None) -> dict | None:
     """Lookup a case by its application_number. Returns None if not found."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM cases WHERE application_number=?", (app_number,)
+            "SELECT * FROM cases WHERE application_number=? AND org_id = ?",
+            (app_number, oid),
         ).fetchone()
         return dict(row) if row else None
 
 
-def get_case_by_id(case_id: int) -> dict | None:
+def get_case_by_id(case_id: int, org_id=None) -> dict | None:
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM cases WHERE id=?", (case_id,)
+            "SELECT * FROM cases WHERE id=? AND org_id = ?", (case_id, oid)
         ).fetchone()
         return dict(row) if row else None
 
 
-def load_full_case(case_id: int) -> dict | None:
+def load_full_case(case_id: int, org_id=None) -> dict | None:
     """Load a case + all its members + all their appearances + timeline
     events, in one shot. Returns structured dict suitable for rendering
     a Case view:
@@ -1797,7 +1857,8 @@ def load_full_case(case_id: int) -> dict | None:
       "events":      [ {event_date, event_type, ...}, ... sorted chronologically ],
     }
     """
-    case = get_case_by_id(case_id)
+    oid = _resolve_org_id(org_id)
+    case = get_case_by_id(case_id, org_id=oid)
     if not case:
         return None
 
@@ -1808,8 +1869,9 @@ def load_full_case(case_id: int) -> dict | None:
             "FROM case_memberships cm "
             "JOIN matters m ON m.id = cm.matter_id "
             "WHERE cm.case_id=? AND cm.link_status != 'rejected' "
+            "AND cm.org_id = ? "
             "ORDER BY cm.role_category, cm.created_at",
-            (case_id,),
+            (case_id, oid),
         ).fetchall()]
 
         appearances = [dict(r) for r in conn.execute(
@@ -1817,19 +1879,21 @@ def load_full_case(case_id: int) -> dict | None:
             "FROM appearances a "
             "JOIN meetings mt ON mt.id = a.meeting_id "
             "WHERE a.case_id=? "
+            "AND a.org_id = ? "
             "ORDER BY mt.meeting_date DESC, a.committee_item_number",
-            (case_id,),
+            (case_id, oid),
         ).fetchall()]
 
         events = [dict(r) for r in conn.execute(
             "SELECT * FROM case_events WHERE case_id=? "
+            "AND org_id = ? "
             "ORDER BY sort_key, created_at",
-            (case_id,),
+            (case_id, oid),
         ).fetchall()]
 
     # Include relations to other cases (companion, precedent, etc.)
     # so the Case view can render the "Related Cases" card in one fetch.
-    related = list_relations_for_case(case_id, include_rejected=False)
+    related = list_relations_for_case(case_id, include_rejected=False, org_id=oid)
 
     return {
         "case":          case,
@@ -1840,9 +1904,10 @@ def load_full_case(case_id: int) -> dict | None:
     }
 
 
-def list_candidate_memberships(limit: int = 100) -> list[dict]:
+def list_candidate_memberships(limit: int = 100, org_id=None) -> list[dict]:
     """Return candidate (unconfirmed) case memberships for researcher review.
     Joins case + matter info so the UI can render without extra queries."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             "SELECT cm.*, c.application_number, c.case_type, c.display_label, "
@@ -1851,46 +1916,49 @@ def list_candidate_memberships(limit: int = 100) -> list[dict]:
             "JOIN cases c   ON c.id = cm.case_id "
             "JOIN matters m ON m.id = cm.matter_id "
             "WHERE cm.link_status='candidate' "
+            "AND cm.org_id = ? "
             "ORDER BY cm.link_confidence ASC, cm.created_at DESC "
             "LIMIT ?",
-            (limit,),
+            (oid, limit),
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def confirm_membership(membership_id: int, confirmed_by: str) -> bool:
+def confirm_membership(membership_id: int, confirmed_by: str, org_id=None) -> bool:
     """Mark a candidate membership as confirmed. Returns True on success."""
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     with get_db() as conn:
         cur = conn.execute(
             "UPDATE case_memberships SET link_status='confirmed', "
-            "confirmed_by=?, confirmed_at=?, updated_at=? WHERE id=?",
-            (confirmed_by, now, now, membership_id),
+            "confirmed_by=?, confirmed_at=?, updated_at=? WHERE id=? AND org_id = ?",
+            (confirmed_by, now, now, membership_id, oid),
         )
         return cur.rowcount > 0
 
 
 def reject_membership(membership_id: int, rejected_by: str,
-                      reason: str = "") -> bool:
+                      reason: str = "", org_id=None) -> bool:
     """Mark a candidate membership as rejected. It stays in the DB so we
     don't re-propose the same link. Also clears the appearance denorm."""
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     with get_db() as conn:
         row = conn.execute(
-            "SELECT matter_id FROM case_memberships WHERE id=?",
-            (membership_id,),
+            "SELECT matter_id FROM case_memberships WHERE id=? AND org_id = ?",
+            (membership_id, oid),
         ).fetchone()
         cur = conn.execute(
             "UPDATE case_memberships SET link_status='rejected', "
             "confirmed_by=?, confirmed_at=?, link_evidence=?, updated_at=? "
-            "WHERE id=?",
-            (rejected_by, now, f"REJECTED: {reason}"[:500], now, membership_id),
+            "WHERE id=? AND org_id = ?",
+            (rejected_by, now, f"REJECTED: {reason}"[:500], now, membership_id, oid),
         )
         if row:
             conn.execute(
                 "UPDATE appearances SET case_id=NULL, case_role_label=NULL "
-                "WHERE matter_id=?",
-                (row["matter_id"],),
+                "WHERE matter_id=? AND org_id = ?",
+                (row["matter_id"], oid),
             )
         return cur.rowcount > 0
 
@@ -1901,11 +1969,13 @@ def create_manual_membership(
     role_label: str,
     created_by: str,
     role_category: str = "review",
+    org_id=None,
 ) -> int | None:
     """Researcher-created link — always stored as status='manual'.
     Creates the case if it doesn't exist yet."""
+    oid = _resolve_org_id(org_id)
     now = now_iso()
-    existing = get_case_by_application_number(application_number)
+    existing = get_case_by_application_number(application_number, org_id=oid)
     if existing:
         case_id = existing["id"]
     else:
@@ -1914,11 +1984,11 @@ def create_manual_membership(
             cur = conn.execute(
                 "INSERT INTO cases (application_number, case_type, "
                 "case_type_confidence, display_label, is_synthetic, "
-                "first_seen_date, last_activity_date, created_at, updated_at) "
-                "VALUES (?, 'unknown', 0.5, ?, 0, ?, ?, ?, ?)",
+                "first_seen_date, last_activity_date, created_at, updated_at, org_id) "
+                "VALUES (?, 'unknown', 0.5, ?, 0, ?, ?, ?, ?, ?)",
                 (
                     application_number, f"Manual case {application_number}",
-                    now[:10], now[:10], now, now,
+                    now[:10], now[:10], now, now, oid,
                 ),
             )
             case_id = cur.lastrowid
@@ -1926,24 +1996,25 @@ def create_manual_membership(
     with get_db() as conn:
         # Kill any existing auto-suggestion for this matter first
         conn.execute(
-            "DELETE FROM case_memberships WHERE matter_id=?", (matter_id,)
+            "DELETE FROM case_memberships WHERE matter_id=? AND org_id = ?",
+            (matter_id, oid),
         )
         cur = conn.execute(
             "INSERT INTO case_memberships (case_id, matter_id, role_category, "
             "role_label, role_confidence, link_status, link_confidence, "
             "link_method, link_evidence, confirmed_by, confirmed_at, "
-            "created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 1.0, 'manual', 1.0, 'manual', ?, ?, ?, ?, ?)",
+            "created_at, updated_at, org_id) "
+            "VALUES (?, ?, ?, ?, 1.0, 'manual', 1.0, 'manual', ?, ?, ?, ?, ?, ?)",
             (
                 case_id, matter_id, role_category, role_label,
                 f"Manual link by {created_by}", created_by, now,
-                now, now,
+                now, now, oid,
             ),
         )
         conn.execute(
             "UPDATE appearances SET case_id=?, case_role_label=? "
-            "WHERE matter_id=?",
-            (case_id, role_label, matter_id),
+            "WHERE matter_id=? AND org_id = ?",
+            (case_id, role_label, matter_id, oid),
         )
         return cur.lastrowid
 
@@ -1952,13 +2023,14 @@ def create_manual_membership(
 # BACKLINK — apply linker to existing historical matters
 # ══════════════════════════════════════════════════════════════════
 
-def backlink_all_matters(verbose: bool = True) -> dict:
+def backlink_all_matters(verbose: bool = True, org_id=None) -> dict:
     """Run the linker over every matter in the DB. Useful after deploying
     the case layer on a DB that already has historical data.
 
     Returns a summary dict: {matters_processed, cases_created,
     candidates_flagged, errors}.
     """
+    oid = _resolve_org_id(org_id)
     from repository import get_matter_by_file_number  # lazy import
     summary = {
         "matters_processed": 0,
@@ -1972,7 +2044,9 @@ def backlink_all_matters(verbose: bool = True) -> dict:
             "m.file_type, m.current_stage "
             "FROM matters m "
             "LEFT JOIN case_memberships cm ON cm.matter_id = m.id "
-            "WHERE cm.id IS NULL"  # only matters not yet linked
+            "WHERE cm.id IS NULL "
+            "AND m.org_id = ?",
+            (oid,),
         ).fetchall()
 
     for row in matter_rows:
@@ -1984,6 +2058,7 @@ def backlink_all_matters(verbose: bool = True) -> dict:
                 file_type=row["file_type"] or "",
                 file_number=row["file_number"] or "",
                 agenda_stage=row["current_stage"] or "",
+                org_id=oid,
             )
             summary["matters_processed"] += 1
             summary["cases_created_or_matched"].add(result["case_id"])

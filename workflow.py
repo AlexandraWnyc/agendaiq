@@ -11,35 +11,51 @@ from repository import get_appearance_by_id
 log = logging.getLogger("oca-agent")
 
 
+def _resolve_org_id(org_id=None) -> int:
+    if org_id is not None:
+        return org_id
+    try:
+        from flask import g
+        if hasattr(g, 'org_id') and g.org_id is not None:
+            return g.org_id
+    except (ImportError, RuntimeError):
+        pass
+    return 1
+
+
 # ── Audit trail ───────────────────────────────────────────────
 
 def log_history(appearance_id: int, action: str, old_value: str = None,
-                new_value: str = None, note: str = None, changed_by: str = None):
+                new_value: str = None, note: str = None, changed_by: str = None,
+                org_id=None):
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         conn.execute(
             """INSERT INTO workflow_history
-               (appearance_id, changed_by, action, old_value, new_value, note, changed_at)
-               VALUES (?,?,?,?,?,?,?)""",
+               (appearance_id, changed_by, action, old_value, new_value, note, changed_at, org_id)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (appearance_id, changed_by or "system", action,
-             old_value, new_value, note, now_iso())
+             old_value, new_value, note, now_iso(), oid)
         )
 
 
-def get_history(appearance_id: int) -> list[dict]:
+def get_history(appearance_id: int, org_id=None) -> list[dict]:
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             """SELECT * FROM workflow_history
-               WHERE appearance_id=?
+               WHERE appearance_id=? AND org_id = ?
                ORDER BY changed_at ASC""",
-            (appearance_id,)
+            (appearance_id, oid)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
 # ── Helpers ───────────────────────────────────────────────────
 
-def _require_appearance(appearance_id: int) -> dict:
-    app = get_appearance_by_id(appearance_id)
+def _require_appearance(appearance_id: int, org_id=None) -> dict:
+    oid = _resolve_org_id(org_id)
+    app = get_appearance_by_id(appearance_id, org_id=oid)
     if not app:
         raise ValueError(f"Appearance {appearance_id} not found.")
     return app
@@ -47,10 +63,12 @@ def _require_appearance(appearance_id: int) -> dict:
 
 # ── Workflow actions ──────────────────────────────────────────
 
-def set_workflow_status(appearance_id: int, status: str, changed_by: str = None):
+def set_workflow_status(appearance_id: int, status: str, changed_by: str = None,
+                        org_id=None):
+    oid = _resolve_org_id(org_id)
     if status not in WORKFLOW_STATUSES:
         raise ValueError(f"Invalid status '{status}'. Valid: {WORKFLOW_STATUSES}")
-    app = _require_appearance(appearance_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     old_status = app.get("workflow_status")
     now = now_iso()
     completion = now if status == "Finalized" else None
@@ -59,15 +77,15 @@ def set_workflow_status(appearance_id: int, status: str, changed_by: str = None)
         if completion:
             conn.execute(
                 """UPDATE appearances SET workflow_status=?, completion_date=?,
-                   updated_at=? WHERE id=? AND (completion_date IS NULL OR completion_date='')""",
-                (status, completion, now, appearance_id)
+                   updated_at=? WHERE id=? AND org_id = ? AND (completion_date IS NULL OR completion_date='')""",
+                (status, completion, now, appearance_id, oid)
             )
         else:
             conn.execute(
-                "UPDATE appearances SET workflow_status=?, updated_at=? WHERE id=?",
-                (status, now, appearance_id)
+                "UPDATE appearances SET workflow_status=?, updated_at=? WHERE id=? AND org_id = ?",
+                (status, now, appearance_id, oid)
             )
-    log_history(appearance_id, "status_change", old_status, status, changed_by=changed_by)
+    log_history(appearance_id, "status_change", old_status, status, changed_by=changed_by, org_id=oid)
     log.info(f"  Appearance {appearance_id} → status: {status}")
 
 
@@ -76,6 +94,7 @@ def assign_appearance(
     assigned_to: str,
     changed_by: str = None,
     force: bool = False,
+    org_id=None,
 ):
     """Assign an appearance to a researcher, enforcing Case coherence.
 
@@ -87,7 +106,8 @@ def assign_appearance(
     Callers who want to bypass the check (e.g. admins doing bulk
     reassignment) pass force=True.
     """
-    app = _require_appearance(appearance_id)
+    oid = _resolve_org_id(org_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     old = app.get("assigned_to") or "unassigned"
 
     # Coherence check — lazily imported to avoid a hard dependency
@@ -113,10 +133,10 @@ def assign_appearance(
             """UPDATE appearances SET assigned_to=?, assigned_date=?,
                reviewer=CASE WHEN reviewer IS NULL OR reviewer='' THEN 'Rolando' ELSE reviewer END,
                workflow_status=CASE WHEN workflow_status='New' THEN 'Assigned' ELSE workflow_status END,
-               updated_at=? WHERE id=?""",
-            (assigned_to, now, now, appearance_id)
+               updated_at=? WHERE id=? AND org_id = ?""",
+            (assigned_to, now, now, appearance_id, oid)
         )
-    log_history(appearance_id, "assigned", old, assigned_to, changed_by=changed_by)
+    log_history(appearance_id, "assigned", old, assigned_to, changed_by=changed_by, org_id=oid)
     log.info(f"  Appearance {appearance_id} → assigned to: {assigned_to}"
              f"{' (forced)' if force else ''}")
 
@@ -141,42 +161,49 @@ class CaseAssignmentConflict(Exception):
         )
 
 
-def set_reviewer(appearance_id: int, reviewer: str, changed_by: str = None):
-    app = _require_appearance(appearance_id)
+def set_reviewer(appearance_id: int, reviewer: str, changed_by: str = None,
+                 org_id=None):
+    oid = _resolve_org_id(org_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     old = app.get("reviewer") or ""
     with get_db() as conn:
         conn.execute(
-            "UPDATE appearances SET reviewer=?, updated_at=? WHERE id=?",
-            (reviewer, now_iso(), appearance_id)
+            "UPDATE appearances SET reviewer=?, updated_at=? WHERE id=? AND org_id = ?",
+            (reviewer, now_iso(), appearance_id, oid)
         )
-    log_history(appearance_id, "reviewer_set", old, reviewer, changed_by=changed_by)
+    log_history(appearance_id, "reviewer_set", old, reviewer, changed_by=changed_by, org_id=oid)
 
 
-def set_due_date(appearance_id: int, due_date: str, changed_by: str = None):
-    app = _require_appearance(appearance_id)
+def set_due_date(appearance_id: int, due_date: str, changed_by: str = None,
+                 org_id=None):
+    oid = _resolve_org_id(org_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     old = app.get("due_date") or ""
     with get_db() as conn:
         conn.execute(
-            "UPDATE appearances SET due_date=?, updated_at=? WHERE id=?",
-            (due_date, now_iso(), appearance_id)
+            "UPDATE appearances SET due_date=?, updated_at=? WHERE id=? AND org_id = ?",
+            (due_date, now_iso(), appearance_id, oid)
         )
-    log_history(appearance_id, "due_date_set", old, due_date, changed_by=changed_by)
+    log_history(appearance_id, "due_date_set", old, due_date, changed_by=changed_by, org_id=oid)
 
 
-def set_priority(appearance_id: int, priority: str, changed_by: str = None):
-    app = _require_appearance(appearance_id)
+def set_priority(appearance_id: int, priority: str, changed_by: str = None,
+                 org_id=None):
+    oid = _resolve_org_id(org_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     old = app.get("priority") or ""
     with get_db() as conn:
         conn.execute(
-            "UPDATE appearances SET priority=?, updated_at=? WHERE id=?",
-            (priority, now_iso(), appearance_id)
+            "UPDATE appearances SET priority=?, updated_at=? WHERE id=? AND org_id = ?",
+            (priority, now_iso(), appearance_id, oid)
         )
-    log_history(appearance_id, "priority_set", old, priority, changed_by=changed_by)
+    log_history(appearance_id, "priority_set", old, priority, changed_by=changed_by, org_id=oid)
 
 
 def append_working_notes(appearance_id: int, note: str, replace: bool = False,
-                          changed_by: str = None):
-    app = _require_appearance(appearance_id)
+                          changed_by: str = None, org_id=None):
+    oid = _resolve_org_id(org_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     if replace:
         new_notes = note
     else:
@@ -190,15 +217,16 @@ def append_working_notes(appearance_id: int, note: str, replace: bool = False,
         conn.execute(
             """UPDATE appearances SET analyst_working_notes=?,
                analyst_notes_updated_at=?, analyst_notes_updated_by=?,
-               updated_at=? WHERE id=?""",
-            (new_notes, now, changed_by or "", now, appearance_id)
+               updated_at=? WHERE id=? AND org_id = ?""",
+            (new_notes, now, changed_by or "", now, appearance_id, oid)
         )
-    log_history(appearance_id, "working_note_added", note=note[:200], changed_by=changed_by)
+    log_history(appearance_id, "working_note_added", note=note[:200], changed_by=changed_by, org_id=oid)
 
 
 def append_reviewer_notes(appearance_id: int, note: str, replace: bool = False,
-                           changed_by: str = None):
-    app = _require_appearance(appearance_id)
+                           changed_by: str = None, org_id=None):
+    oid = _resolve_org_id(org_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     if replace:
         new_notes = note
     else:
@@ -212,43 +240,50 @@ def append_reviewer_notes(appearance_id: int, note: str, replace: bool = False,
         conn.execute(
             """UPDATE appearances SET reviewer_notes=?,
                reviewer_notes_updated_at=?, reviewer_notes_updated_by=?,
-               updated_at=? WHERE id=?""",
-            (new_notes, now, changed_by or "", now, appearance_id)
+               updated_at=? WHERE id=? AND org_id = ?""",
+            (new_notes, now, changed_by or "", now, appearance_id, oid)
         )
-    log_history(appearance_id, "reviewer_note_added", note=note[:200], changed_by=changed_by)
+    log_history(appearance_id, "reviewer_note_added", note=note[:200], changed_by=changed_by, org_id=oid)
 
 
-def replace_working_notes(appearance_id: int, notes: str, changed_by: str = None):
-    append_working_notes(appearance_id, notes, replace=True, changed_by=changed_by)
+def replace_working_notes(appearance_id: int, notes: str, changed_by: str = None,
+                          org_id=None):
+    oid = _resolve_org_id(org_id)
+    append_working_notes(appearance_id, notes, replace=True, changed_by=changed_by, org_id=oid)
 
-def replace_reviewer_notes(appearance_id: int, notes: str, changed_by: str = None):
-    append_reviewer_notes(appearance_id, notes, replace=True, changed_by=changed_by)
+def replace_reviewer_notes(appearance_id: int, notes: str, changed_by: str = None,
+                           org_id=None):
+    oid = _resolve_org_id(org_id)
+    append_reviewer_notes(appearance_id, notes, replace=True, changed_by=changed_by, org_id=oid)
 
 def update_ai_summary(appearance_id: int, summary: str, watch_points: str = None,
-                       changed_by: str = None):
+                       changed_by: str = None, org_id=None):
     """Allow analysts to edit the AI-generated summary inline."""
-    app = _require_appearance(appearance_id)
+    oid = _resolve_org_id(org_id)
+    app = _require_appearance(appearance_id, org_id=oid)
     now = now_iso()
     with get_db() as conn:
         if watch_points is not None:
             conn.execute(
                 """UPDATE appearances SET ai_summary_for_appearance=?,
-                   watch_points_for_appearance=?, updated_at=? WHERE id=?""",
-                (summary, watch_points, now, appearance_id)
+                   watch_points_for_appearance=?, updated_at=? WHERE id=? AND org_id = ?""",
+                (summary, watch_points, now, appearance_id, oid)
             )
         else:
             conn.execute(
-                "UPDATE appearances SET ai_summary_for_appearance=?, updated_at=? WHERE id=?",
-                (summary, now, appearance_id)
+                "UPDATE appearances SET ai_summary_for_appearance=?, updated_at=? WHERE id=? AND org_id = ?",
+                (summary, now, appearance_id, oid)
             )
     log_history(appearance_id, "ai_summary_edited",
-                note="Summary edited by analyst", changed_by=changed_by)
+                note="Summary edited by analyst", changed_by=changed_by, org_id=oid)
 
 
-def set_finalized_brief(appearance_id: int, brief_text: str, changed_by: str = None):
+def set_finalized_brief(appearance_id: int, brief_text: str, changed_by: str = None,
+                        org_id=None):
     import os
     from pathlib import Path
-    _require_appearance(appearance_id)
+    oid = _resolve_org_id(org_id)
+    _require_appearance(appearance_id, org_id=oid)
     if os.path.exists(brief_text):
         brief_text = Path(brief_text).read_text(encoding="utf-8")
     now = now_iso()
@@ -256,17 +291,18 @@ def set_finalized_brief(appearance_id: int, brief_text: str, changed_by: str = N
         conn.execute(
             """UPDATE appearances SET finalized_brief=?,
                finalized_brief_updated_at=?, finalized_brief_updated_by=?,
-               updated_at=? WHERE id=?""",
-            (brief_text, now, changed_by or "", now, appearance_id)
+               updated_at=? WHERE id=? AND org_id = ?""",
+            (brief_text, now, changed_by or "", now, appearance_id, oid)
         )
     log_history(appearance_id, "brief_finalized",
-                note="Finalized brief set", changed_by=changed_by)
+                note="Finalized brief set", changed_by=changed_by, org_id=oid)
 
 
 # ── Alert queries ─────────────────────────────────────────────
 
-def get_overdue_appearances() -> list[dict]:
+def get_overdue_appearances(org_id=None) -> list[dict]:
     """Return appearances past their due date that are not yet Finalized/Archived."""
+    oid = _resolve_org_id(org_id)
     today = datetime.utcnow().strftime("%Y-%m-%d")
     with get_db() as conn:
         rows = conn.execute(
@@ -278,14 +314,16 @@ def get_overdue_appearances() -> list[dict]:
                WHERE a.due_date IS NOT NULL AND a.due_date != ''
                  AND a.due_date < ?
                  AND a.workflow_status NOT IN ('Finalized','Archived')
+                 AND a.org_id = ?
                ORDER BY a.due_date ASC""",
-            (today,)
+            (today, oid)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_due_soon_appearances(days: int = 7) -> list[dict]:
+def get_due_soon_appearances(days: int = 7, org_id=None) -> list[dict]:
     """Return appearances due within the next N days."""
+    oid = _resolve_org_id(org_id)
     from datetime import timedelta
     today = datetime.utcnow().date()
     cutoff = (today + timedelta(days=days)).strftime("%Y-%m-%d")
@@ -299,14 +337,16 @@ def get_due_soon_appearances(days: int = 7) -> list[dict]:
                JOIN meetings mt ON mt.id = a.meeting_id
                WHERE a.due_date >= ? AND a.due_date <= ?
                  AND a.workflow_status NOT IN ('Finalized','Archived')
+                 AND a.org_id = ?
                ORDER BY a.due_date ASC""",
-            (today_str, cutoff)
+            (today_str, cutoff, oid)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_unassigned_appearances() -> list[dict]:
+def get_unassigned_appearances(org_id=None) -> list[dict]:
     """Return New items with no assignee."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             """SELECT a.*, m.file_number, m.short_title,
@@ -316,6 +356,8 @@ def get_unassigned_appearances() -> list[dict]:
                JOIN meetings mt ON mt.id = a.meeting_id
                WHERE a.workflow_status = 'New'
                  AND (a.assigned_to IS NULL OR a.assigned_to = '')
+                 AND a.org_id = ?
                ORDER BY mt.meeting_date DESC""",
+            (oid,)
         ).fetchall()
         return [dict(r) for r in rows]

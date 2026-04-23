@@ -21,6 +21,19 @@ from difflib import SequenceMatcher
 
 log = logging.getLogger("oca-agent")
 
+
+def _resolve_org_id(org_id=None) -> int:
+    if org_id is not None:
+        return org_id
+    try:
+        from flask import g
+        if hasattr(g, 'org_id') and g.org_id is not None:
+            return g.org_id
+    except (ImportError, RuntimeError):
+        pass
+    return 1
+
+
 def _disk_free_mb(path="/tmp"):
     """Return free disk space in MB at the given path."""
     import shutil
@@ -1056,7 +1069,8 @@ Guidelines:
 # ── Database integration ─────────────────────────────────────
 
 def store_transcript_notes(meeting_id: int, segments: dict,
-                           video_url: str, video_title: str):
+                           video_url: str, video_title: str,
+                           org_id=None):
     """Store per-item transcript summaries in the database.
 
     Appends to analyst_working_notes with a clear label:
@@ -1065,18 +1079,19 @@ def store_transcript_notes(meeting_id: int, segments: dict,
       Speakers: Commissioner X, Commissioner Y
       Vote: Passed 9-3
     """
+    oid = _resolve_org_id(org_id)
     from db import get_db
     from repository import get_appearances_for_meeting, get_meeting_by_id
     from utils import now_iso
 
-    meeting = get_meeting_by_id(meeting_id)
+    meeting = get_meeting_by_id(meeting_id, org_id=oid)
     if not meeting:
         log.error(f"  Meeting {meeting_id} not found")
         return 0
 
     body_name = meeting.get("body_name", "")
     meeting_date = meeting.get("meeting_date", "")
-    appearances = get_appearances_for_meeting(meeting_id)
+    appearances = get_appearances_for_meeting(meeting_id, org_id=oid)
     if not appearances:
         log.info(f"  No appearances for meeting {meeting_id}")
         return 0
@@ -1169,14 +1184,14 @@ def store_transcript_notes(meeting_id: int, segments: dict,
                 """UPDATE appearances
                    SET transcript_analysis=?, transcript_video_url=?,
                        transcript_updated_at=?, updated_at=?
-                   WHERE id=?""",
-                (note_block, video_url, now, now, app["id"])
+                   WHERE id=? AND org_id = ?""",
+                (note_block, video_url, now, now, app["id"], oid)
             )
 
             # Also append to analyst_working_notes for backward compat
             existing = conn.execute(
-                "SELECT analyst_working_notes FROM appearances WHERE id=?",
-                (app["id"],)
+                "SELECT analyst_working_notes FROM appearances WHERE id=? AND org_id = ?",
+                (app["id"], oid)
             ).fetchone()
             old = (existing["analyst_working_notes"] or "") if existing else ""
 
@@ -1184,8 +1199,8 @@ def store_transcript_notes(meeting_id: int, segments: dict,
             if label not in old:
                 new_notes = (old + "\n\n" + note_block).strip() if old else note_block
                 conn.execute(
-                    "UPDATE appearances SET analyst_working_notes=? WHERE id=?",
-                    (new_notes, app["id"])
+                    "UPDATE appearances SET analyst_working_notes=? WHERE id=? AND org_id = ?",
+                    (new_notes, app["id"], oid)
                 )
 
             updated += 1
@@ -1213,7 +1228,8 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                         video_url: str = None,
                         raw_transcript: str = None,
                         emit=None,
-                        abort_check=None) -> dict:
+                        abort_check=None,
+                        org_id=None) -> dict:
     """Full pipeline: find video → download transcript → segment → store.
 
     Args:
@@ -1223,22 +1239,24 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         raw_transcript: If provided, skip both search AND download — use this text directly
         emit: Optional SSE callback for progress updates
         abort_check: Optional callable returning True if user requested abort
+        org_id: Organization ID for multi-tenancy scoping
 
     Returns:
         {"status": "ok"|"error"|"aborted", "video": {...}, "items_updated": int, ...}
     """
+    oid = _resolve_org_id(org_id)
     from repository import get_meeting_by_id, get_appearances_for_meeting
     _emit = emit or (lambda *a, **k: None)
     _abort = abort_check or (lambda: False)
 
-    meeting = get_meeting_by_id(meeting_id)
+    meeting = get_meeting_by_id(meeting_id, org_id=oid)
     if not meeting:
         return {"status": "error", "message": "Meeting not found"}
 
     body_name = meeting["body_name"]
     meeting_date = meeting["meeting_date"]
 
-    appearances = get_appearances_for_meeting(meeting_id)
+    appearances = get_appearances_for_meeting(meeting_id, org_id=oid)
     if not appearances:
         return {"status": "error", "message": "No items for this meeting"}
 
@@ -1278,7 +1296,7 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         _emit(f"Segmented {len(segments)} items. Storing notes…",
               phase="transcript", pct=80)
 
-        updated = store_transcript_notes(meeting_id, segments, final_url, video_title)
+        updated = store_transcript_notes(meeting_id, segments, final_url, video_title, org_id=oid)
 
         _emit(f"Done — {updated} items updated with meeting discussion notes.",
               phase="transcript", pct=100)
@@ -1431,7 +1449,7 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
           phase="transcript", pct=80)
 
     # Step 4: Store in database
-    updated = store_transcript_notes(meeting_id, segments, final_url, video_title)
+    updated = store_transcript_notes(meeting_id, segments, final_url, video_title, org_id=oid)
 
     _emit(f"Done — {updated} items updated with meeting discussion notes.",
           phase="transcript", pct=100)

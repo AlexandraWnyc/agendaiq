@@ -5,6 +5,11 @@ Continuity logic:
   Case A: file_number not seen before → create matter + appearance (carried_forward=0)
   Case B: file_number already exists  → create new appearance, copy forward useful
           fields from the most recent prior appearance (carried_forward=1)
+
+Multi-tenancy:
+  Every query is scoped by org_id. Functions accept an optional org_id param;
+  when omitted they read from Flask's g.org_id (set by auth middleware).
+  Background threads (analyzer, scraper) must pass org_id explicitly.
 """
 import logging
 from datetime import datetime
@@ -15,31 +20,48 @@ from utils import now_iso
 log = logging.getLogger("oca-agent")
 
 
+def _resolve_org_id(org_id=None) -> int:
+    """Get the org_id to use for a query.
+    Priority: explicit param > Flask g.org_id > default 1."""
+    if org_id is not None:
+        return org_id
+    try:
+        from flask import g
+        if hasattr(g, 'org_id') and g.org_id is not None:
+            return g.org_id
+    except (ImportError, RuntimeError):
+        pass
+    return 1  # Fallback for background threads / CLI usage
+
+
 # ── Matters ───────────────────────────────────────────────────
 
-def get_matter_by_file_number(file_number: str) -> dict | None:
+def get_matter_by_file_number(file_number: str, org_id=None) -> dict | None:
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM matters WHERE file_number = ?", (str(file_number),)
+            "SELECT * FROM matters WHERE file_number = ? AND org_id = ?",
+            (str(file_number), oid)
         ).fetchone()
         return dict(row) if row else None
 
 
-def upsert_matter(file_number: str, fields: dict) -> int:
+def upsert_matter(file_number: str, fields: dict, org_id=None) -> int:
     """
     Insert a new matter or update an existing one.
     Only updates fields when the incoming value is non-empty and (for stages)
     newer/more advanced than what we already have.
     Returns the matter id.
     """
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     file_number = str(file_number)
-    existing = get_matter_by_file_number(file_number)
+    existing = get_matter_by_file_number(file_number, org_id=oid)
 
     if existing is None:
         # INSERT
-        cols = ["file_number", "created_at", "updated_at"]
-        vals = [file_number, now, now]
+        cols = ["file_number", "org_id", "created_at", "updated_at"]
+        vals = [file_number, oid, now, now]
         update_fields = [
             "short_title", "full_title", "file_type", "sponsor", "department",
             "control_body", "current_status", "legislative_notes",
@@ -58,7 +80,8 @@ def upsert_matter(file_number: str, fields: dict) -> int:
                 f"INSERT INTO matters ({col_names}) VALUES ({placeholders})", vals
             )
             row = conn.execute(
-                "SELECT id FROM matters WHERE file_number=?", (file_number,)
+                "SELECT id FROM matters WHERE file_number=? AND org_id=?",
+                (file_number, oid)
             ).fetchone()
             return row["id"]
     else:
@@ -105,16 +128,17 @@ def upsert_matter(file_number: str, fields: dict) -> int:
         return matter_id
 
 
-def update_matter_ai_fields(matter_id: int, part1: str, watch_points: str):
+def update_matter_ai_fields(matter_id: int, part1: str, watch_points: str, org_id=None):
     """Store the latest AI summary and watch points on the master matter record."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         conn.execute(
             """UPDATE matters SET
                latest_ai_summary_part1 = ?,
                latest_watch_points = ?,
                updated_at = ?
-               WHERE id = ?""",
-            (part1, watch_points, now_iso(), matter_id)
+               WHERE id = ? AND org_id = ?""",
+            (part1, watch_points, now_iso(), matter_id, oid)
         )
 
 
@@ -147,15 +171,16 @@ def _date_variants(iso_date: str) -> list:
     return variants
 
 
-def get_or_create_meeting(body_name: str, meeting_date: str, **kwargs) -> int:
+def get_or_create_meeting(body_name: str, meeting_date: str, org_id=None, **kwargs) -> int:
     """Find an existing meeting row or create one. Returns meeting id."""
+    oid = _resolve_org_id(org_id)
     meeting_date = _normalize_date(meeting_date)
     with get_db() as conn:
         # Check for both ISO and legacy M/D/YYYY formats in the DB
         for dv in _date_variants(meeting_date):
             row = conn.execute(
-                "SELECT id FROM meetings WHERE body_name=? AND meeting_date=?",
-                (body_name, dv)
+                "SELECT id FROM meetings WHERE body_name=? AND meeting_date=? AND org_id = ?",
+                (body_name, dv, oid)
             ).fetchone()
             if row:
                 updates = []
@@ -168,23 +193,24 @@ def get_or_create_meeting(body_name: str, meeting_date: str, **kwargs) -> int:
                 new_type = kwargs.get("meeting_type")
                 if new_type:
                     cur = conn.execute(
-                        "SELECT meeting_type FROM meetings WHERE id=?",
-                        (row["id"],)
+                        "SELECT meeting_type FROM meetings WHERE id=? AND org_id = ?",
+                        (row["id"], oid)
                     ).fetchone()
                     if cur and cur["meeting_type"] != new_type:
                         updates.append("meeting_type=?")
                         params.append(new_type)
                 if updates:
                     params.append(row["id"])
+                    params.append(oid)
                     conn.execute(
-                        f"UPDATE meetings SET {','.join(updates)} WHERE id=?",
+                        f"UPDATE meetings SET {','.join(updates)} WHERE id=? AND org_id = ?",
                         params
                     )
                 return row["id"]
 
         now = now_iso()
-        cols = ["body_name", "meeting_date", "created_at", "updated_at"]
-        vals = [body_name, meeting_date, now, now]
+        cols = ["body_name", "meeting_date", "org_id", "created_at", "updated_at"]
+        vals = [body_name, meeting_date, oid, now, now]
         optional = ["meeting_type", "agenda_status", "agenda_version",
                     "final_agenda_url", "agenda_pdf_url", "agenda_page_url",
                     "meeting_family_id"]
@@ -198,25 +224,27 @@ def get_or_create_meeting(body_name: str, meeting_date: str, **kwargs) -> int:
             f"INSERT INTO meetings ({','.join(cols)}) VALUES ({placeholders})", vals
         )
         return conn.execute(
-            "SELECT id FROM meetings WHERE body_name=? AND meeting_date=?",
-            (body_name, meeting_date)
+            "SELECT id FROM meetings WHERE body_name=? AND meeting_date=? AND org_id = ?",
+            (body_name, meeting_date, oid)
         ).fetchone()["id"]
 
 
 # ── Appearances ───────────────────────────────────────────────
 
-def get_appearance(matter_id: int, meeting_id: int) -> dict | None:
+def get_appearance(matter_id: int, meeting_id: int, org_id=None) -> dict | None:
     """Check if an appearance already exists for this matter+meeting pair."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM appearances WHERE matter_id=? AND meeting_id=?",
-            (matter_id, meeting_id)
+            "SELECT * FROM appearances WHERE matter_id=? AND meeting_id=? AND org_id = ?",
+            (matter_id, meeting_id, oid)
         ).fetchone()
         return dict(row) if row else None
 
 
 def get_latest_appearance_for_matter(matter_id: int,
-                                     before_meeting_id: int | None = None) -> dict | None:
+                                     before_meeting_id: int | None = None,
+                                     org_id=None) -> dict | None:
     """Return the most recent *earlier* appearance for a matter.
 
     If before_meeting_id is given, only consider appearances whose meeting
@@ -224,12 +252,13 @@ def get_latest_appearance_for_matter(matter_id: int,
     This prevents carrying notes *backward* from a later stage (e.g. BCC)
     to an earlier one (e.g. committee).
     """
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         if before_meeting_id is not None:
             # Get the meeting date of the target meeting
             target = conn.execute(
-                "SELECT meeting_date FROM meetings WHERE id=?",
-                (before_meeting_id,)
+                "SELECT meeting_date FROM meetings WHERE id=? AND org_id = ?",
+                (before_meeting_id, oid)
             ).fetchone()
             if target:
                 row = conn.execute(
@@ -237,40 +266,44 @@ def get_latest_appearance_for_matter(matter_id: int,
                        JOIN meetings m ON m.id = a.meeting_id
                        WHERE a.matter_id = ?
                          AND m.meeting_date < ?
+                         AND a.org_id = ?
                        ORDER BY m.meeting_date DESC, a.created_at DESC
                        LIMIT 1""",
-                    (matter_id, target["meeting_date"])
+                    (matter_id, target["meeting_date"], oid)
                 ).fetchone()
                 return dict(row) if row else None
         # Fallback: no meeting context, return most recent by created_at
         row = conn.execute(
             """SELECT * FROM appearances
-               WHERE matter_id=?
+               WHERE matter_id=? AND org_id = ?
                ORDER BY created_at DESC LIMIT 1""",
-            (matter_id,)
+            (matter_id, oid)
         ).fetchone()
         return dict(row) if row else None
 
 
-def get_appearance_by_id(appearance_id: int) -> dict | None:
+def get_appearance_by_id(appearance_id: int, org_id=None) -> dict | None:
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         row = conn.execute(
-            "SELECT * FROM appearances WHERE id=?", (appearance_id,)
+            "SELECT * FROM appearances WHERE id=? AND org_id = ?", (appearance_id, oid)
         ).fetchone()
         return dict(row) if row else None
 
 
 def create_or_update_appearance(matter_id: int, meeting_id: int,
-                                 file_number: str, fields: dict) -> tuple[int, bool]:
+                                 file_number: str, fields: dict,
+                                 org_id=None) -> tuple[int, bool]:
     """
     Create a new appearance or update an existing one for this matter+meeting.
     Implements Case A (new matter) and Case B (existing matter) continuity logic.
     Returns (appearance_id, is_new).
     """
+    oid = _resolve_org_id(org_id)
     now = now_iso()
     file_number = str(file_number)
 
-    existing_app = get_appearance(matter_id, meeting_id)
+    existing_app = get_appearance(matter_id, meeting_id, org_id=oid)
     if existing_app:
         # Already exists — update metadata if richer (don't overwrite AI work)
         app_id = existing_app["id"]
@@ -285,22 +318,22 @@ def create_or_update_appearance(matter_id: int, meeting_id: int,
             set_clause = ", ".join(f"{k}=?" for k in updates)
             with get_db() as conn:
                 conn.execute(
-                    f"UPDATE appearances SET {set_clause} WHERE id=?",
-                    list(updates.values()) + [app_id]
+                    f"UPDATE appearances SET {set_clause} WHERE id=? AND org_id = ?",
+                    list(updates.values()) + [app_id, oid]
                 )
         return app_id, False
 
     # Determine carry-forward — only from chronologically earlier meetings
-    prior = get_latest_appearance_for_matter(matter_id, before_meeting_id=meeting_id)
+    prior = get_latest_appearance_for_matter(matter_id, before_meeting_id=meeting_id, org_id=oid)
     carried = 1 if prior else 0
     prior_id = prior["id"] if prior else None
 
     cols = [
-        "matter_id", "meeting_id", "file_number",
+        "matter_id", "meeting_id", "file_number", "org_id",
         "carried_forward_from_prior", "workflow_status",
         "created_at", "updated_at",
     ]
-    vals = [matter_id, meeting_id, file_number, carried, "New", now, now]
+    vals = [matter_id, meeting_id, file_number, oid, carried, "New", now, now]
 
     if prior_id is not None:
         cols.append("prior_appearance_id")
@@ -318,8 +351,8 @@ def create_or_update_appearance(matter_id: int, meeting_id: int,
         prior_meeting_info = None
         with get_db() as conn:
             prior_meeting_info = conn.execute(
-                "SELECT body_name, meeting_date FROM meetings WHERE id=?",
-                (prior["meeting_id"],)
+                "SELECT body_name, meeting_date FROM meetings WHERE id=? AND org_id = ?",
+                (prior["meeting_id"], oid)
             ).fetchone()
         prior_item_num = prior.get("committee_item_number") or prior.get("bcc_item_number") or ""
         if prior_meeting_info:
@@ -371,8 +404,8 @@ def create_or_update_appearance(matter_id: int, meeting_id: int,
             f"INSERT INTO appearances ({','.join(cols)}) VALUES ({placeholders})", vals
         )
         row = conn.execute(
-            "SELECT id FROM appearances WHERE matter_id=? AND meeting_id=? ORDER BY id DESC LIMIT 1",
-            (matter_id, meeting_id)
+            "SELECT id FROM appearances WHERE matter_id=? AND meeting_id=? AND org_id = ? ORDER BY id DESC LIMIT 1",
+            (matter_id, meeting_id, oid)
         ).fetchone()
         return row["id"], True
 
@@ -384,7 +417,8 @@ def update_appearance_ai(appearance_id: int, part1: str, part2: str,
                           tokens_out: int | None = None,
                           cached_tokens: int | None = None,
                           ai_risk_level: str = "",
-                          ai_risk_reason: str = ""):
+                          ai_risk_reason: str = "",
+                          org_id=None):
     """Save AI analysis results to an appearance row.
 
     If input_hash is provided, it is stored alongside the token counts so
@@ -392,6 +426,7 @@ def update_appearance_ai(appearance_id: int, part1: str, part2: str,
     assembled for a different appearance (e.g., the same item carried
     across stages).
     """
+    oid = _resolve_org_id(org_id)
     ts = now_iso()
     with get_db() as conn:
         if input_hash is not None:
@@ -409,11 +444,11 @@ def update_appearance_ai(appearance_id: int, part1: str, part2: str,
                    ai_risk_level               = ?,
                    ai_risk_reason              = ?,
                    updated_at                  = ?
-                   WHERE id = ?""",
+                   WHERE id = ? AND org_id = ?""",
                 (part1, watch_points, leg_summary, part2,
                  input_hash, tokens_in or 0, tokens_out or 0, cached_tokens or 0,
                  ts, ai_risk_level or "", ai_risk_reason or "",
-                 ts, appearance_id)
+                 ts, appearance_id, oid)
             )
         else:
             conn.execute(
@@ -425,14 +460,14 @@ def update_appearance_ai(appearance_id: int, part1: str, part2: str,
                    ai_risk_level               = ?,
                    ai_risk_reason              = ?,
                    updated_at                  = ?
-                   WHERE id = ?""",
+                   WHERE id = ? AND org_id = ?""",
                 (part1, watch_points, leg_summary, part2,
                  ai_risk_level or "", ai_risk_reason or "",
-                 ts, appearance_id)
+                 ts, appearance_id, oid)
             )
 
 
-def find_cached_analysis(input_hash: str) -> dict | None:
+def find_cached_analysis(input_hash: str, org_id=None) -> dict | None:
     """If any appearance has already been analyzed with this exact input
     hash, return the stored AI fields so the pipeline can reuse them and
     skip the Claude API call entirely.
@@ -442,6 +477,7 @@ def find_cached_analysis(input_hash: str) -> dict | None:
     """
     if not input_hash:
         return None
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         row = conn.execute(
             """SELECT id, ai_summary_for_appearance, watch_points_for_appearance,
@@ -450,9 +486,10 @@ def find_cached_analysis(input_hash: str) -> dict | None:
                WHERE analysis_input_hash = ?
                  AND ai_summary_for_appearance IS NOT NULL
                  AND LENGTH(ai_summary_for_appearance) > 50
+                 AND org_id = ?
                ORDER BY id DESC
                LIMIT 1""",
-            (input_hash,)
+            (input_hash, oid)
         ).fetchone()
         if not row:
             return None
@@ -465,75 +502,88 @@ def find_cached_analysis(input_hash: str) -> dict | None:
         }
 
 
-def get_all_appearances_for_matter(matter_id: int) -> list[dict]:
+def get_all_appearances_for_matter(matter_id: int, org_id=None) -> list[dict]:
     """Return all appearances for a matter, oldest first."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             """SELECT a.*, mt.meeting_date, mt.body_name
                FROM appearances a
                JOIN meetings mt ON mt.id = a.meeting_id
                WHERE a.matter_id = ?
+                 AND a.org_id = ?
                ORDER BY mt.meeting_date ASC, a.created_at ASC""",
-            (matter_id,)
+            (matter_id, oid)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_appearances_for_meeting(meeting_id: int) -> list[dict]:
+def get_appearances_for_meeting(meeting_id: int, org_id=None) -> list[dict]:
     """Return all appearances for a given meeting."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             """SELECT a.*, m.short_title, m.full_title, m.file_number as matter_file_number
                FROM appearances a
                JOIN matters m ON m.id = a.matter_id
                WHERE a.meeting_id = ?
+                 AND a.org_id = ?
                ORDER BY a.committee_item_number, a.id""",
-            (meeting_id,)
+            (meeting_id, oid)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
-def get_processed_file_numbers_for_meeting(meeting_id: int) -> set:
+def get_processed_file_numbers_for_meeting(meeting_id: int, org_id=None) -> set:
     """Return set of file numbers already processed for this meeting."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT file_number FROM appearances WHERE meeting_id=?", (meeting_id,)
+            "SELECT file_number FROM appearances WHERE meeting_id=? AND org_id = ?",
+            (meeting_id, oid)
         ).fetchall()
         return {r["file_number"] for r in rows}
 
 
-def get_meeting_by_id(meeting_id: int) -> dict | None:
+def get_meeting_by_id(meeting_id: int, org_id=None) -> dict | None:
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
-        row = conn.execute("SELECT * FROM meetings WHERE id=?", (meeting_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM meetings WHERE id=? AND org_id = ?", (meeting_id, oid)
+        ).fetchone()
         return dict(row) if row else None
 
 
-def get_meetings_by_date(meeting_date: str) -> list[dict]:
+def get_meetings_by_date(meeting_date: str, org_id=None) -> list[dict]:
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT * FROM meetings WHERE meeting_date=? ORDER BY body_name",
-            (meeting_date,)
+            "SELECT * FROM meetings WHERE meeting_date=? AND org_id = ? ORDER BY body_name",
+            (meeting_date, oid)
         ).fetchall()
         return [dict(r) for r in rows]
 
 
 def get_recent_meeting_ids_for_date_range(date_str: str,
-                                           selected_bodies: list[str] | None = None) -> list[int]:
+                                           selected_bodies: list[str] | None = None,
+                                           org_id=None) -> list[int]:
     """Return meeting IDs matching a date (or nearby dates) and optionally
     filtered by body names. Used to find meetings that were just processed
     so we can auto-trigger transcript backfill."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         if selected_bodies:
             placeholders = ",".join("?" for _ in selected_bodies)
             rows = conn.execute(
                 f"""SELECT id FROM meetings
                     WHERE meeting_date >= ? AND body_name IN ({placeholders})
+                      AND org_id = ?
                     ORDER BY meeting_date ASC""",
-                (date_str, *selected_bodies)
+                (date_str, *selected_bodies, oid)
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT id FROM meetings WHERE meeting_date >= ? ORDER BY meeting_date ASC",
-                (date_str,)
+                "SELECT id FROM meetings WHERE meeting_date >= ? AND org_id = ? ORDER BY meeting_date ASC",
+                (date_str, oid)
             ).fetchall()
         return [r["id"] for r in rows]

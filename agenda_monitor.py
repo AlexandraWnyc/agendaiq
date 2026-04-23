@@ -23,6 +23,19 @@ import db as _db
 
 log = logging.getLogger("oca-agent")
 
+
+def _resolve_org_id(org_id=None) -> int:
+    if org_id is not None:
+        return org_id
+    try:
+        from flask import g
+        if hasattr(g, 'org_id') and g.org_id is not None:
+            return g.org_id
+    except (ImportError, RuntimeError):
+        pass
+    return 1
+
+
 # ── Configuration ─────────────────────────────────────────────
 CHECK_INTERVAL_MINUTES = 45       # Background check frequency
 LOOKBACK_DAYS          = 60       # How far back to scan for agendas
@@ -38,15 +51,17 @@ _last_scan = {"time": None, "result": None, "running": False, "error": None}
 def _create_notification(conn, ntype: str, title: str, body: str,
                          meeting_id: int | None = None,
                          appearance_id: int | None = None,
-                         metadata: dict | None = None):
+                         metadata: dict | None = None,
+                         org_id=None):
     """Insert a notification row."""
+    oid = _resolve_org_id(org_id)
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     conn.execute(
         """INSERT INTO notifications
-           (type, title, body, meeting_id, appearance_id, metadata, is_read, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?)""",
+           (type, title, body, meeting_id, appearance_id, metadata, is_read, created_at, org_id)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)""",
         (ntype, title, body, meeting_id, appearance_id,
-         json.dumps(metadata) if metadata else None, now)
+         json.dumps(metadata) if metadata else None, now, oid)
     )
 
 
@@ -63,7 +78,7 @@ def _compute_agenda_fingerprint(items: list) -> str:
 
 # ── Core scanning functions ────────────────────────────────────
 
-def check_for_new_agendas(scraper=None) -> dict:
+def check_for_new_agendas(scraper=None, org_id=None) -> dict:
     """Scan Legistar for agendas NOT in our DB.
 
     Returns: {
@@ -72,6 +87,7 @@ def check_for_new_agendas(scraper=None) -> dict:
         "checked_dates": int,
     }
     """
+    oid = _resolve_org_id(org_id)
     from scraper import MiamiDadeScraper, COMMITTEES
     if scraper is None:
         scraper = MiamiDadeScraper()
@@ -107,8 +123,9 @@ def check_for_new_agendas(scraper=None) -> dict:
             with _db.get_db() as conn:
                 existing = conn.execute(
                     """SELECT id, agenda_version FROM meetings
-                       WHERE body_name=? AND (meeting_date=? OR meeting_date=?)""",
-                    (cname, iso_date, slash_date)
+                       WHERE body_name=? AND (meeting_date=? OR meeting_date=?)
+                       AND org_id = ?""",
+                    (cname, iso_date, slash_date, oid)
                 ).fetchone()
 
             if not existing:
@@ -134,7 +151,7 @@ def check_for_new_agendas(scraper=None) -> dict:
     }
 
 
-def check_for_agenda_changes(scraper=None) -> dict:
+def check_for_agenda_changes(scraper=None, org_id=None) -> dict:
     """Re-scrape all saved meetings and detect added/modified items.
 
     Only checks meetings in the future or within the last LOOKBACK_DAYS.
@@ -148,6 +165,7 @@ def check_for_agenda_changes(scraper=None) -> dict:
         "unchanged_count": int,
     }
     """
+    oid = _resolve_org_id(org_id)
     from scraper import MiamiDadeScraper, COMMITTEES
     if scraper is None:
         scraper = MiamiDadeScraper()
@@ -158,8 +176,9 @@ def check_for_agenda_changes(scraper=None) -> dict:
         meetings = conn.execute(
             """SELECT id, body_name, meeting_date, agenda_version
                FROM meetings WHERE meeting_date >= ?
+               AND org_id = ?
                ORDER BY meeting_date DESC""",
-            (cutoff,)
+            (cutoff, oid)
         ).fetchall()
 
     changed_meetings = []
@@ -217,8 +236,9 @@ def check_for_agenda_changes(scraper=None) -> dict:
                 """SELECT a.file_number, m.short_title
                    FROM appearances a
                    JOIN matters m ON m.id = a.matter_id
-                   WHERE a.meeting_id = ?""",
-                (mid,)
+                   WHERE a.meeting_id = ?
+                   AND a.org_id = ?""",
+                (mid, oid)
             ).fetchall()
 
         existing_files = {r["file_number"] for r in existing_items}
@@ -259,8 +279,9 @@ def check_for_agenda_changes(scraper=None) -> dict:
     }
 
 
-def update_agenda_versions(changed: list):
+def update_agenda_versions(changed: list, org_id=None):
     """After detecting changes, update agenda_version and agenda_status."""
+    oid = _resolve_org_id(org_id)
     now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     with _db.get_db() as conn:
         for ch in changed:
@@ -282,19 +303,21 @@ def update_agenda_versions(changed: list):
                     agenda_version = ?,
                     agenda_status = ?,
                     updated_at = ?
-                   WHERE id = ?""",
-                (ch["new_version"], status, now, ch["meeting_id"])
+                   WHERE id = ?
+                   AND org_id = ?""",
+                (ch["new_version"], status, now, ch["meeting_id"], oid)
             )
 
 
 # ── Full scan orchestrator ─────────────────────────────────────
 
-def run_full_scan(auto_process: bool = True) -> dict:
+def run_full_scan(auto_process: bool = True, org_id=None) -> dict:
     """Run a complete scan: check new agendas + check changes.
     Creates notifications and optionally auto-processes.
 
     Returns summary dict.
     """
+    oid = _resolve_org_id(org_id)
     from scraper import MiamiDadeScraper
 
     if not _scan_lock.acquire(blocking=False):
@@ -309,11 +332,11 @@ def run_full_scan(auto_process: bool = True) -> dict:
 
         # Phase 1: New agendas
         log.info("Monitor: checking for new agendas…")
-        new_result = check_for_new_agendas(scraper)
+        new_result = check_for_new_agendas(scraper, org_id=oid)
 
         # Phase 2: Changes to existing agendas
         log.info("Monitor: checking for agenda changes…")
-        change_result = check_for_agenda_changes(scraper)
+        change_result = check_for_agenda_changes(scraper, org_id=oid)
 
         # Create notifications for new meetings
         with _db.get_db() as conn:
@@ -324,6 +347,7 @@ def run_full_scan(auto_process: bool = True) -> dict:
                     f"{nm['body_name']} posted their {nm['date']} agenda"
                     f" with {nm['item_count']} items.",
                     metadata=nm,
+                    org_id=oid,
                 )
 
             # Create notifications for changed meetings
@@ -345,16 +369,17 @@ def run_full_scan(auto_process: bool = True) -> dict:
                     f"{ch['meeting_date']} meeting since last analysis.",
                     meeting_id=ch["meeting_id"],
                     metadata=ch,
+                    org_id=oid,
                 )
 
         # Update agenda versions
         if change_result["changed_meetings"]:
-            update_agenda_versions(change_result["changed_meetings"])
+            update_agenda_versions(change_result["changed_meetings"], org_id=oid)
 
         # Phase 3: Auto-process if enabled
         auto_results = {"analyzed": 0, "synthesized": 0}
         if auto_process and change_result["changed_meetings"]:
-            auto_results = _auto_process_changes(change_result["changed_meetings"])
+            auto_results = _auto_process_changes(change_result["changed_meetings"], org_id=oid)
 
         summary = {
             "scan_time": now,
@@ -385,8 +410,9 @@ def run_full_scan(auto_process: bool = True) -> dict:
         _scan_lock.release()
 
 
-def _auto_process_changes(changed_meetings: list) -> dict:
+def _auto_process_changes(changed_meetings: list, org_id=None) -> dict:
     """Auto-analyze new items and re-synthesize changed meetings."""
+    oid = _resolve_org_id(org_id)
     from analyzer import AgendaAnalyzer
     from repository import get_appearance_by_id, get_all_appearances_for_matter
     from repository import get_meeting_by_id, get_matter_by_file_number
@@ -413,8 +439,9 @@ def _auto_process_changes(changed_meetings: list) -> dict:
                     """SELECT a.id FROM appearances a
                        WHERE a.meeting_id=? AND a.file_number=?
                        AND (a.ai_summary_for_appearance IS NULL
-                            OR a.ai_summary_for_appearance='')""",
-                    (mid, fn)
+                            OR a.ai_summary_for_appearance='')
+                       AND a.org_id = ?""",
+                    (mid, fn, oid)
                 ).fetchone()
                 if app_row:
                     # Queue for analysis — we'll do it inline for simplicity
@@ -427,8 +454,8 @@ def _auto_process_changes(changed_meetings: list) -> dict:
         # Re-synthesize all appearances in this meeting
         with _db.get_db() as conn:
             apps = conn.execute(
-                "SELECT id FROM appearances WHERE meeting_id=?",
-                (mid,)
+                "SELECT id FROM appearances WHERE meeting_id=? AND org_id = ?",
+                (mid, oid)
             ).fetchall()
 
         for app in apps:
@@ -446,23 +473,25 @@ def _auto_process_changes(changed_meetings: list) -> dict:
                 f"Analyzed {analyzed} new items and re-synthesized "
                 f"{len(apps)} items for updated meeting.",
                 meeting_id=mid,
+                org_id=oid,
             )
 
     return {"analyzed": analyzed, "synthesized": synthesized}
 
 
-def _auto_analyze_appearance(app_id: int, analyzer):
+def _auto_analyze_appearance(app_id: int, analyzer, org_id=None):
     """Run AI analysis on a single appearance (lightweight version)."""
+    oid = _resolve_org_id(org_id)
     from repository import get_appearance_by_id, get_matter_by_file_number
     from repository import get_meeting_by_id
     from utils import now_iso
 
-    a = get_appearance_by_id(app_id)
+    a = get_appearance_by_id(app_id, org_id=oid)
     if not a:
         return
 
-    matter = get_matter_by_file_number(a["file_number"]) or {}
-    meeting = get_meeting_by_id(a["meeting_id"]) or {}
+    matter = get_matter_by_file_number(a["file_number"], org_id=oid) or {}
+    meeting = get_meeting_by_id(a["meeting_id"], org_id=oid) or {}
 
     title = a.get("appearance_title") or matter.get("short_title") or ""
     item_num = (a.get("committee_item_number")
@@ -491,24 +520,25 @@ def _auto_analyze_appearance(app_id: int, analyzer):
     with _db.get_db() as conn:
         conn.execute("""UPDATE appearances SET
             ai_summary_for_appearance=?,
-            analysis_at=?, updated_at=? WHERE id=?""",
-            (part1, now, now, app_id))
+            analysis_at=?, updated_at=? WHERE id=? AND org_id = ?""",
+            (part1, now, now, app_id, oid))
 
     log.info(f"Monitor: auto-analyzed appearance {app_id}")
 
 
-def _auto_synthesize_appearance(app_id: int, analyzer):
+def _auto_synthesize_appearance(app_id: int, analyzer, org_id=None):
     """Run synthesis on an appearance (reuses the synthesize_debrief method)."""
+    oid = _resolve_org_id(org_id)
     from repository import (get_appearance_by_id, get_matter_by_file_number,
                             get_meeting_by_id, get_all_appearances_for_matter)
     from utils import now_iso
 
-    a = get_appearance_by_id(app_id)
+    a = get_appearance_by_id(app_id, org_id=oid)
     if not a:
         return
 
-    matter = get_matter_by_file_number(a["file_number"]) or {}
-    meeting = get_meeting_by_id(a["meeting_id"]) or {}
+    matter = get_matter_by_file_number(a["file_number"], org_id=oid) or {}
+    meeting = get_meeting_by_id(a["meeting_id"], org_id=oid) or {}
 
     sources = {
         'item_title': a.get("appearance_title") or matter.get("short_title") or "",
@@ -538,8 +568,8 @@ def _auto_synthesize_appearance(app_id: int, analyzer):
         conn.execute("""UPDATE appearances SET
             ai_summary_for_appearance=?,
             watch_points_for_appearance=?,
-            updated_at=? WHERE id=?""",
-            (debrief, watch_points, now, app_id))
+            updated_at=? WHERE id=? AND org_id = ?""",
+            (debrief, watch_points, now, app_id, oid))
 
     log.info(f"Monitor: auto-synthesized appearance {app_id}")
 

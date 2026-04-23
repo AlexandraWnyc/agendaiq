@@ -19,15 +19,30 @@ import artifacts
 log = logging.getLogger("oca-agent")
 
 
+def _resolve_org_id(org_id=None) -> int:
+    """Get the org_id to use for a query.
+    Priority: explicit param > Flask g.org_id > default 1."""
+    if org_id is not None:
+        return org_id
+    try:
+        from flask import g
+        if hasattr(g, 'org_id') and g.org_id is not None:
+            return g.org_id
+    except (ImportError, RuntimeError):
+        pass
+    return 1
+
+
 # ── Status computation ────────────────────────────────────────
 
-def compute_meeting_status(meeting_id: int) -> dict:
+def compute_meeting_status(meeting_id: int, org_id=None) -> dict:
     """Return a dict describing the meeting's package status.
     Keys: status, total, finalized, in_progress, draft, final_generated."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
-            "SELECT workflow_status FROM appearances WHERE meeting_id=?",
-            (meeting_id,),
+            "SELECT workflow_status FROM appearances WHERE meeting_id=? AND org_id=?",
+            (meeting_id, oid),
         ).fetchall()
     statuses = [r["workflow_status"] or "New" for r in rows]
     total = len(statuses)
@@ -62,31 +77,33 @@ def compute_meeting_status(meeting_id: int) -> dict:
     }
 
 
-def all_items_finalized(meeting_id: int) -> bool:
-    s = compute_meeting_status(meeting_id)
+def all_items_finalized(meeting_id: int, org_id=None) -> bool:
+    s = compute_meeting_status(meeting_id, org_id=org_id)
     return s["total"] > 0 and s["finalized"] == s["total"]
 
 
 # ── Meeting package lookups ───────────────────────────────────
 
-def list_saved_meetings(limit: int = 200) -> list[dict]:
+def list_saved_meetings(limit: int = 200, org_id=None) -> list[dict]:
     """Every meeting that has at least one appearance, with package status."""
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             """SELECT m.*, COUNT(a.id) as appearance_count,
                       MAX(a.updated_at) as last_activity
                FROM meetings m
                LEFT JOIN appearances a ON a.meeting_id=m.id
+               WHERE m.org_id = ?
                GROUP BY m.id
                HAVING appearance_count > 0
                ORDER BY m.meeting_date DESC, m.body_name ASC
                LIMIT ?""",
-            (limit,),
+            (oid, limit),
         ).fetchall()
     out = []
     for r in rows:
         d = dict(r)
-        d.update(compute_meeting_status(d["id"]))
+        d.update(compute_meeting_status(d["id"], org_id=oid))
         out.append(d)
 
     # Build search keywords: concatenate item titles for each meeting so
@@ -102,9 +119,9 @@ def list_saved_meetings(limit: int = 200) -> list[dict]:
                 f"""SELECT meeting_id,
                            GROUP_CONCAT({title_expr}, ' ') as item_keywords
                     FROM appearances
-                    WHERE meeting_id IN ({placeholders})
+                    WHERE meeting_id IN ({placeholders}) AND org_id = ?
                     GROUP BY meeting_id""",
-                meeting_ids,
+                meeting_ids + [oid],
             ).fetchall()
         kw_map = {r["meeting_id"]: r["item_keywords"] or "" for r in kw_rows}
         for d in out:
@@ -113,24 +130,25 @@ def list_saved_meetings(limit: int = 200) -> list[dict]:
     return out
 
 
-def get_meeting_package(meeting_id: int) -> dict | None:
+def get_meeting_package(meeting_id: int, org_id=None) -> dict | None:
     """Everything the Meeting Detail page needs in one blob."""
+    oid = _resolve_org_id(org_id)
     from repository import get_meeting_by_id, get_appearances_for_meeting, get_matter_by_file_number
 
-    m = get_meeting_by_id(meeting_id)
+    m = get_meeting_by_id(meeting_id, org_id=oid)
     if not m:
         return None
 
     from repository import get_all_appearances_for_matter
 
-    apps = get_appearances_for_meeting(meeting_id)
+    apps = get_appearances_for_meeting(meeting_id, org_id=oid)
 
     # Hydrate each appearance with matter info, legislative fields, and
     # cross-meeting case history so the UI can show everything inline.
     items = []
     for a in apps:
-        matter = get_matter_by_file_number(a["file_number"]) or {}
-        prior = get_all_appearances_for_matter(matter["id"]) if matter else []
+        matter = get_matter_by_file_number(a["file_number"], org_id=oid) or {}
+        prior = get_all_appearances_for_matter(matter["id"], org_id=oid) if matter else []
         prior_other = [p for p in prior if p["id"] != a["id"]]
 
         # Cross-stage lookup: find ALL committee and BCC appearances so we
@@ -395,7 +413,7 @@ def get_meeting_package(meeting_id: int) -> dict | None:
         }
         items.append(item)
 
-    status = compute_meeting_status(meeting_id)
+    status = compute_meeting_status(meeting_id, org_id=oid)
     current_artifacts = artifacts.get_current_meeting_level_artifacts(meeting_id)
 
     return {
@@ -408,13 +426,14 @@ def get_meeting_package(meeting_id: int) -> dict | None:
 
 # ── Export orchestrators that also register artifacts ─────────
 
-def generate_draft_export(meeting_id: int, base_output_dir: Path) -> list[dict]:
+def generate_draft_export(meeting_id: int, base_output_dir: Path, org_id=None) -> list[dict]:
     """Regenerate Excel + Word drafts from the latest DB state and register
     them as current draft artifacts.  Returns the artifact rows."""
+    oid = _resolve_org_id(org_id)
     from repository import get_meeting_by_id
     from exporters import export_for_meeting
 
-    m = get_meeting_by_id(meeting_id)
+    m = get_meeting_by_id(meeting_id, org_id=oid)
     if not m:
         return []
 
@@ -443,16 +462,17 @@ def generate_draft_export(meeting_id: int, base_output_dir: Path) -> list[dict]:
     # Mark last_exported on meeting
     with get_db() as conn:
         conn.execute(
-            "UPDATE meetings SET last_exported_at=?, updated_at=? WHERE id=?",
-            (now_iso(), now_iso(), meeting_id),
+            "UPDATE meetings SET last_exported_at=?, updated_at=? WHERE id=? AND org_id=?",
+            (now_iso(), now_iso(), meeting_id, oid),
         )
     return registered
 
 
-def generate_final_export(meeting_id: int, base_output_dir: Path) -> tuple[bool, str, list[dict]]:
+def generate_final_export(meeting_id: int, base_output_dir: Path, org_id=None) -> tuple[bool, str, list[dict]]:
     """Only succeeds if every appearance is Finalized.  Returns (ok, message, artifact_rows)."""
-    if not all_items_finalized(meeting_id):
-        status = compute_meeting_status(meeting_id)
+    oid = _resolve_org_id(org_id)
+    if not all_items_finalized(meeting_id, org_id=oid):
+        status = compute_meeting_status(meeting_id, org_id=oid)
         return False, (
             f"Cannot generate final export: {status['finalized']}/{status['total']} "
             f"items are finalized."
@@ -461,7 +481,7 @@ def generate_final_export(meeting_id: int, base_output_dir: Path) -> tuple[bool,
     from repository import get_meeting_by_id
     from exporters import export_for_meeting
 
-    m = get_meeting_by_id(meeting_id)
+    m = get_meeting_by_id(meeting_id, org_id=oid)
     if not m:
         return False, "Meeting not found.", []
 
@@ -489,7 +509,7 @@ def generate_final_export(meeting_id: int, base_output_dir: Path) -> tuple[bool,
 
     with get_db() as conn:
         conn.execute(
-            "UPDATE meetings SET finalized_at=?, last_exported_at=?, export_status=?, updated_at=? WHERE id=?",
-            (now_iso(), now_iso(), "Final Generated", now_iso(), meeting_id),
+            "UPDATE meetings SET finalized_at=?, last_exported_at=?, export_status=?, updated_at=? WHERE id=? AND org_id=?",
+            (now_iso(), now_iso(), "Final Generated", now_iso(), meeting_id, oid),
         )
     return True, "Final export generated.", registered

@@ -26,6 +26,19 @@ from utils import now_iso
 
 log = logging.getLogger("oca-agent")
 
+
+def _resolve_org_id(org_id=None) -> int:
+    if org_id is not None:
+        return org_id
+    try:
+        from flask import g
+        if hasattr(g, 'org_id') and g.org_id is not None:
+            return g.org_id
+    except (ImportError, RuntimeError):
+        pass
+    return 1
+
+
 # Recognised committee/board tokens that typically appear in a history line.
 _BODY_HINTS = [
     "Board of County Commissioners",
@@ -264,8 +277,9 @@ def parse_legislative_history(raw: str) -> list[dict]:
     return uniq
 
 
-def save_timeline(matter_id: int, events: list[dict]) -> int:
+def save_timeline(matter_id: int, events: list[dict], org_id=None) -> int:
     """Upsert timeline events for a matter. Returns count inserted."""
+    oid = _resolve_org_id(org_id)
     if not events:
         return 0
     now = now_iso()
@@ -276,13 +290,13 @@ def save_timeline(matter_id: int, events: list[dict]) -> int:
                 conn.execute(
                     """INSERT OR IGNORE INTO matter_timeline
                        (matter_id, event_date, body_name, agenda_item, action, result,
-                        source, raw_line, sort_key, created_at)
-                       VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                        source, raw_line, sort_key, created_at, org_id)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                     (matter_id, ev.get("event_date"), ev.get("body_name", ""),
                      ev.get("agenda_item", ""),
                      ev.get("action", ""), ev.get("result", ""),
                      ev.get("source", "legistar"), ev.get("raw_line", ""),
-                     ev.get("event_date") or "", now),
+                     ev.get("event_date") or "", now, oid),
                 )
                 if conn.total_changes:
                     inserted += 1
@@ -291,33 +305,37 @@ def save_timeline(matter_id: int, events: list[dict]) -> int:
     return inserted
 
 
-def get_timeline_for_matter(matter_id: int) -> list[dict]:
+def get_timeline_for_matter(matter_id: int, org_id=None) -> list[dict]:
+    oid = _resolve_org_id(org_id)
     with get_db() as conn:
         rows = conn.execute(
             """SELECT * FROM matter_timeline
-               WHERE matter_id=? ORDER BY event_date ASC, id ASC""",
-            (matter_id,),
+               WHERE matter_id=? AND org_id = ?
+               ORDER BY event_date ASC, id ASC""",
+            (matter_id, oid),
         ).fetchall()
     return [dict(r) for r in rows]
 
 
-def rebuild_for_matter(matter_id: int, raw_history: str) -> int:
+def rebuild_for_matter(matter_id: int, raw_history: str, org_id=None) -> int:
     """Parse raw history and REPLACE events for this matter. Returns inserted count.
 
     Wipes existing matter_timeline rows first so stale / partial parses from
     older parser versions get cleanly overwritten.
     """
+    oid = _resolve_org_id(org_id)
     events = parse_legislative_history(raw_history or "")
     with get_db() as conn:
-        conn.execute("DELETE FROM matter_timeline WHERE matter_id=?", (matter_id,))
-    n = save_timeline(matter_id, events)
+        conn.execute("DELETE FROM matter_timeline WHERE matter_id=? AND org_id = ?",
+                     (matter_id, oid))
+    n = save_timeline(matter_id, events, org_id=oid)
 
     # Cache the raw and refresh timestamp on the matter
     with get_db() as conn:
         conn.execute(
             """UPDATE matters SET legislative_history_raw=?,
-               lifecycle_refreshed_at=?, updated_at=? WHERE id=?""",
-            (raw_history or "", now_iso(), now_iso(), matter_id),
+               lifecycle_refreshed_at=?, updated_at=? WHERE id=? AND org_id = ?""",
+            (raw_history or "", now_iso(), now_iso(), matter_id, oid),
         )
     return n
 
@@ -327,7 +345,8 @@ def rebuild_for_matter(matter_id: int, raw_history: str) -> int:
 def backfill_urls_and_lifecycle(pdf_dir: Path,
                                  only_missing_urls: bool = False,
                                  progress_callback=None,
-                                 meeting_id=None) -> dict:
+                                 meeting_id=None,
+                                 org_id=None) -> dict:
     """
     For every matter in the DB (or just the matters in a given meeting):
       - Re-hit matter.asp via the scraper
@@ -342,6 +361,7 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
 
     Returns summary dict.
     """
+    oid = _resolve_org_id(org_id)
     from scraper import MiamiDadeScraper
 
     sc = MiamiDadeScraper()
@@ -367,11 +387,13 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                 SELECT DISTINCT m.id, m.file_number
                 FROM matters m
                 JOIN appearances a ON a.matter_id = m.id
-                WHERE a.meeting_id = ?
-            """, (meeting_id,)).fetchall()
+                WHERE a.meeting_id = ? AND m.org_id = ?
+            """, (meeting_id, oid)).fetchall()
             log.info(f"Scoped backfill to meeting {meeting_id}: {len(matters)} matters")
         else:
-            matters = conn.execute("SELECT id, file_number FROM matters").fetchall()
+            matters = conn.execute(
+                "SELECT id, file_number FROM matters WHERE org_id = ?",
+                (oid,)).fetchall()
 
     total = len(matters)
     for i, m in enumerate(matters, 1):
@@ -424,8 +446,8 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
             with get_db() as conn:
                 apps = conn.execute(
                     "SELECT id, matter_url, item_pdf_url, item_pdf_local_path "
-                    "FROM appearances WHERE matter_id=?",
-                    (mid,),
+                    "FROM appearances WHERE matter_id=? AND org_id = ?",
+                    (mid, oid),
                 ).fetchall()
                 for a in apps:
                     updates, params = [], []
@@ -447,23 +469,25 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                     if updates:
                         updates.append("updated_at=?"); params.append(now_iso())
                         params.append(a["id"])
+                        params.append(oid)
                         conn.execute(
-                            f"UPDATE appearances SET {','.join(updates)} WHERE id=?",
+                            f"UPDATE appearances SET {','.join(updates)} WHERE id=? AND org_id = ?",
                             params,
                         )
 
             # Rebuild lifecycle timeline
-            inserted = rebuild_for_matter(mid, raw_hist)
+            inserted = rebuild_for_matter(mid, raw_hist, org_id=oid)
             summary["timeline_events"] += inserted
 
             # Auto-create stub committee appearances for every committee
             # event in the history that we don't already have stored.
             try:
                 import repository as _repo
-                events = get_timeline_for_matter(mid)
+                events = get_timeline_for_matter(mid, org_id=oid)
                 with get_db() as conn:
                     mr = conn.execute(
-                        "SELECT short_title FROM matters WHERE id=?", (mid,)
+                        "SELECT short_title FROM matters WHERE id=? AND org_id = ?",
+                        (mid, oid),
                     ).fetchone()
                 stub_title = (mr["short_title"] if mr else "") or f"File# {fn}"
                 for ev in events:
@@ -479,8 +503,9 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                             """SELECT a.id FROM appearances a
                                JOIN meetings m ON m.id=a.meeting_id
                                WHERE a.matter_id=? AND m.meeting_date=?
-                                 AND LOWER(m.body_name)=LOWER(?)""",
-                            (mid, ev_date, ev_body)
+                                 AND LOWER(m.body_name)=LOWER(?)
+                                 AND a.org_id = ?""",
+                            (mid, ev_date, ev_body, oid)
                         ).fetchone()
                     if existing:
                         continue
