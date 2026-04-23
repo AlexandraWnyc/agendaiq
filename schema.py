@@ -349,6 +349,142 @@ MIGRATION_STATEMENTS = [
     # ── AI risk classification: stored from AI analysis output
     "ALTER TABLE appearances ADD COLUMN ai_risk_level TEXT",
     "ALTER TABLE appearances ADD COLUMN ai_risk_reason TEXT",
+
+    # ══════════════════════════════════════════════════════════════
+    # CASE LAYER (Session 1 — April 2026)
+    # ══════════════════════════════════════════════════════════════
+    # A "Case" is the lifecycle unit above a matter. One Case can span
+    # multiple agenda items (matters) across multiple meetings. Example:
+    # CDMP20250013 spawns 3C (ordinance), 3C1 (transmittal resolution),
+    # 3C Supplement (staff analysis), all members of one Case.
+    #
+    # Identity: application_number is the natural key. When we cannot
+    # extract an application number from an item, we synthesize one
+    # (SYNTHETIC-<hash>) so every matter has exactly one case and the
+    # case-view code never has to special-case "no case".
+    # ══════════════════════════════════════════════════════════════
+
+    """CREATE TABLE IF NOT EXISTS cases (
+        id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+        application_number      TEXT UNIQUE NOT NULL,
+        case_type               TEXT NOT NULL,
+        case_type_confidence    REAL DEFAULT 1.0,
+        display_label           TEXT,
+        subject_summary         TEXT,
+        current_stage_category  TEXT,
+        current_stage_label     TEXT,
+        current_status          TEXT,
+        first_seen_date         TEXT,
+        last_activity_date      TEXT,
+        is_synthetic            INTEGER DEFAULT 0,
+        notes                   TEXT,
+        created_at              TEXT NOT NULL,
+        updated_at              TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_cases_app_num  ON cases(application_number)",
+    "CREATE INDEX IF NOT EXISTS idx_cases_type     ON cases(case_type)",
+    "CREATE INDEX IF NOT EXISTS idx_cases_activity ON cases(last_activity_date)",
+
+    # case_memberships — matter ↔ case, with role + confidence.
+    # One matter belongs to exactly one case (enforced by UNIQUE on matter_id).
+    # One case has many matters.
+    """CREATE TABLE IF NOT EXISTS case_memberships (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        case_id           INTEGER NOT NULL,
+        matter_id         INTEGER NOT NULL UNIQUE,
+        role_category     TEXT,
+        role_label        TEXT,
+        role_confidence   REAL DEFAULT 1.0,
+        link_status       TEXT NOT NULL DEFAULT 'confirmed',
+        link_confidence   REAL DEFAULT 1.0,
+        link_method       TEXT,
+        link_evidence     TEXT,
+        confirmed_by      TEXT,
+        confirmed_at      TEXT,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL,
+        FOREIGN KEY (case_id)   REFERENCES cases(id),
+        FOREIGN KEY (matter_id) REFERENCES matters(id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_cm_case    ON case_memberships(case_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cm_matter  ON case_memberships(matter_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cm_status  ON case_memberships(link_status)",
+
+    # case_events — the timeline. Populated from agenda appearances,
+    # legislative history events, and manual researcher entries. Distinct
+    # from matter_timeline (which is per-matter leg-history-only) in that
+    # these are case-level and can aggregate across matters.
+    """CREATE TABLE IF NOT EXISTS case_events (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        case_id           INTEGER NOT NULL,
+        matter_id         INTEGER,
+        appearance_id     INTEGER,
+        event_date        TEXT NOT NULL,
+        event_type        TEXT NOT NULL,
+        stage_category    TEXT,
+        stage_label       TEXT,
+        body_name         TEXT,
+        action            TEXT,
+        result            TEXT,
+        source            TEXT DEFAULT 'derived',
+        notes             TEXT,
+        sort_key          TEXT,
+        created_at        TEXT NOT NULL,
+        FOREIGN KEY (case_id)       REFERENCES cases(id),
+        FOREIGN KEY (matter_id)     REFERENCES matters(id),
+        FOREIGN KEY (appearance_id) REFERENCES appearances(id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_ce_case   ON case_events(case_id)",
+    "CREATE INDEX IF NOT EXISTS idx_ce_date   ON case_events(event_date)",
+    "CREATE INDEX IF NOT EXISTS idx_ce_stage  ON case_events(stage_category)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_ce_dedup ON case_events(case_id, event_date, body_name, action, matter_id)",
+
+    # Denormalized pointer on appearances for fast case lookup without
+    # always going through case_memberships. Kept in sync by the linker.
+    "ALTER TABLE appearances ADD COLUMN case_id INTEGER",
+    "ALTER TABLE appearances ADD COLUMN case_role_label TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_app_case ON appearances(case_id)",
+
+    # ══════════════════════════════════════════════════════════════
+    # CASE RELATIONS (Session 2 — April 2026)
+    # ══════════════════════════════════════════════════════════════
+    # Cases can be linked to other cases. Most important example: a
+    # CDMP amendment (CDMP20250013) and its companion zoning application
+    # (Z2025000130) are two legally distinct Cases for the same physical
+    # project. Neither should subsume the other, but a researcher looking
+    # at one needs to see the other.
+    #
+    # Canonical ordering: for each logical relation, we store exactly ONE
+    # row with (case_a_id < case_b_id). The unique index on (case_a_id,
+    # case_b_id, relation_type) ensures re-running the scraper from either
+    # direction doesn't create duplicates.
+    # ══════════════════════════════════════════════════════════════
+
+    """CREATE TABLE IF NOT EXISTS case_relations (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        case_a_id         INTEGER NOT NULL,
+        case_b_id         INTEGER NOT NULL,
+        relation_type     TEXT NOT NULL,
+        direction         TEXT,
+        confidence        REAL DEFAULT 0.5,
+        status            TEXT NOT NULL DEFAULT 'candidate',
+        detection_method  TEXT,
+        evidence_snippet  TEXT,
+        evidence_source   TEXT,
+        confirmed_by      TEXT,
+        confirmed_at      TEXT,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL,
+        FOREIGN KEY (case_a_id) REFERENCES cases(id),
+        FOREIGN KEY (case_b_id) REFERENCES cases(id),
+        CHECK (case_a_id < case_b_id)
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_cr_unique "
+    "ON case_relations(case_a_id, case_b_id, relation_type)",
+    "CREATE INDEX IF NOT EXISTS idx_cr_a      ON case_relations(case_a_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cr_b      ON case_relations(case_b_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cr_status ON case_relations(status)",
+    "CREATE INDEX IF NOT EXISTS idx_cr_type   ON case_relations(relation_type)",
 ]
 
 # Meeting package status values
@@ -378,3 +514,179 @@ def stage_rank(stage: str) -> int:
         if name in s:
             return i
     return -1
+
+
+# ══════════════════════════════════════════════════════════════════
+# CASE LAYER VOCABULARIES
+# ══════════════════════════════════════════════════════════════════
+
+# Case types — what kind of thing this Case is. Extensible.
+CASE_TYPES = [
+    "cdmp",          # Comprehensive Development Master Plan
+    "zoning",        # Zoning hearing, district boundary, etc.
+    "contract",      # Procurement / contract award, amendment, extension
+    "ordinance",     # Stand-alone ordinance (non-CDMP, non-zoning)
+    "resolution",    # Stand-alone resolution
+    "appointment",   # Board / committee appointment
+    "ceremonial",    # Proclamation, recognition, commendation
+    "report",        # Report or informational item
+    "other",         # Doesn't fit — safe default
+    "unknown",       # Classifier couldn't decide
+]
+
+# Role categories — what role does THIS matter play in its case?
+# Structured so queries can aggregate across case types
+# ("show me all pending decisions regardless of case type").
+ROLE_CATEGORIES = [
+    "initiation",     # starts the case (application, RFP issue)
+    "review",         # intermediate review stage
+    "decision",       # the action vote — ordinance adoption, contract award
+    "transmittal",    # sends to another body (CDMP → state, etc.)
+    "supporting",     # supplement, analysis, exhibit — no standalone action
+    "administrative", # scrivener, corrections, housekeeping
+    "unknown",
+]
+
+# Stage categories — where in the lifecycle IS the case right now?
+# Similar structure: generic category + free-text case-type-specific label.
+STAGE_CATEGORIES = [
+    "intake",           # application filed / solicitation issued
+    "analysis",         # staff review, PAB review, committee review
+    "transmittal",      # sent to external body (state, county, etc.)
+    "external_review",  # external body has it (state, FDOT, etc.)
+    "decision_pending", # scheduled for final action
+    "decided",          # voted on (adopted, awarded, denied)
+    "closed",           # case fully closed out
+    "unknown",
+]
+
+# Membership link status — controls whether the link shows as real
+# or as a candidate awaiting researcher confirmation.
+LINK_STATUSES = [
+    "confirmed",   # auto-linked with high confidence OR researcher-confirmed
+    "candidate",   # auto-linked with low confidence, needs review
+    "rejected",    # researcher rejected the candidate — don't re-propose
+    "manual",      # researcher created this link manually
+]
+
+# Method used to create the link — for audit trail.
+LINK_METHODS = [
+    "application_number",  # shared application number (strongest signal)
+    "title_similarity",    # fuzzy title match (weaker)
+    "file_number_series",  # related file numbers from same ordinance package
+    "manual",              # researcher created
+    "legacy_merge",        # back-fill from historical data
+]
+
+# Confidence threshold: membership links AT OR ABOVE this score are auto-
+# confirmed; below this are marked candidate and queued for review.
+CASE_LINK_AUTO_CONFIRM_THRESHOLD = 0.85
+
+
+# ══════════════════════════════════════════════════════════════════
+# CASE RELATION VOCABULARIES (Session 2)
+# ══════════════════════════════════════════════════════════════════
+
+# Relation types between two cases. "direction" semantics below are
+# described from case_a → case_b where case_a_id < case_b_id (the
+# canonical storage order). For symmetric relations, direction is None.
+RELATION_TYPES = [
+    "companion",      # concurrent applications for the same project
+                      # (e.g. CDMP amendment + zoning application).
+                      # SYMMETRIC.
+    "precedent",      # case_a cites case_b as prior precedent.
+                      # DIRECTIONAL: older → newer.
+    "amends",         # case_a amends / modifies case_b.
+                      # DIRECTIONAL: amendment → original.
+    "successor",      # case_a is a re-filing / continuation of case_b.
+                      # DIRECTIONAL: newer → older.
+    "superseded_by",  # case_a has been superseded by case_b.
+                      # DIRECTIONAL: superseded → superseder.
+    "related",        # catch-all. Human-asserted or ambiguous.
+                      # SYMMETRIC.
+]
+
+# Per-relation-type: is this relation symmetric (both sides equivalent)
+# or directional (one side plays a distinct role)? Drives UI wording.
+RELATION_IS_SYMMETRIC = {
+    "companion":     True,
+    "precedent":     False,
+    "amends":        False,
+    "successor":     False,
+    "superseded_by": False,
+    "related":       True,
+}
+
+# Relation status:
+#   candidate — auto-detected, awaiting researcher review
+#   confirmed — reviewer-accepted or manually created with high trust
+#   rejected  — reviewer-rejected; kept in DB so we don't re-propose
+#   manual    — researcher-created (implicitly confirmed)
+RELATION_STATUSES = ["candidate", "confirmed", "rejected", "manual"]
+
+
+# Context-signal patterns for companion detection. When one of these
+# phrases appears within the CONTEXT_WINDOW_CHARS around a secondary
+# application number, the companion detector boosts the confidence of
+# classifying that pair as a companion relationship.
+RELATION_CONTEXT_PATTERNS = {
+    "companion": [
+        "concurrent",
+        "concurrently",
+        "companion",
+        "tied to",
+        "subject to approval of",
+        "subject to the approval of",
+        "processed concurrently with",
+        "processed with",
+        "filed concurrently",
+        "heard concurrently",
+        "on the same day",
+        "same day as",
+        "contingent on approval of",
+        "contingent upon",
+        "accompanied by",
+        "accompanies",
+    ],
+    "precedent": [
+        "prior approved",
+        "previously approved",
+        "similar to",
+        "analogous to",
+        "as in",
+        "consistent with prior",
+        "following the precedent",
+        "prior cdmp",
+        "prior ordinance",
+    ],
+    "amends": [
+        "amending",
+        "amend",
+        "modifies",
+        "modifying",
+        "amendment to",
+        "amends application",
+    ],
+    "successor": [
+        "re-filing of",
+        "re-filed",
+        "continuation of",
+        "continues",
+        "previously filed as",
+        "replaces application",
+    ],
+    "superseded_by": [
+        "superseded by",
+        "replaced by",
+        "no longer in effect",
+        "withdrawn in favor of",
+    ],
+}
+
+# How many characters before and after an extracted number to scan
+# for context-signal phrases.
+RELATION_CONTEXT_WINDOW_CHARS = 250
+
+# Minimum score to record a companion candidate at all. Below this, the
+# co-occurrence is treated as a passing mention rather than a real link.
+RELATION_MIN_CONFIDENCE = 0.40

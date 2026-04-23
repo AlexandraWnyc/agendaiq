@@ -28,6 +28,612 @@ app = Flask(__name__)
 JOBS: dict = {}
 
 
+# ── Safe download helper (bug fix: Symantec proxy interception) ──
+# County-managed Windows workstations run a Symantec proxy that sometimes
+# strips or rewrites `send_file(..., as_attachment=True)` responses when the
+# MIME type isn't set and the filename has characters the proxy dislikes.
+# This helper: (1) always sets an explicit mimetype based on extension,
+# (2) sanitizes the download_name so the proxy doesn't flag it, and
+# (3) sets Content-Disposition via a strict ASCII filename as well as
+# RFC 5987 UTF-8 fallback for Flask's own serialization.
+import mimetypes as _mimetypes
+import re as _re_safe
+
+# Persistent server-side output directory. Any endpoint can call
+# save_to_output_dir(...) to write a file the user can grab off disk
+# instead of through a browser download (which the proxy can intercept).
+OUTPUT_DIR = Path(__file__).parent / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+_EXT_MIME = {
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".xls":  "application/vnd.ms-excel",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".doc":  "application/msword",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".pdf":  "application/pdf",
+    ".csv":  "text/csv",
+    ".txt":  "text/plain",
+    ".json": "application/json",
+    ".zip":  "application/zip",
+}
+
+
+def _safe_download_name(name: str, fallback: str = "download") -> str:
+    """Keep only ASCII alnum/._- and collapse runs of underscores. Strict
+    enough that Symantec/ProxySG won't quibble, loose enough to stay
+    readable."""
+    if not name:
+        return fallback
+    # Replace anything that's not alnum/dot/hyphen/underscore with _
+    clean = _re_safe.sub(r'[^A-Za-z0-9._-]+', '_', name)
+    clean = _re_safe.sub(r'_+', '_', clean).strip('_.')
+    return clean or fallback
+
+
+def safe_send_file(path: str | Path, download_name: str | None = None,
+                   as_attachment: bool = True):
+    """send_file drop-in with explicit MIME + sanitized filename.
+
+    Use this instead of raw send_file() for any user-triggered download on
+    claude.ai-style county hardware — the explicit Content-Type + clean
+    filename prevents Symantec proxy interception.
+    """
+    p = Path(path)
+    dl_name = _safe_download_name(
+        download_name or p.name, fallback=f"download{p.suffix or ''}"
+    )
+    ext = p.suffix.lower()
+    mt = _EXT_MIME.get(ext) or _mimetypes.guess_type(p.name)[0] \
+        or "application/octet-stream"
+    return send_file(
+        str(p.resolve()),
+        as_attachment=as_attachment,
+        download_name=dl_name,
+        mimetype=mt,
+    )
+
+
+def save_to_output_dir(src_path: str | Path, dest_name: str | None = None) -> Path:
+    """Copy src_path into OUTPUT_DIR under a safe filename. Returns the
+    destination Path. Used by endpoints that want to give the user a
+    stable on-disk location instead of a browser download."""
+    import shutil
+    src = Path(src_path)
+    name = _safe_download_name(dest_name or src.name)
+    dst = OUTPUT_DIR / name
+    # Don't clobber — if the name exists, suffix with a counter
+    if dst.exists():
+        stem, ext = dst.stem, dst.suffix
+        i = 2
+        while (OUTPUT_DIR / f"{stem}_{i}{ext}").exists():
+            i += 1
+        dst = OUTPUT_DIR / f"{stem}_{i}{ext}"
+    shutil.copy2(str(src), str(dst))
+    return dst
+
+
+# ══════════════════════════════════════════════════════════════════
+# Case View HTML template (Session 3 — April 2026)
+# ══════════════════════════════════════════════════════════════════
+# Server renders this shell; JS fetches data from /api/case/<app_num>
+# and /api/case/<app_num>/relations. Keeping it in-file for now so the
+# patch is one file; a future pass can move it to templates/ once the
+# Case view grows.
+
+_CASE_VIEW_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Case {{APPLICATION_NUMBER}} — AgendaIQ</title>
+  <style>
+    :root {
+      --bg: #f7f7f8;
+      --card: #fff;
+      --border: #e4e4e7;
+      --text: #18181b;
+      --muted: #71717a;
+      --accent: #0f62fe;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --danger: #dc2626;
+      --candidate: #fef3c7;
+      --candidate-border: #f59e0b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      margin: 0; background: var(--bg); color: var(--text);
+      font-size: 14px; line-height: 1.5;
+    }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+    .crumbs { color: var(--muted); font-size: 0.85rem; margin-bottom: .5rem; }
+    .crumbs a { color: var(--muted); text-decoration: none; }
+    .crumbs a:hover { text-decoration: underline; }
+    h1 {
+      font-size: 1.6rem; margin: 0 0 .25rem 0; font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .case-type-pill {
+      display: inline-block; padding: 2px 8px; border-radius: 999px;
+      background: #e0e7ff; color: #3730a3;
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.03em; vertical-align: middle;
+    }
+    .subtitle { color: var(--muted); margin-bottom: 1.5rem; }
+    .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 1.25rem; }
+    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 1rem;
+    }
+    .card h2 {
+      font-size: 0.85rem; text-transform: uppercase; letter-spacing: .04em;
+      color: var(--muted); margin: 0 0 .75rem 0; font-weight: 600;
+    }
+    .stage-row {
+      display: flex; flex-wrap: wrap; gap: .5rem; align-items: baseline;
+    }
+    .stage-label {
+      padding: 4px 10px; border-radius: 4px;
+      background: #ecfdf5; color: #065f46;
+      font-weight: 600; font-size: 0.85rem;
+    }
+    .meta-row { display: flex; gap: 1.5rem; flex-wrap: wrap;
+                color: var(--muted); font-size: 0.85rem; margin-top: .5rem; }
+    .mem-row, .rel-row {
+      padding: .75rem 0; border-top: 1px solid var(--border);
+    }
+    .mem-row:first-child, .rel-row:first-child { border-top: 0; padding-top: 0; }
+    .role-pill {
+      display: inline-block; padding: 2px 7px; border-radius: 4px;
+      font-size: 0.72rem; font-weight: 600;
+      background: #f4f4f5; color: #52525b;
+      margin-right: .5rem;
+    }
+    .role-decision   { background: #fee2e2; color: #991b1b; }
+    .role-transmittal { background: #dbeafe; color: #1e40af; }
+    .role-supporting { background: #f3e8ff; color: #6b21a8; }
+    .role-initiation { background: #e0f2fe; color: #075985; }
+    .rel-row.candidate {
+      background: var(--candidate); margin: .5rem -.5rem;
+      padding: .75rem; border-radius: 6px;
+      border-left: 3px solid var(--candidate-border);
+    }
+    .rel-header {
+      display: flex; justify-content: space-between;
+      align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    }
+    .rel-title { font-weight: 600; }
+    .rel-title a { color: var(--accent); text-decoration: none; }
+    .rel-title a:hover { text-decoration: underline; }
+    .rel-meta {
+      font-size: 0.78rem; color: var(--muted);
+      display: flex; gap: .75rem; flex-wrap: wrap;
+    }
+    .rel-type-pill {
+      display: inline-block; padding: 1px 7px; border-radius: 4px;
+      background: #e0e7ff; color: #3730a3;
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+    .rel-type-companion     { background: #ccfbf1; color: #115e59; }
+    .rel-type-precedent     { background: #fef3c7; color: #78350f; }
+    .rel-type-amends        { background: #fce7f3; color: #9f1239; }
+    .rel-type-successor     { background: #ede9fe; color: #5b21b6; }
+    .rel-type-superseded_by { background: #fee2e2; color: #991b1b; }
+    .rel-evidence {
+      margin-top: .4rem; font-size: 0.82rem; color: #52525b;
+      font-style: italic; line-height: 1.4;
+      border-left: 2px solid var(--border); padding-left: .6rem;
+    }
+    .rel-actions { margin-top: .5rem; display: flex; gap: .4rem; }
+    .btn {
+      font-family: inherit; font-size: 0.78rem; font-weight: 600;
+      padding: 4px 10px; border-radius: 4px; border: 1px solid transparent;
+      cursor: pointer;
+    }
+    .btn-confirm { background: var(--ok); color: #fff; }
+    .btn-confirm:hover { background: #15803d; }
+    .btn-reject { background: #fff; color: var(--danger);
+                  border-color: var(--danger); }
+    .btn-reject:hover { background: var(--danger); color: #fff; }
+    .btn:disabled { opacity: .5; cursor: default; }
+    .empty { color: var(--muted); font-style: italic; font-size: 0.9rem; }
+    .conf-bar {
+      display: inline-block; width: 50px; height: 6px; border-radius: 3px;
+      background: #e4e4e7; overflow: hidden; vertical-align: middle;
+    }
+    .conf-bar-fill { height: 100%; background: var(--accent); }
+    .synth-note {
+      color: var(--warn); font-size: 0.8rem; margin-top: .25rem;
+    }
+    .loading { color: var(--muted); padding: 1rem 0; }
+    .err {
+      padding: .75rem; background: #fef2f2; border: 1px solid #fecaca;
+      color: #991b1b; border-radius: 6px; font-size: 0.9rem;
+    }
+    /* Session 4: workload / fragmentation */
+    .fragment-warn {
+      background: #fef3c7; border-left: 3px solid #f59e0b;
+      padding: .6rem .75rem; border-radius: 6px; margin-bottom: .75rem;
+      font-size: 0.85rem; color: #78350f;
+    }
+    .wl-item {
+      padding: .55rem 0; border-top: 1px solid var(--border);
+      font-size: 0.85rem;
+    }
+    .wl-item:first-child { border-top: 0; padding-top: 0; }
+    .wl-item-hdr { display: flex; justify-content: space-between; gap: .5rem; }
+    .wl-companion-tag {
+      display: inline-block; padding: 1px 6px; border-radius: 3px;
+      background: #fce7f3; color: #9f1239; font-size: 0.68rem;
+      font-weight: 600; text-transform: uppercase; margin-left: .3rem;
+    }
+    .wl-unassigned { color: var(--muted); font-style: italic; }
+    .wl-summary {
+      background: #f9fafb; padding: .55rem .75rem; border-radius: 6px;
+      font-size: 0.82rem; color: #374151; margin-bottom: .6rem;
+      display: flex; gap: 1rem; justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    .wl-weight-pill {
+      display: inline-block; padding: 1px 6px; border-radius: 3px;
+      background: #dbeafe; color: #1e40af; font-size: 0.68rem;
+      font-weight: 700; margin-left: .3rem;
+    }
+    .wl-weight-5 { background: #fee2e2; color: #991b1b; }
+    .wl-weight-4 { background: #ffedd5; color: #9a3412; }
+    .wl-weight-3 { background: #fef3c7; color: #78350f; }
+    .wl-weight-2 { background: #dbeafe; color: #1e40af; }
+    .wl-weight-1 { background: #dcfce7; color: #166534; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="crumbs"><a href="/">AgendaIQ</a> · Case</div>
+  <h1>
+    <span id="case-app-num">{{APPLICATION_NUMBER}}</span>
+    <span class="case-type-pill" id="case-type-pill">loading…</span>
+  </h1>
+  <div class="subtitle" id="case-subtitle"></div>
+  <div id="synth-note"></div>
+
+  <div class="card">
+    <h2>Current Stage</h2>
+    <div class="stage-row">
+      <div class="stage-label" id="stage-label">—</div>
+      <span class="meta" id="stage-category"></span>
+    </div>
+    <div class="meta-row" id="case-meta"></div>
+  </div>
+
+  <div class="grid">
+    <div>
+      <div class="card">
+        <h2>Agenda Items in This Case</h2>
+        <div id="memberships"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Appearances on Agendas</h2>
+        <div id="appearances"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>Related Cases</h2>
+        <div id="relations"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="card" id="workload-card">
+        <h2>Workload &amp; Assignments</h2>
+        <div id="workload"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="card">
+        <h2>Timeline</h2>
+        <div id="events"><div class="loading">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const APP_NUM = document.getElementById("case-app-num").textContent.trim();
+const CURRENT_USER = (window.localStorage && localStorage.getItem("oca_user")) || "researcher";
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function confBar(c) {
+  const pct = Math.round(Math.max(0, Math.min(1, c || 0)) * 100);
+  return `<span class="conf-bar"><span class="conf-bar-fill"
+          style="width:${pct}%"></span></span> <span class="meta">${pct}%</span>`;
+}
+
+function roleClass(cat) {
+  const valid = ["decision", "transmittal", "supporting", "initiation"];
+  return valid.includes(cat) ? `role-${cat}` : "";
+}
+
+function renderCase(data) {
+  const c = data.case;
+  document.getElementById("case-type-pill").textContent = c.case_type || "unknown";
+  document.getElementById("case-subtitle").textContent = c.display_label || "";
+  document.getElementById("stage-label").textContent =
+      c.current_stage_label || "Stage not yet determined";
+  document.getElementById("stage-category").textContent =
+      c.current_stage_category ? `(${c.current_stage_category})` : "";
+  document.getElementById("case-meta").innerHTML = [
+    c.first_seen_date ? `First seen: ${esc(c.first_seen_date)}` : "",
+    c.last_activity_date ? `Last activity: ${esc(c.last_activity_date)}` : "",
+    `Members: ${data.memberships.length}`,
+  ].filter(Boolean).map(x => `<span>${x}</span>`).join("");
+
+  if (c.is_synthetic) {
+    document.getElementById("synth-note").innerHTML =
+      `<div class="synth-note">⚠ This is a synthetic case (no application
+      number found in source materials). It exists so the matter has a
+      stable anchor, but may be merged into a real case if one is later
+      detected.</div>`;
+  }
+
+  // Memberships — the matters under this case
+  const memEl = document.getElementById("memberships");
+  if (!data.memberships.length) {
+    memEl.innerHTML = `<div class="empty">No matters linked yet.</div>`;
+  } else {
+    memEl.innerHTML = data.memberships.map(m => `
+      <div class="mem-row">
+        <span class="role-pill ${roleClass(m.role_category)}">${esc(m.role_label || m.role_category || "—")}</span>
+        <strong>File #${esc(m.file_number)}</strong>
+        ${esc(m.file_type ? " · " + m.file_type : "")}
+        <div class="meta" style="margin-top:.2rem">${esc(m.short_title || "")}</div>
+        ${m.link_status !== "confirmed" ? `<div class="meta" style="color:var(--warn)">
+          Link status: <strong>${esc(m.link_status)}</strong></div>` : ""}
+      </div>
+    `).join("");
+  }
+
+  // Appearances
+  const apEl = document.getElementById("appearances");
+  if (!data.appearances.length) {
+    apEl.innerHTML = `<div class="empty">No agenda appearances recorded.</div>`;
+  } else {
+    apEl.innerHTML = data.appearances.map(a => `
+      <div class="mem-row">
+        <div>
+          <strong>${esc(a.meeting_date || "—")}</strong>
+          · ${esc(a.body_name || "")}
+          ${a.committee_item_number ? ` · Item ${esc(a.committee_item_number)}` : ""}
+        </div>
+        <div class="meta">${esc(a.case_role_label || a.appearance_title || "")}</div>
+      </div>
+    `).join("");
+  }
+
+  // Events / timeline
+  const evEl = document.getElementById("events");
+  if (!data.events.length) {
+    evEl.innerHTML = `<div class="empty">No timeline events yet.</div>`;
+  } else {
+    evEl.innerHTML = data.events.map(e => `
+      <div class="mem-row">
+        <strong>${esc(e.event_date || "")}</strong> — ${esc(e.event_type || "")}
+        ${e.stage_label ? `<div class="meta">${esc(e.stage_label)}</div>` : ""}
+        ${e.action ? `<div class="meta">${esc(e.action)}</div>` : ""}
+      </div>
+    `).join("");
+  }
+
+  // Related cases — THIS is the new card for Session 3
+  renderRelations(data.related_cases || []);
+}
+
+function renderRelations(rels) {
+  const el = document.getElementById("relations");
+  if (!rels.length) {
+    el.innerHTML = `<div class="empty">No related cases detected.</div>`;
+    return;
+  }
+  // Sort: candidates first (they need attention), then by confidence
+  rels.sort((a, b) => {
+    if (a.status === "candidate" && b.status !== "candidate") return -1;
+    if (b.status === "candidate" && a.status !== "candidate") return 1;
+    return (b.confidence || 0) - (a.confidence || 0);
+  });
+
+  el.innerHTML = rels.map(r => {
+    const o = r.other_side || {};
+    const dir = r.direction_for_this_case;
+    const arrow = dir === "none" ? "↔" :
+                  (dir && dir.endsWith("_by")) ? "←" : "→";
+    const dirWord = (dir && dir !== "none") ? dir.replace(/_/g, " ") : "";
+    const isCandidate = r.status === "candidate";
+    const typeClass = `rel-type-${r.relation_type}`;
+    return `
+      <div class="rel-row ${isCandidate ? "candidate" : ""}" data-rid="${r.id}">
+        <div class="rel-header">
+          <div class="rel-title">
+            ${arrow}
+            <a href="/case/${encodeURIComponent(o.application_number)}">
+              ${esc(o.application_number || "(unknown)")}
+            </a>
+            <span class="rel-type-pill ${typeClass}">${esc(r.relation_type)}</span>
+          </div>
+          <div class="rel-meta">
+            ${esc(o.case_type || "")} ·
+            ${esc(r.status)} ·
+            ${confBar(r.confidence)}
+          </div>
+        </div>
+        ${dirWord && dir !== "none" ?
+          `<div class="meta" style="margin-top:.15rem">
+            This case ${esc(dirWord)} ${esc(o.application_number)}</div>` : ""}
+        ${o.display_label ?
+          `<div class="meta" style="margin-top:.2rem">${esc(o.display_label)}</div>` : ""}
+        ${o.stage_label ?
+          `<div class="meta">Stage: ${esc(o.stage_label)}</div>` : ""}
+        ${r.evidence_snippet ?
+          `<div class="rel-evidence">“${esc(r.evidence_snippet)}”</div>` : ""}
+        ${isCandidate ? `
+          <div class="rel-actions">
+            <button class="btn btn-confirm"
+                    onclick="confirmRelation(${r.id}, this)">✓ Confirm</button>
+            <button class="btn btn-reject"
+                    onclick="rejectRelation(${r.id}, this)">✕ Reject</button>
+          </div>` : ""}
+      </div>
+    `;
+  }).join("");
+}
+
+async function confirmRelation(rid, btn) {
+  btn.disabled = true; btn.textContent = "…";
+  try {
+    const resp = await fetch(`/api/case/relation/${rid}/confirm`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({confirmed_by: CURRENT_USER}),
+    });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({}));
+      alert("Confirm failed: " + (e.error || resp.statusText));
+      btn.disabled = false; btn.textContent = "✓ Confirm";
+      return;
+    }
+    await load();
+  } catch (err) {
+    alert("Network error: " + err);
+    btn.disabled = false; btn.textContent = "✓ Confirm";
+  }
+}
+
+async function rejectRelation(rid, btn) {
+  const reason = prompt("Reason for rejecting this link (optional):") || "";
+  btn.disabled = true; btn.textContent = "…";
+  try {
+    const resp = await fetch(`/api/case/relation/${rid}/reject`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({rejected_by: CURRENT_USER, reason}),
+    });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({}));
+      alert("Reject failed: " + (e.error || resp.statusText));
+      btn.disabled = false; btn.textContent = "✕ Reject";
+      return;
+    }
+    await load();
+  } catch (err) {
+    alert("Network error: " + err);
+    btn.disabled = false; btn.textContent = "✕ Reject";
+  }
+}
+
+async function load() {
+  try {
+    const resp = await fetch(`/api/case/${encodeURIComponent(APP_NUM)}`);
+    if (!resp.ok) {
+      const body = await resp.text();
+      document.getElementById("memberships").innerHTML =
+          `<div class="err">Failed to load: ${esc(resp.status)} ${esc(body.slice(0, 200))}</div>`;
+      return;
+    }
+    const data = await resp.json();
+    renderCase(data);
+  } catch (err) {
+    document.getElementById("memberships").innerHTML =
+      `<div class="err">Error: ${esc(err.message || err)}</div>`;
+  }
+  // Workload loads independently so a failure here doesn't block the
+  // main case view.
+  try {
+    const wresp = await fetch(`/api/case/${encodeURIComponent(APP_NUM)}/workload`);
+    if (wresp.ok) {
+      renderWorkload(await wresp.json());
+    } else {
+      document.getElementById("workload").innerHTML =
+        `<div class="empty">Workload data unavailable.</div>`;
+    }
+  } catch (err) {
+    document.getElementById("workload").innerHTML =
+      `<div class="err">Workload error: ${esc(err.message || err)}</div>`;
+  }
+}
+
+function renderWorkload(data) {
+  const el = document.getElementById("workload");
+  const same = data.same_case_items || [];
+  const comp = data.companion_items || [];
+  const allItems = same.concat(comp);
+  if (!allItems.length) {
+    el.innerHTML = `<div class="empty">No assignable items.</div>`;
+    return;
+  }
+
+  const assignees = data.distinct_assignees || [];
+  const fragWarn = data.is_fragmented ?
+    `<div class="fragment-warn">
+      ⚠ <strong>Fragmented assignment.</strong>
+      This Case + companions are split across ${assignees.length} researchers
+      (${assignees.map(esc).join(", ")}).
+      Per policy, items in one Case should share an assignee. Reassign
+      through the item page or via the assignment dialog.
+    </div>` : "";
+
+  const summary = `<div class="wl-summary">
+    <span>${same.length + comp.length} item(s)
+      · ${same.length} in this Case
+      ${comp.length ? ` · ${comp.length} in companion Case(s)` : ""}</span>
+    <span>Total weight:
+      <span class="wl-weight-pill">${data.aggregate_weight}</span></span>
+  </div>`;
+
+  const renderRow = (it, isCompanion) => {
+    const weight = it.weight || "?";
+    const weightClass = `wl-weight-${weight}`;
+    const who = it.assigned_to ?
+      `<strong>${esc(it.assigned_to)}</strong>` :
+      `<span class="wl-unassigned">unassigned</span>`;
+    const itemNum = it.committee_item_number ?
+      `Item ${esc(it.committee_item_number)}` :
+      `File#${esc(it.file_number)}`;
+    const riskBit = it.ai_risk_level ?
+      ` · ${esc(it.ai_risk_level)}` : "";
+    const caseApp = it.case_app_num ?
+      ` <span class="wl-companion-tag">${esc(it.case_app_num)}</span>` : "";
+    const compTag = isCompanion ? ` <span class="wl-companion-tag">companion</span>` : "";
+    return `
+      <div class="wl-item">
+        <div class="wl-item-hdr">
+          <div><strong>${itemNum}</strong>${compTag}${caseApp}
+            <span class="wl-weight-pill ${weightClass}">w=${weight}</span></div>
+          <div>${who}</div>
+        </div>
+        <div class="meta">${esc(it.short_title || "")}
+          · ${esc(it.workflow_status || "")}${riskBit}</div>
+      </div>
+    `;
+  };
+
+  const sameHtml = same.map(i => renderRow(i, false)).join("");
+  const compHtml = comp.map(i => renderRow(i, true)).join("");
+  el.innerHTML = fragWarn + summary + sameHtml + compHtml;
+}
+
+load();
+</script>
+</body>
+</html>
+"""
+
+
 def _compute_confidence_flags(a: dict) -> tuple:
     """Wrapper — delegates to shared confidence_flags module."""
     from confidence_flags import compute_confidence_flags
@@ -7445,7 +8051,13 @@ def api_search():
 
 @app.route("/api/workflow/batch-assign", methods=["POST"])
 def api_workflow_batch_assign():
-    """Assign multiple appearances at once. Creates a single Planner task with subtasks."""
+    """Assign multiple appearances at once. Creates a single Planner task with subtasks.
+
+    Enforces Case coherence (Session 4): if any assignment would split a
+    Case or companion-Case across researchers, returns HTTP 409 with a
+    conflict report listing each problem item. To override, retry with
+    ?force=true on the query string or "force": true in the body.
+    """
     import workflow as wf
     from repository import get_appearance_by_id, get_meeting_by_id, get_matter_by_file_number
     d = request.get_json(force=True)
@@ -7453,6 +8065,8 @@ def api_workflow_batch_assign():
     person = d.get("assigned_to", "")
     due = d.get("due_date", "")
     by = d.get("changed_by") or "system"
+    force = (request.args.get("force", "").lower() in ("1", "true", "yes")
+             or bool(d.get("force")))
 
     if not ids or not person:
         return jsonify({"error": "appearance_ids and assigned_to required"}), 400
@@ -7465,7 +8079,18 @@ def api_workflow_batch_assign():
         old_app = get_appearance_by_id(aid) or {}
         old_assignee = old_app.get("assigned_to") or ""
 
-        wf.assign_appearance(aid, person, by)
+        try:
+            wf.assign_appearance(aid, person, by, force=force)
+        except wf.CaseAssignmentConflict as cac:
+            return jsonify({
+                "error":   "case_assignment_conflict",
+                "message": str(cac),
+                "appearance_id":  cac.appearance_id,
+                "proposed":       cac.proposed,
+                "report":         cac.report,
+                "hint": ("Retry with ?force=true in the query string or "
+                         '"force": true in the JSON body to override.'),
+            }), 409
         if due:
             wf.set_due_date(aid, due, by)
 
@@ -7571,7 +8196,22 @@ def api_workflow_update(app_id):
 
     if d.get("status"):       wf.set_workflow_status(app_id, d["status"], by)
     if d.get("assigned_to") is not None:
-        wf.assign_appearance(app_id, d["assigned_to"], by)
+        _force = (request.args.get("force", "").lower() in ("1", "true", "yes")
+                  or bool(d.get("force")))
+        try:
+            wf.assign_appearance(app_id, d["assigned_to"], by, force=_force)
+        except wf.CaseAssignmentConflict as cac:
+            return jsonify({
+                "error":   "case_assignment_conflict",
+                "message": str(cac),
+                "appearance_id":  cac.appearance_id,
+                "proposed":       cac.proposed,
+                "report":         cac.report,
+                "hint": ("Retry with ?force=true or add \"force\": true to "
+                         "override. This bypasses the Case-coherence check "
+                         "— recommended only when you intend to split a Case "
+                         "across researchers."),
+            }), 409
     if d.get("reviewer") is not None:
         wf.set_reviewer(app_id, d["reviewer"], by)
     # due_date: present key with "" means clear it; truthy sets it
@@ -7643,12 +8283,23 @@ def api_bulk_assign():
     reviewer    = d.get("reviewer")
     due_date    = d.get("due_date")
     status      = d.get("status")
+    force = (request.args.get("force", "").lower() in ("1", "true", "yes")
+             or bool(d.get("force")))
     count = 0
+    conflicts = []  # Case-coherence conflicts, per-appearance
 
     for aid in ids:
         try:
             if assigned_to is not None:
-                wf.assign_appearance(aid, assigned_to, by)
+                try:
+                    wf.assign_appearance(aid, assigned_to, by, force=force)
+                except wf.CaseAssignmentConflict as cac:
+                    conflicts.append({
+                        "appearance_id": aid,
+                        "message":       str(cac),
+                        "report":        cac.report,
+                    })
+                    continue  # skip this id, keep going with the rest
             if reviewer is not None:
                 wf.set_reviewer(aid, reviewer, by)
             if due_date is not None:
@@ -7659,7 +8310,15 @@ def api_bulk_assign():
         except Exception as e:
             app.logger.warning(f"Bulk assign error for appearance {aid}: {e}")
 
-    return jsonify({"ok": True, "updated": count, "total": len(ids)})
+    return jsonify({
+        "ok": True,
+        "updated":   count,
+        "total":     len(ids),
+        "conflicts": conflicts,
+        "hint": ("Some assignments were blocked by Case-coherence. "
+                 "Retry with ?force=true to override, or reassign the "
+                 "conflicting items to align with their Case.") if conflicts else "",
+    })
 
 
 @app.route("/api/workflow-history/clear", methods=["POST"])
@@ -8413,8 +9072,9 @@ def api_appearance_pdf(appearance_id):
         return "Not found", 404
     lp = a.get("item_pdf_local_path") or ""
     if lp and Path(lp).exists():
-        return send_file(lp, as_attachment=True,
-                         download_name=f"file_{a.get('file_number','item')}.pdf")
+        return safe_send_file(
+            lp, download_name=f"file_{a.get('file_number','item')}.pdf"
+        )
     remote = a.get("item_pdf_url") or ""
     if remote:
         return redirect(remote)
@@ -8904,7 +9564,7 @@ def api_artifact_download(artifact_id):
     fp = Path(row["file_path"])
     if not fp.exists():
         return "File missing on disk", 404
-    return send_file(str(fp.resolve()), as_attachment=True, download_name=fp.name)
+    return safe_send_file(fp, download_name=fp.name)
 
 
 @app.route("/api/workflow")
@@ -9235,7 +9895,57 @@ def api_download(job_id, filename):
     fp = JOBS[job_id]["output_dir"] / Path(filename).name
     if not fp.exists():
         return "Not found", 404
-    return send_file(str(fp.resolve()), as_attachment=True, download_name=fp.name)
+    return safe_send_file(fp, download_name=fp.name)
+
+
+@app.route("/api/save-to-output/<job_id>/<filename>", methods=["POST"])
+def api_save_to_output(job_id, filename):
+    """County-hardware fallback: copy a job output into the server-side
+    OUTPUT_DIR and return {"path": ...} instead of streaming a browser
+    download. Use this when the Symantec proxy on county workstations
+    is intercepting normal downloads. The user retrieves the file from
+    disk (via a mapped drive or the server's filesystem)."""
+    if job_id not in JOBS:
+        return jsonify({"error": "job not found"}), 404
+    fp = JOBS[job_id]["output_dir"] / Path(filename).name
+    if not fp.exists():
+        return jsonify({"error": "file missing on disk"}), 404
+    try:
+        dst = save_to_output_dir(fp, fp.name)
+        return jsonify({
+            "ok": True,
+            "path": str(dst.resolve()),
+            "filename": dst.name,
+            "output_dir": str(OUTPUT_DIR.resolve()),
+            "size_bytes": dst.stat().st_size,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/save-artifact-to-output/<int:artifact_id>", methods=["POST"])
+def api_save_artifact_to_output(artifact_id):
+    """Same idea for artifacts — write to OUTPUT_DIR and return a JSON path
+    instead of a browser download. Useful on county workstations where
+    Symantec sometimes mangles /api/artifact/X/download responses."""
+    import artifacts as art
+    row = art.get_artifact(artifact_id)
+    if not row:
+        return jsonify({"error": "artifact not found"}), 404
+    fp = Path(row["file_path"])
+    if not fp.exists():
+        return jsonify({"error": "file missing on disk"}), 404
+    try:
+        dst = save_to_output_dir(fp, fp.name)
+        return jsonify({
+            "ok": True,
+            "path": str(dst.resolve()),
+            "filename": dst.name,
+            "output_dir": str(OUTPUT_DIR.resolve()),
+            "size_bytes": dst.stat().st_size,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -10501,6 +11211,416 @@ def api_monitor_stop():
     import agenda_monitor as am
     am.stop_background_monitor()
     return jsonify({"ok": True})
+
+
+# ══════════════════════════════════════════════════════════════════
+# CASE API (Session 1 — April 2026)
+# ══════════════════════════════════════════════════════════════════
+# A "Case" is the lifecycle unit above a matter. One case groups multiple
+# agenda items that share an application number (e.g. CDMP20250013
+# groups 3C ordinance + 3C1 transmittal + 3C Supplement).
+# These endpoints are read-mostly plus a candidate-review workflow.
+
+@app.route("/api/case/<path:application_number>")
+def api_case_get(application_number):
+    """Load a full case by application number.
+
+    Returns: {case, memberships, appearances, events} or 404.
+    """
+    import cases as _cases
+    c = _cases.get_case_by_application_number(application_number)
+    if not c:
+        return jsonify({"error": "case not found"}), 404
+    full = _cases.load_full_case(c["id"])
+    return jsonify(full)
+
+
+@app.route("/api/case/id/<int:case_id>")
+def api_case_get_by_id(case_id):
+    """Load a full case by internal id. Returns same shape as by-app-number."""
+    import cases as _cases
+    full = _cases.load_full_case(case_id)
+    if not full:
+        return jsonify({"error": "case not found"}), 404
+    return jsonify(full)
+
+
+@app.route("/api/cases/candidates")
+def api_cases_candidates():
+    """Return candidate case memberships that need researcher review.
+    Query param: ?limit=N (default 100)."""
+    import cases as _cases
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)
+    except ValueError:
+        limit = 100
+    rows = _cases.list_candidate_memberships(limit=limit)
+    return jsonify({"candidates": rows, "count": len(rows)})
+
+
+@app.route("/api/case/membership/<int:membership_id>/confirm", methods=["POST"])
+def api_case_membership_confirm(membership_id):
+    """Confirm a candidate membership. Body: {"confirmed_by": "..."}"""
+    import cases as _cases
+    body = request.get_json(silent=True) or {}
+    who = body.get("confirmed_by") or body.get("user") or "unknown"
+    ok = _cases.confirm_membership(membership_id, who)
+    if not ok:
+        return jsonify({"error": "membership not found"}), 404
+    return jsonify({"ok": True, "confirmed_by": who})
+
+
+@app.route("/api/case/membership/<int:membership_id>/reject", methods=["POST"])
+def api_case_membership_reject(membership_id):
+    """Reject a candidate membership. Body: {"rejected_by": "...",
+    "reason": "..."}"""
+    import cases as _cases
+    body = request.get_json(silent=True) or {}
+    who = body.get("rejected_by") or body.get("user") or "unknown"
+    reason = body.get("reason", "")
+    ok = _cases.reject_membership(membership_id, who, reason)
+    if not ok:
+        return jsonify({"error": "membership not found"}), 404
+    return jsonify({"ok": True, "rejected_by": who})
+
+
+@app.route("/api/case/manual-link", methods=["POST"])
+def api_case_manual_link():
+    """Researcher manually creates a case link.
+    Body: {"application_number", "matter_id", "role_label",
+           "role_category", "created_by"}"""
+    import cases as _cases
+    body = request.get_json(silent=True) or {}
+    required = ["application_number", "matter_id", "role_label"]
+    missing = [k for k in required if not body.get(k)]
+    if missing:
+        return jsonify({"error": f"missing: {missing}"}), 400
+    try:
+        mid = _cases.create_manual_membership(
+            application_number=body["application_number"],
+            matter_id=int(body["matter_id"]),
+            role_label=body["role_label"],
+            role_category=body.get("role_category", "review"),
+            created_by=body.get("created_by", "unknown"),
+        )
+        return jsonify({"ok": True, "membership_id": mid})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/cases/backlink", methods=["POST"])
+def api_cases_backlink():
+    """Admin endpoint: run the linker over every matter that isn't yet
+    linked to a case. Idempotent. Useful after deploying the case layer
+    on a DB with historical data. Can be slow on large DBs."""
+    import cases as _cases
+    try:
+        summary = _cases.backlink_all_matters(verbose=False)
+        return jsonify({"ok": True, "summary": summary})
+    except Exception as e:
+        log.exception("backlink failed")
+        return jsonify({"error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════
+# CASE RELATIONS API (Session 3 — April 2026)
+# ══════════════════════════════════════════════════════════════════
+# Two distinct application numbers (e.g. CDMP20250013 and Z2025000130)
+# can refer to the same physical project via different approval tracks.
+# These endpoints expose the case_relations table: read relations for a
+# case, review candidate relations, confirm/reject, and manually create.
+
+@app.route("/api/case/<path:application_number>/relations")
+def api_case_relations_get(application_number):
+    """Return all relations touching the case identified by its
+    application number. Query param: ?include_rejected=1 to include
+    rejected relations."""
+    import cases as _cases
+    c = _cases.get_case_by_application_number(application_number)
+    if not c:
+        return jsonify({"error": "case not found"}), 404
+    include_rejected = request.args.get("include_rejected", "0") in ("1", "true", "yes")
+    rels = _cases.list_relations_for_case(c["id"], include_rejected=include_rejected)
+    return jsonify({
+        "case_id":           c["id"],
+        "application_number": c["application_number"],
+        "relations":         rels,
+        "count":             len(rels),
+    })
+
+
+@app.route("/api/cases/relations/candidates")
+def api_cases_relations_candidates():
+    """Candidate relations awaiting researcher confirmation.
+    Query param: ?limit=N (default 100, max 500)."""
+    import cases as _cases
+    try:
+        limit = min(int(request.args.get("limit", 100)), 500)
+    except ValueError:
+        limit = 100
+    rows = _cases.list_candidate_relations(limit=limit)
+    return jsonify({"candidates": rows, "count": len(rows)})
+
+
+@app.route("/api/case/relation/<int:relation_id>/confirm", methods=["POST"])
+def api_case_relation_confirm(relation_id):
+    """Confirm a candidate relation. Body: {"confirmed_by": "..."}"""
+    import cases as _cases
+    body = request.get_json(silent=True) or {}
+    who = body.get("confirmed_by") or body.get("user") or "unknown"
+    ok = _cases.confirm_relation(relation_id, who)
+    if not ok:
+        return jsonify({"error": "relation not found"}), 404
+    return jsonify({"ok": True, "confirmed_by": who})
+
+
+@app.route("/api/case/relation/<int:relation_id>/reject", methods=["POST"])
+def api_case_relation_reject(relation_id):
+    """Reject a candidate relation. Stays in DB so the auto-detector
+    doesn't re-propose. Body: {"rejected_by": "...", "reason": "..."}"""
+    import cases as _cases
+    body = request.get_json(silent=True) or {}
+    who = body.get("rejected_by") or body.get("user") or "unknown"
+    reason = body.get("reason", "")
+    ok = _cases.reject_relation(relation_id, who, reason)
+    if not ok:
+        return jsonify({"error": "relation not found"}), 404
+    return jsonify({"ok": True, "rejected_by": who})
+
+
+@app.route("/api/case/relation", methods=["POST"])
+def api_case_relation_create():
+    """Researcher manually creates a relation.
+    Body: {
+      "case_a_app_num": "CDMP20250013",
+      "case_b_app_num": "Z2025000130",
+      "relation_type":  "companion",
+      "created_by":     "a.wynyc",
+      "evidence":       "optional free text",
+      "direction_from_a": true  // for directional types
+    }"""
+    import cases as _cases
+    body = request.get_json(silent=True) or {}
+    required = ["case_a_app_num", "case_b_app_num", "relation_type", "created_by"]
+    missing = [k for k in required if not body.get(k)]
+    if missing:
+        return jsonify({"error": f"missing fields: {missing}"}), 400
+    try:
+        rid = _cases.create_manual_relation(
+            case_a_app_num=body["case_a_app_num"],
+            case_b_app_num=body["case_b_app_num"],
+            relation_type=body["relation_type"],
+            created_by=body["created_by"],
+            evidence=body.get("evidence", ""),
+            direction_from_case_a=bool(body.get("direction_from_a", True)),
+        )
+        if rid is None:
+            return jsonify({
+                "error": "one or both cases not found, or relation could not be created"
+            }), 400
+        return jsonify({"ok": True, "relation_id": rid})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════════
+# WORKLOAD API (Session 4 — April 2026)
+# ══════════════════════════════════════════════════════════════════
+# Per-researcher load summaries, Case workload aggregation, and a
+# least-loaded auto-suggest picker for the assignment UI. Weight is
+# derived from AI risk + PDF existence + priority + companion-case
+# premium (see compute_item_weight in cases.py).
+
+@app.route("/api/workload/<username>")
+def api_workload_user(username):
+    """Return a single researcher's current active workload with
+    per-item weight breakdown."""
+    import cases as _cases
+    try:
+        return jsonify(_cases.get_current_workload(username))
+    except Exception as e:
+        log.exception("workload query failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/workload/all")
+def api_workload_all():
+    """Return workload summaries for every researcher with active
+    assignments, sorted ascending by total_weight. Used by the
+    Workload panel UI and by the assignment picker."""
+    import cases as _cases
+    try:
+        return jsonify({
+            "researchers": _cases.list_all_researcher_workloads(),
+        })
+    except Exception as e:
+        log.exception("workload/all failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/workload/suggest")
+def api_workload_suggest():
+    """Suggest the least-loaded researcher as a default assignee.
+
+    Query params:
+      exclude=user1,user2     — usernames to skip
+      over=N                  — prefer anyone with total_weight < N
+                                even if not the absolute lowest
+    """
+    import cases as _cases
+    exclude_raw = request.args.get("exclude", "")
+    exclude = [x.strip() for x in exclude_raw.split(",") if x.strip()]
+    over_raw = request.args.get("over")
+    over = None
+    if over_raw:
+        try:
+            over = int(over_raw)
+        except ValueError:
+            return jsonify({"error": "invalid 'over' parameter"}), 400
+    try:
+        suggestion = _cases.suggest_assignee(exclude=exclude, prefer_over_weight=over)
+        return jsonify({"suggestion": suggestion})
+    except Exception as e:
+        log.exception("workload/suggest failed")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/case/<path:application_number>/workload")
+def api_case_workload(application_number):
+    """Per-Case workload summary: who's assigned to each item in this
+    Case and in its companion Cases, plus an aggregate weight. This
+    powers the "Workload" card on the Case view — lets you see if
+    assignments are fragmented across researchers before they go out."""
+    import cases as _cases
+    c = _cases.get_case_by_application_number(application_number)
+    if not c:
+        return jsonify({"error": "case not found"}), 404
+
+    with get_db() as conn:
+        # Items directly in this case
+        same_case = [dict(r) for r in conn.execute(
+            """SELECT a.id, a.file_number, a.committee_item_number,
+                      a.assigned_to, a.workflow_status, a.priority,
+                      a.ai_risk_level, a.item_pdf_local_path, a.item_pdf_url,
+                      a.case_id, a.case_role_label,
+                      m.short_title,
+                      mt.meeting_date, mt.body_name
+               FROM appearances a
+               LEFT JOIN matters m   ON m.id = a.matter_id
+               LEFT JOIN meetings mt ON mt.id = a.meeting_id
+               WHERE a.case_id = ?
+               ORDER BY mt.meeting_date DESC, a.id""",
+            (c["id"],),
+        ).fetchall()]
+
+        # Companion case ids
+        comp_rows = conn.execute(
+            """SELECT DISTINCT CASE WHEN case_a_id=? THEN case_b_id
+                                     ELSE case_a_id END AS cid
+               FROM case_relations
+               WHERE (case_a_id=? OR case_b_id=?)
+                 AND relation_type='companion'
+                 AND status != 'rejected'""",
+            (c["id"], c["id"], c["id"]),
+        ).fetchall()
+        companion_ids = [r["cid"] for r in comp_rows]
+
+        companion_items = []
+        if companion_ids:
+            placeholders = ",".join("?" * len(companion_ids))
+            companion_items = [dict(r) for r in conn.execute(
+                f"""SELECT a.id, a.file_number, a.committee_item_number,
+                           a.assigned_to, a.workflow_status, a.priority,
+                           a.ai_risk_level, a.item_pdf_local_path, a.item_pdf_url,
+                           a.case_id, a.case_role_label,
+                           m.short_title,
+                           mt.meeting_date, mt.body_name,
+                           c2.application_number AS case_app_num
+                   FROM appearances a
+                   LEFT JOIN matters m   ON m.id = a.matter_id
+                   LEFT JOIN meetings mt ON mt.id = a.meeting_id
+                   LEFT JOIN cases c2    ON c2.id = a.case_id
+                   WHERE a.case_id IN ({placeholders})
+                   ORDER BY mt.meeting_date DESC, a.id""",
+                companion_ids,
+            ).fetchall()]
+
+    # Apply weight calc to each
+    def weight(rows, is_companion_scope):
+        for r in rows:
+            r["weight"] = _cases.compute_item_weight(
+                r, case_has_companions=is_companion_scope
+            )
+
+    weight(same_case, bool(companion_ids))
+    weight(companion_items, True)
+
+    # Gather distinct assignees
+    assignees = set()
+    for r in same_case + companion_items:
+        if r.get("assigned_to"):
+            assignees.add(r["assigned_to"])
+
+    return jsonify({
+        "case_id":           c["id"],
+        "application_number": c["application_number"],
+        "same_case_items":   same_case,
+        "companion_items":   companion_items,
+        "distinct_assignees": sorted(assignees),
+        "aggregate_weight":   sum(r["weight"] for r in same_case + companion_items),
+        "is_fragmented":      len(assignees) > 1,
+    })
+
+
+@app.route("/api/appearance/<int:appearance_id>/coherence")
+def api_appearance_coherence(appearance_id):
+    """Dry-run check: would assigning this appearance to ?assignee=X
+    create a Case-coherence conflict? Used by the UI to show warnings
+    in the assignment dialog BEFORE submitting."""
+    import cases as _cases
+    proposed = request.args.get("assignee", "").strip()
+    if not proposed:
+        return jsonify({"error": "assignee query param required"}), 400
+    try:
+        report = _cases.check_case_assignment_coherence(appearance_id, proposed)
+        return jsonify(report)
+    except Exception as e:
+        log.exception("coherence check failed")
+        return jsonify({"error": str(e)}), 500
+
+
+# ──────────────────────────────────────────────────────────────────
+# Basic Case view HTML page — consumes the API above to render one
+# case with its memberships, appearances, and related-cases card.
+# This is a minimal v1 — Session 2 of the plan called for this skeleton;
+# fuller timeline / diff / delta-tracking widgets are deferred.
+
+@app.route("/case/<path:application_number>")
+def case_view_page(application_number):
+    """Render the Case view for a given application number. Fully
+    server-rendered skeleton; dynamic data loads via fetch() to the
+    JSON endpoints so we don't have to duplicate query logic here."""
+    # Validate the case exists before rendering — saves a 404 bounce
+    # from the client fetch.
+    import cases as _cases
+    c = _cases.get_case_by_application_number(application_number)
+    if not c:
+        return (f"<!doctype html><meta charset=utf-8>"
+                f"<title>Case not found</title>"
+                f"<body style='font-family:system-ui;padding:2rem'>"
+                f"<h1>Case not found</h1>"
+                f"<p>No case with application number "
+                f"<code>{application_number}</code> exists in this database.</p>"
+                f"<p><a href='/'>Back</a></p></body>"), 404
+
+    # Safe HTML-escape the app number for display; the JS below
+    # fetches it from the URL too, but we want the <title> and <h1>
+    # to be correct on first paint.
+    import html as _html
+    app_num_safe = _html.escape(application_number)
+
+    page = _CASE_VIEW_HTML.replace("{{APPLICATION_NUMBER}}", app_num_safe)
+    return page
 
 
 # ─────────────────────────────────────────────────────────────

@@ -181,6 +181,18 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                   f"(out of {len(items)} total on agenda)",
                   phase="analyzing", pct=15)
 
+            # Sort so base items (e.g. '3C') are analyzed before their
+            # supplements/sub-items ('3C Supplement', '3C1'). This lets us
+            # pass the base analysis as within-meeting prior context so
+            # Claude focuses on what CHANGES rather than re-summarizing.
+            from utils import parse_item_family, sort_items_by_family
+            new_items = sort_items_by_family(new_items)
+
+            # Index of results for in-meeting families, keyed by full item
+            # number (e.g. '3C'). When '3C1' or '3C SUPPLEMENT' is analyzed,
+            # we look up '3C' here and inject it as sibling context.
+            sibling_results: dict[str, dict] = {}
+
             processed_appearances = []
             n_new = max(1, len(new_items))
 
@@ -231,6 +243,56 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 appearance_id, is_new_appearance = repo.create_or_update_appearance(
                     matter_id, meeting_id, file_num, app_fields
                 )
+
+                # ── Case linker (Session 1 — April 2026) ─────────
+                # Attach this matter to a Case (lifecycle entity above
+                # matter). Idempotent — re-running the scraper is safe.
+                # Linker handles: application-number extraction,
+                # case find-or-create, role/stage classification, and
+                # membership write with confidence-based status.
+                try:
+                    import cases as _cases
+                    # Gather text that's most likely to contain the
+                    # application number
+                    scan_text = " ".join(filter(None, [
+                        item.get("short_title", ""),
+                        item.get("full_title", ""),
+                        item.get("notes", ""),
+                        item.get("page_text", "")[:4000],  # bounded
+                    ]))
+                    link_result = _cases.link_matter_to_case(
+                        matter_id=matter_id,
+                        short_title=item.get("short_title", item.get("title", "")),
+                        full_title=item.get("full_title", ""),
+                        file_type=item.get("file_type", ""),
+                        file_number=file_num,
+                        committee_item_number=item.get("committee_item_number", ""),
+                        agenda_stage=_stage,
+                        body_name=cname,
+                        extra_text=scan_text,
+                    )
+                    log.info(
+                        f"    Case link: {link_result['application_number']} "
+                        f"({link_result['case_type']}) — "
+                        f"role={link_result['role_label']}, "
+                        f"stage={link_result['stage_category']}, "
+                        f"status={link_result['link_status']}"
+                    )
+                    # Record an event for this appearance
+                    _cases.record_case_event(
+                        case_id=link_result["case_id"],
+                        matter_id=matter_id,
+                        appearance_id=appearance_id,
+                        event_date=adate,
+                        event_type="agenda_appearance",
+                        stage_category=link_result["stage_category"],
+                        stage_label=link_result["stage_label"],
+                        body_name=cname,
+                        action=link_result["role_label"],
+                        source="ingest",
+                    )
+                except Exception as _ce:
+                    log.warning(f"    Case linker failed (non-fatal): {_ce}")
 
                 # Parse and persist lifecycle events from the leg history text
                 try:
@@ -449,6 +511,68 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 cn = item.get("committee_item_number", "")
                 display = f"{cn} (File# {file_num})" if cn else f"File# {file_num}"
 
+                # ── Within-meeting sibling context ────────────────
+                # If this item is a supplement, substitute, or sub-item of a
+                # base item that was already analyzed in THIS meeting run,
+                # append the base's Part 1 to prior_context and tell Claude
+                # to focus on what CHANGES rather than re-summarizing.
+                base_num, rel_kind = parse_item_family(cn)
+                if rel_kind and rel_kind != "base" and base_num:
+                    # Look up any already-analyzed base item with this prefix.
+                    # Accept exact base ('3C') or any 'base' variant stored.
+                    base_hit = sibling_results.get(base_num)
+                    if base_hit:
+                        rel_label = {
+                            "supplement": "a SUPPLEMENT to",
+                            "substitute": "a SUBSTITUTE for",
+                            "sub":        "a SUB-ITEM of",
+                        }.get(rel_kind, "related to")
+                        sibling_block = (
+                            f"[WITHIN-MEETING BASE ITEM — This item ({cn}) is "
+                            f"{rel_label} item {base_hit['num']} on the same "
+                            f"agenda. The base item has already been analyzed. "
+                            f"Your job for THIS item is to identify what is "
+                            f"ADDED, CHANGED, or SUBSTITUTED relative to the "
+                            f"base — not to re-summarize the base.]\n\n"
+                            f"BASE ITEM {base_hit['num']} — {base_hit['short_title']}\n"
+                            f"{base_hit['part1']}"
+                        )
+                        prior_context = (
+                            (prior_context + "\n\n" + sibling_block).strip()
+                            if prior_context else sibling_block
+                        )
+                        log.info(f"    {display} recognized as {rel_kind} of "
+                                 f"{base_hit['num']} — injecting sibling context")
+
+                # ── Cross-reference context (Session 4) ──────────
+                # Pull summaries of OTHER items in the same Case AND
+                # summaries from companion Cases (CDMP ↔ Zoning for
+                # same project). Claude uses these to cross-reference
+                # in its brief per the CROSS-REFERENCE RULE in SOP.
+                try:
+                    import cases as _cases_mod
+                    # The linker earlier in this loop already wrote a
+                    # case_id onto the appearance. Read it back.
+                    app_row = repo.get_appearance_by_id(appearance_id) or {}
+                    this_case_id = app_row.get("case_id")
+                    this_matter_id = matter_id
+                    if this_case_id:
+                        crossref = _cases_mod.build_crossref_context(
+                            case_id=this_case_id,
+                            current_matter_id=this_matter_id,
+                            max_chars=3500,
+                        )
+                        if crossref:
+                            prior_context = (
+                                (prior_context + "\n\n" + crossref).strip()
+                                if prior_context else crossref
+                            )
+                            log.info(f"    {display} — injected cross-reference "
+                                     f"context ({len(crossref):,} chars)")
+                except Exception as _ce:
+                    log.warning(f"    Cross-reference context build failed "
+                                f"(non-fatal): {_ce}")
+
                 # Guard: if the PDF is image-only (no extractable text and
                 # OCR unavailable), don't ask the LLM — it will just produce
                 # a confused "I can't see content" message. Flag the item
@@ -546,6 +670,28 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
 
                 # ── Extract watch points ──────────────────────────
                 part1_clean, watch = extract_watch_points(part1)
+
+                # ── Record in sibling index for later family members ──
+                # Key on the item's own number (not just the base) so that
+                # '3C Supplement' can reference '3C', and '3C1' can reference
+                # '3C' — both look up 'sibling_results["3C"]'. We overwrite
+                # only if this is the first 'base' result for that key, so
+                # a later supplement doesn't shadow the original base.
+                if cn:
+                    item_base, item_kind = parse_item_family(cn)
+                    # Store against the base key if this item IS the base.
+                    # Also store against its own full number so exact lookups
+                    # (e.g. if a sub-sub-item references '3C1' directly) work.
+                    short_t = item.get("short_title", item.get("title", ""))
+                    record = {
+                        "num": cn,
+                        "short_title": short_t,
+                        "part1": part1_clean[:4000],  # cap to keep prompt size sane
+                    }
+                    if item_kind == "base" and item_base:
+                        sibling_results.setdefault(item_base, record)
+                    # Always also index by the full number
+                    sibling_results.setdefault(cn, record)
 
                 # ── Change detection (committee → BCC) ───────────
                 # If this item appeared at a prior stage (committee),
