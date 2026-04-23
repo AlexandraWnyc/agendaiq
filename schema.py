@@ -2,13 +2,54 @@
 schema.py — Table definitions and migration helpers for OCA Agenda Intelligence v6
 
 Tables:
-  matters     — one master record per file number (continuity anchor)
-  meetings    — one row per committee meeting occurrence
-  appearances — one row per matter-per-meeting appearance
+  organizations — tenant isolation: each customer gets their own org
+  users         — authenticated users, each scoped to an organization
+  matters       — one master record per file number (continuity anchor)
+  meetings      — one row per committee meeting occurrence
+  appearances   — one row per matter-per-meeting appearance
   appearances_fts — FTS5 virtual table for full-text search
 """
 
 DDL_STATEMENTS = [
+
+    # ── organizations ─────────────────────────────────────────
+    # Multi-tenancy: each customer gets their own organization.
+    # All data tables carry an org_id FK to isolate data per tenant.
+    """
+    CREATE TABLE IF NOT EXISTS organizations (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        slug            TEXT UNIQUE NOT NULL,
+        settings        TEXT,
+        is_active       INTEGER DEFAULT 1,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_slug ON organizations(slug)",
+
+    # ── users ─────────────────────────────────────────────────
+    # Authenticated users scoped to an organization.
+    # role: admin (full access), manager (review+assign), analyst (research)
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id          INTEGER NOT NULL,
+        username        TEXT NOT NULL,
+        email           TEXT UNIQUE NOT NULL,
+        password_hash   TEXT NOT NULL,
+        display_name    TEXT,
+        role            TEXT NOT NULL DEFAULT 'analyst',
+        is_active       INTEGER DEFAULT 1,
+        last_login_at   TEXT,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(id)
+    )
+    """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email    ON users(email)",
+    "CREATE INDEX IF NOT EXISTS idx_users_org             ON users(org_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_org_user ON users(org_id, username)",
 
     # ── matters ────────────────────────────────────────────────
     """
@@ -485,6 +526,72 @@ MIGRATION_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_cr_b      ON case_relations(case_b_id)",
     "CREATE INDEX IF NOT EXISTS idx_cr_status ON case_relations(status)",
     "CREATE INDEX IF NOT EXISTS idx_cr_type   ON case_relations(relation_type)",
+
+    # ══════════════════════════════════════════════════════════════
+    # MULTI-TENANCY (P0 — April 2026)
+    # ══════════════════════════════════════════════════════════════
+    # Add org_id to all data tables for per-organization data isolation.
+    # DEFAULT 1 seeds existing Miami-Dade data under org_id=1.
+    # The organizations + users tables are in DDL_STATEMENTS (created on
+    # fresh DBs); these migrations ensure existing DBs get them too.
+    # ══════════════════════════════════════════════════════════════
+
+    # Create tables if missing (existing DBs may not have them yet)
+    """CREATE TABLE IF NOT EXISTS organizations (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        slug            TEXT UNIQUE NOT NULL,
+        settings        TEXT,
+        is_active       INTEGER DEFAULT 1,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_orgs_slug ON organizations(slug)",
+
+    """CREATE TABLE IF NOT EXISTS users (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id          INTEGER NOT NULL,
+        username        TEXT NOT NULL,
+        email           TEXT UNIQUE NOT NULL,
+        password_hash   TEXT NOT NULL,
+        display_name    TEXT,
+        role            TEXT NOT NULL DEFAULT 'analyst',
+        is_active       INTEGER DEFAULT 1,
+        last_login_at   TEXT,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(id)
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email    ON users(email)",
+    "CREATE INDEX IF NOT EXISTS idx_users_org             ON users(org_id)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_org_user ON users(org_id, username)",
+
+    # ── org_id on all data tables ────────────────────────────
+    # DEFAULT 1 = Miami-Dade (the seed org). All existing rows auto-assign.
+    "ALTER TABLE matters          ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE meetings         ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE appearances      ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE workflow_history  ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE artifacts         ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE chat_messages     ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE matter_timeline   ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE notifications     ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE cases             ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE case_memberships  ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+    "ALTER TABLE case_relations    ADD COLUMN org_id INTEGER NOT NULL DEFAULT 1",
+
+    # Indexes for org-scoped queries (most common access patterns)
+    "CREATE INDEX IF NOT EXISTS idx_matters_org      ON matters(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_meetings_org     ON meetings(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_appearances_org  ON appearances(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cases_org        ON cases(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_notif_org        ON notifications(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_wh_org           ON workflow_history(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_chat_org         ON chat_messages(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_artifacts_org    ON artifacts(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_mt_org           ON matter_timeline(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cm_org           ON case_memberships(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_cr_org           ON case_relations(org_id)",
 ]
 
 # Meeting package status values

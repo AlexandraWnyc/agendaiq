@@ -245,6 +245,8 @@ def init_db():
                             conn.execute(stmt)
                         except Exception:
                             pass
+                    # Seed default organization if missing
+                    _seed_default_org(conn)
                     # Normalize any legacy M/D/YYYY dates to ISO format
                     _normalize_meeting_dates(conn)
             except Exception as e:
@@ -262,6 +264,7 @@ def init_db():
                         conn.execute(stmt)
                     except Exception:
                         pass
+                _seed_default_org(conn)
                 _normalize_meeting_dates(conn)
             log.info(f"Database initialized (fresh): {DB_PATH}")
 
@@ -271,6 +274,27 @@ def init_db():
         log.error(f"Database init encountered error (app will start anyway): {e}")
         log.error("Some features may not work until disk space is freed.")
         log.error(f"Current disk free: {_get_disk_free_mb():.1f} MB")
+
+
+def _seed_default_org(conn):
+    """Ensure the default Miami-Dade organization (id=1) exists.
+    All existing data rows have org_id DEFAULT 1, so this org must exist
+    for FK integrity. Idempotent — skips if already present."""
+    try:
+        row = conn.execute(
+            "SELECT id FROM organizations WHERE id=1"
+        ).fetchone()
+        if not row:
+            from datetime import datetime as _dt
+            now = _dt.utcnow().isoformat()
+            conn.execute(
+                """INSERT INTO organizations (id, name, slug, settings, is_active, created_at, updated_at)
+                   VALUES (1, 'Miami-Dade County OCA', 'miami-dade-oca', '{}', 1, ?, ?)""",
+                (now, now)
+            )
+            log.info("Seeded default organization: Miami-Dade County OCA (id=1)")
+    except Exception as e:
+        log.warning(f"Could not seed default org (may not exist yet): {e}")
 
 
 def _normalize_meeting_dates(conn):

@@ -27,6 +27,10 @@ import notifications
 app = Flask(__name__)
 JOBS: dict = {}
 
+# ── Auth + multi-tenancy ──────────────────────────────────────
+from auth import init_auth
+init_auth(app)
+
 
 # ── Safe download helper (bug fix: Symantec proxy interception) ──
 # County-managed Windows workstations run a Symantec proxy that sometimes
@@ -2511,7 +2515,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 // State
 // ════════════════════════════════════════════════════════════
 let mode='single', allCmtes=[], jobId=null, evtSrc=null;
-let currentUser = localStorage.getItem('oca_user') || '';
+let currentUser = '';  // Set from /api/auth/me on load
 let currentAppId = null;  // appearance currently open in drawer
 let currentFileNum = null;
 
@@ -2519,6 +2523,23 @@ let currentFileNum = null;
 // Init
 // ════════════════════════════════════════════════════════════
 (async () => {
+  // Load authenticated user from session
+  try {
+    const authR = await fetch('/api/auth/me');
+    if (authR.ok) {
+      const authD = await authR.json();
+      if (authD.ok && authD.user) {
+        currentUser = authD.user.display_name || authD.user.username || '';
+        // Update settings display if visible
+        const nameEl = document.getElementById('cfg-user');
+        if (nameEl) nameEl.value = currentUser;
+      }
+    } else if (authR.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
+  } catch(e) { console.warn('Auth check failed:', e); }
+
   await loadConfig();
   await Promise.all([
     loadCmtes(),
@@ -5527,7 +5548,6 @@ async function loadConfig() {
 
 function setCurrentUser(name) {
   currentUser=name||'';
-  localStorage.setItem('oca_user',currentUser);
   // Keep header picker and settings picker in sync
   const hdr=document.getElementById('current-user-sel');
   if(hdr && hdr.value!==currentUser) hdr.value=currentUser;
