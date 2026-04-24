@@ -554,6 +554,15 @@ MIGRATION_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_usage_date   ON api_usage(call_date)",
     "CREATE INDEX IF NOT EXISTS idx_usage_type   ON api_usage(org_id, call_type)",
 
+    # ── Meeting Lifecycle Stage ─────────────────────────────────
+    # Tracks where each meeting is in its lifecycle so the UI can show
+    # the right actions and the scheduler knows what to do next.
+    # Stages: prelim_scraped → final_detected → meeting_complete →
+    #         transcript_fetched → fully_briefed
+    "ALTER TABLE meetings ADD COLUMN lifecycle_stage TEXT DEFAULT 'prelim_scraped'",
+    "ALTER TABLE meetings ADD COLUMN transcript_checked_at TEXT",
+    "ALTER TABLE meetings ADD COLUMN transcript_check_count INTEGER DEFAULT 0",
+
     # ══════════════════════════════════════════════════════════════
     # MULTI-TENANCY (P0 — April 2026)
     # ══════════════════════════════════════════════════════════════

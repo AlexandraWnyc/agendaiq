@@ -2472,6 +2472,14 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <div id="mp-title" style="font-size:1.15rem;font-weight:700;color:var(--gray-800);flex:1"></div>
     </div>
 
+    <!-- Lifecycle status bar -->
+    <div id="mp-lifecycle" class="card" style="margin-bottom:.65rem;padding:.6rem 1rem;display:none">
+      <div style="display:flex;align-items:center;gap:.5rem;flex-wrap:wrap">
+        <div id="mp-lifecycle-stages" style="display:flex;gap:0;flex:1;align-items:center"></div>
+        <div id="mp-lifecycle-action" style="font-size:.78rem"></div>
+      </div>
+    </div>
+
     <!-- Stats bar -->
     <div class="card" style="margin-bottom:.85rem;padding:.85rem 1.1rem">
       <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
@@ -7495,9 +7503,55 @@ async function loadMeetingPrep(meetingId) {
 
     renderMeetingPrepHeader();
     renderMeetingPrepTable();
+    loadLifecycleBar(meetingId);
   } catch(e) {
     document.getElementById('mp-title').textContent = 'Error loading meeting prep';
     console.error(e);
+  }
+}
+
+async function loadLifecycleBar(meetingId) {
+  const bar = document.getElementById('mp-lifecycle');
+  if (!bar) return;
+  try {
+    const r = await fetch(`/api/meeting/${meetingId}/lifecycle`);
+    if (!r.ok) { bar.style.display = 'none'; return; }
+    const lc = await r.json();
+    if (lc.error) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+
+    // Render stage dots
+    const stagesEl = document.getElementById('mp-lifecycle-stages');
+    stagesEl.innerHTML = lc.stages.map((s, i) => {
+      const dotStyle = s.completed
+        ? `background:${s.color};border-color:${s.color}`
+        : 'background:#e2e8f0;border-color:#cbd5e1';
+      const lineStyle = i < lc.stages.length - 1
+        ? `flex:1;height:2px;background:${lc.stages[i+1].completed ? lc.stages[i+1].color : '#e2e8f0'};margin:0 2px`
+        : '';
+      return `<div style="display:flex;flex-direction:column;align-items:center;min-width:70px">
+        <div style="width:${s.current?14:10}px;height:${s.current?14:10}px;border-radius:50%;${dotStyle};border:2px solid;${s.current?'box-shadow:0 0 0 3px '+s.color+'33;animation:pulse-dot 2s infinite':''}"></div>
+        <div style="font-size:.58rem;color:${s.completed?s.color:'#94a3b8'};margin-top:2px;text-align:center;font-weight:${s.current?700:400};white-space:nowrap">${esc(s.label)}</div>
+      </div>` + (i < lc.stages.length - 1 ? `<div style="${lineStyle}"></div>` : '');
+    }).join('');
+
+    // Render next action
+    const actionEl = document.getElementById('mp-lifecycle-action');
+    if (lc.next_actions && lc.next_actions.length) {
+      const a = lc.next_actions[0];
+      let html = `<div style="background:${lc.stage_color}11;border:1px solid ${lc.stage_color}33;border-radius:6px;padding:.4rem .65rem">`;
+      html += `<div style="font-size:.72rem;font-weight:700;color:${lc.stage_color}">${esc(a.label)}</div>`;
+      html += `<div style="font-size:.68rem;color:#64748b">${esc(a.description)}</div>`;
+      if (a.button) {
+        html += `<button class="btn btn-o btn-xs" style="margin-top:.3rem;color:${lc.stage_color};border-color:${lc.stage_color}" onclick="backfillTranscript()">${esc(a.button)}</button>`;
+      }
+      html += '</div>';
+      actionEl.innerHTML = html;
+    } else {
+      actionEl.innerHTML = '';
+    }
+  } catch(e) {
+    bar.style.display = 'none';
   }
 }
 
@@ -10207,6 +10261,15 @@ def api_org_config_get():
     import org_config
     cfg = org_config.get_org_config(g.org_id)
     return jsonify(cfg)
+
+
+@app.route("/api/meeting/<int:meeting_id>/lifecycle")
+@login_required
+def api_meeting_lifecycle(meeting_id):
+    """Get lifecycle stage and next actions for a meeting."""
+    import lifecycle_manager as lm
+    result = lm.get_meeting_lifecycle(meeting_id, org_id=g.org_id)
+    return jsonify(result)
 
 
 @app.route("/api/usage")
