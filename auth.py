@@ -280,7 +280,9 @@ def init_auth(app):
     @app.before_request
     def _check_first_run():
         if request.endpoint in ("auth.setup", "auth.login", "auth.logout",
-                                "static", "api_healthz"):
+                                "static", "api_healthz", "_healthz"):
+            return
+        if request.path in ("/healthz", "/favicon.ico"):
             return
         if request.path.startswith("/static"):
             return

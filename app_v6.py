@@ -681,15 +681,27 @@ if _APP_PASSWORD:
 
     @app.before_request
     def _require_basic_auth():
-        # Allow health check through so Render/Railway can probe us
-        if request.path in ("/healthz", "/favicon.ico"):
+        # Allow health check, auth pages, and static files through
+        if request.path in ("/healthz", "/favicon.ico", "/login", "/logout", "/setup"):
             return None
+        if request.path.startswith("/static"):
+            return None
+        # If user is already logged in via Flask-Login, skip basic auth
+        try:
+            from flask_login import current_user as _cu
+            if _cu.is_authenticated:
+                return None
+        except Exception:
+            pass
         if _check_auth(request.headers.get("Authorization", "")):
             return None
-        return Response(
-            "Authentication required.", 401,
-            {"WWW-Authenticate": f'Basic realm="{_AUTH_REALM}"'}
-        )
+        # For API routes, return 401 JSON; for pages, redirect to login
+        if request.path.startswith("/api/"):
+            return Response(
+                '{"error":"Authentication required"}', 401,
+                {"Content-Type": "application/json"}
+            )
+        return redirect("/login")
 
 @app.route("/healthz")
 def _healthz():
