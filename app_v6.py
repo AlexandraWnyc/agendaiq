@@ -1360,6 +1360,16 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 .mp-notes-preview{font-size:.78rem;color:var(--gray-600);line-height:1.55;max-width:400px}
 .mp-notes-preview strong{color:var(--gray-800)}
 .mp-watch-badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.65rem;font-weight:700;background:#fce7f3;color:#9d174d;margin-right:4px}
+.path-timeline{display:flex;align-items:flex-start;gap:0;overflow-x:auto;padding:.5rem 0}
+.path-step{display:flex;flex-direction:column;align-items:center;min-width:90px;max-width:130px;position:relative}
+.path-dot{width:14px;height:14px;border-radius:50%;background:var(--gray-300);border:2px solid #fff;box-shadow:0 0 0 2px var(--gray-300);z-index:1}
+.path-dot.done{background:#059669;box-shadow:0 0 0 2px #059669}
+.path-dot.current{background:#2563eb;box-shadow:0 0 0 2px #2563eb;animation:pulse-dot 2s infinite}
+.path-line{position:absolute;top:7px;left:calc(50% + 7px);width:calc(100% - 14px);height:2px;background:var(--gray-200)}
+.path-line.done{background:#059669}
+.path-label{font-size:.62rem;color:var(--gray-500);text-align:center;margin-top:.3rem;line-height:1.3;word-wrap:break-word}
+.path-date{font-size:.58rem;color:var(--gray-400);margin-top:.1rem}
+@keyframes pulse-dot{0%,100%{box-shadow:0 0 0 2px #2563eb}50%{box-shadow:0 0 0 5px rgba(37,99,235,.3)}}
 .mp-source-tag{display:inline-block;padding:1px 5px;border-radius:3px;font-size:.6rem;font-weight:700;letter-spacing:.2px;margin-left:3px}
 .mp-src-ai{background:#ede9fe;color:#5b21b6}.mp-src-analyst{background:#fce7f3;color:#9d174d}
 .mp-src-chat{background:#d1fae5;color:#065f46}.mp-src-leg{background:#fed7aa;color:#9a3412}
@@ -7697,11 +7707,88 @@ function renderMpDetail(item) {
 
   return `<div class="mp-detail" style="padding:.85rem 1rem">
     ${html}
-    <div class="mp-detail-actions" style="display:flex;gap:.4rem;border-top:1px solid var(--gray-100);padding-top:.6rem;margin-top:.3rem">
+    <div id="path-timeline-${item.id}"></div>
+    <div id="delta-card-${item.id}"></div>
+    <div class="mp-detail-actions" style="display:flex;gap:.4rem;border-top:1px solid var(--gray-100);padding-top:.6rem;margin-top:.3rem;flex-wrap:wrap">
       <button class="btn btn-o btn-xs" onclick="event.stopPropagation();openDrawerFromPrep(${item.id})">📄 Open Full Item</button>
       <button class="btn btn-o btn-xs" onclick="event.stopPropagation();reanalyzeSingleFromPrep(${item.id})">🔄 Re-analyze</button>
+      <button class="btn btn-o btn-xs" onclick="event.stopPropagation();loadPathTimeline(${item.id},'path-timeline-'+${item.id})" style="color:#2563eb;border-color:#93c5fd">📍 Show Path</button>
+      <button class="btn btn-o btn-xs" onclick="event.stopPropagation();detectDeltas(${item.id})" style="color:#b45309;border-color:#f59e0b">🔍 Detect Changes</button>
     </div>
   </div>`;
+}
+
+async function loadPathTimeline(appId, targetElId) {
+  const el = document.getElementById(targetElId);
+  if (!el) return;
+  el.innerHTML = '<span style="font-size:.72rem;color:var(--gray-400)">Loading path...</span>';
+  try {
+    const r = await fetch(`/api/appearance/${appId}/path`);
+    const d = await r.json();
+    if (!d.ok || !d.steps || !d.steps.length) {
+      el.innerHTML = '<span style="font-size:.72rem;color:var(--gray-400)">No legislative path data available.</span>';
+      return;
+    }
+    let html = '<div class="path-timeline">';
+    d.steps.forEach((s, i) => {
+      const isLast = i === d.steps.length - 1;
+      const dotClass = s.is_current ? 'current' : (i < d.steps.length - 1 ? 'done' : '');
+      const lineClass = i < d.steps.length - 1 ? (d.steps[i+1].is_current || !d.steps[i+1].is_current ? 'done' : '') : '';
+      html += '<div class="path-step">';
+      html += `<div class="path-dot ${dotClass}"></div>`;
+      if (!isLast) html += `<div class="path-line ${lineClass}"></div>`;
+      const bodyShort = (s.body||'').replace(/Board of County Commissioners/i,'BCC')
+        .replace(/Committee/g,'Cmte').replace(/and /g,'& ');
+      html += `<div class="path-label" title="${esc(s.body||'')} — ${esc(s.action||'')}">${esc(bodyShort.slice(0,40))}</div>`;
+      html += `<div class="path-date">${esc(s.date||'')}</div>`;
+      html += `<div class="path-label" style="font-weight:600;color:${s.is_current?'#2563eb':'#059669'}">${esc((s.action||s.result||'').slice(0,30))}</div>`;
+      html += '</div>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) {
+    el.innerHTML = '<span style="font-size:.72rem;color:#dc2626">Failed: ' + esc(e.message) + '</span>';
+  }
+}
+
+async function detectDeltas(appId) {
+  const card = document.getElementById('delta-card-' + appId);
+  if (!card) return;
+  card.innerHTML = '<div style="padding:.5rem;font-size:.78rem;color:var(--gray-400)">Analyzing changes from prior meetings...</div>';
+  try {
+    const r = await fetch(`/api/appearance/${appId}/deltas`);
+    const d = await r.json();
+    if (!d.ok || !d.deltas || !d.deltas.length) {
+      card.innerHTML = '<div style="padding:.5rem;font-size:.78rem;color:var(--gray-400)">No prior appearances to compare (first time on an agenda).</div>';
+      return;
+    }
+    const delta = d.deltas[0];
+    if (!delta.has_changes) {
+      card.innerHTML = '<div style="padding:.5rem;font-size:.78rem;color:#16a34a;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;margin-bottom:.4rem">✓ No substantive changes from prior meeting (' + esc(delta.from_body||'') + ' ' + esc(delta.from_date||'') + ')</div>';
+      return;
+    }
+    let html = '<div style="border:1px solid #f59e0b;background:#fffbeb;border-radius:8px;padding:.65rem .85rem;margin-bottom:.6rem">';
+    html += '<div style="font-size:.72rem;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:.5px;margin-bottom:.4rem">⚠ CHANGES FROM ' + esc(delta.from_body||'') + ' (' + esc(delta.from_date||'') + ')</div>';
+    if (delta.change_summary) {
+      html += '<div style="font-size:.8rem;color:#92400e;margin-bottom:.4rem;font-weight:600">' + esc(delta.change_summary) + '</div>';
+    }
+    if (delta.changes && delta.changes.length) {
+      delta.changes.forEach(c => {
+        const sig = c.significance === 'high' ? '#dc2626' : c.significance === 'medium' ? '#d97706' : '#6b7280';
+        html += '<div style="font-size:.78rem;line-height:1.5;padding:.3rem 0;border-top:1px solid #fde68a">';
+        html += '<span style="font-weight:700;color:' + sig + ';text-transform:uppercase;font-size:.65rem">' + esc(c.category||'') + '</span> ';
+        html += esc(c.what_changed||'');
+        if (c.previous && c.current) {
+          html += '<div style="font-size:.72rem;color:#78716c;margin-top:.15rem"><s>' + esc(c.previous) + '</s> → <b>' + esc(c.current) + '</b></div>';
+        }
+        html += '</div>';
+      });
+    }
+    html += '</div>';
+    card.innerHTML = html;
+  } catch(e) {
+    card.innerHTML = '<div style="padding:.5rem;font-size:.78rem;color:#dc2626">Failed to detect changes: ' + esc(e.message) + '</div>';
+  }
 }
 
 function openDrawerFromPrep(appId) {
@@ -7809,7 +7896,8 @@ async function autoAssignMeeting() {
     });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || 'Auto-assign failed');
-    toast(`Assigned ${d.assigned_count} items across ${analysts.length} analysts`, 'ok');
+    const dist = d.distribution ? Object.entries(d.distribution).map(([a,c])=>`${a}: ${c}`).join(', ') : '';
+    toast(`Assigned ${d.assigned_count} items (${dist})${d.case_groups ? ' · '+d.case_groups+' case groups kept together' : ''}`, 'ok');
     loadMeetingPrep(currentMeetingId);
   } catch(e) {
     alert('Auto-assign failed: ' + e.message);
@@ -9851,6 +9939,107 @@ def api_test_webhook():
         return jsonify({"ok": False, "error": str(e)})
 
 
+# ── Delta Tracking API ────────────────────────────────────────
+
+@app.route("/api/appearance/<int:appearance_id>/deltas")
+@login_required
+def api_appearance_deltas(appearance_id):
+    """Get change tracking for an appearance — what changed from previous meetings."""
+    import delta
+    app_row = None
+    with get_db() as conn:
+        app_row = conn.execute(
+            "SELECT matter_id FROM appearances WHERE id=? AND org_id=?",
+            (appearance_id, g.org_id)
+        ).fetchone()
+    if not app_row:
+        return jsonify({"error": "not found"}), 404
+
+    # Check cache first
+    cached = delta.get_cached_deltas(appearance_id, org_id=g.org_id)
+    if cached:
+        return jsonify({"ok": True, "deltas": [cached], "cached": True})
+
+    # Compute fresh
+    deltas = delta.detect_deltas_for_matter(app_row["matter_id"], org_id=g.org_id)
+
+    # Cache results on each target appearance
+    for d in deltas:
+        if d.get("to_appearance_id"):
+            delta.save_delta(d["to_appearance_id"], d, org_id=g.org_id)
+
+    # Return only the delta relevant to this appearance
+    mine = [d for d in deltas if d.get("to_appearance_id") == appearance_id]
+    return jsonify({"ok": True, "deltas": mine, "cached": False})
+
+
+@app.route("/api/appearance/<int:appearance_id>/path")
+@login_required
+def api_appearance_path(appearance_id):
+    """Get the legislative path/timeline for an appearance's case."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT case_id, matter_id FROM appearances WHERE id=? AND org_id=?",
+            (appearance_id, g.org_id)
+        ).fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+
+    case_id = row["case_id"]
+    if not case_id:
+        # No case — fall back to matter_timeline
+        from lifecycle import get_timeline_for_matter
+        timeline = get_timeline_for_matter(row["matter_id"], org_id=g.org_id)
+        steps = []
+        for evt in timeline:
+            steps.append({
+                "date": evt.get("event_date", ""),
+                "body": evt.get("body_name", ""),
+                "action": evt.get("action", ""),
+                "result": evt.get("result", ""),
+                "is_current": False,
+            })
+        if steps:
+            steps[-1]["is_current"] = True
+        return jsonify({"ok": True, "steps": steps, "source": "matter_timeline"})
+
+    # Use case_events for richer timeline
+    with get_db() as conn:
+        events = conn.execute(
+            """SELECT event_date, event_type, stage_category, stage_label,
+                      body_name, action, result, notes
+               FROM case_events WHERE case_id=? AND org_id=?
+               ORDER BY sort_key, event_date""",
+            (case_id, g.org_id)
+        ).fetchall()
+    steps = []
+    for evt in events:
+        steps.append({
+            "date": evt["event_date"] or "",
+            "body": evt["body_name"] or "",
+            "action": evt["action"] or evt["event_type"] or "",
+            "result": evt["result"] or "",
+            "stage": evt["stage_category"] or "",
+            "stage_label": evt["stage_label"] or "",
+            "is_current": False,
+        })
+    if steps:
+        steps[-1]["is_current"] = True
+    return jsonify({"ok": True, "steps": steps, "source": "case_events"})
+
+
+@app.route("/api/matter/<int:matter_id>/deltas")
+@login_required
+def api_matter_deltas(matter_id):
+    """Get all deltas across appearances of a matter."""
+    import delta
+    deltas = delta.detect_deltas_for_matter(matter_id, org_id=g.org_id)
+    for d in deltas:
+        if d.get("to_appearance_id"):
+            delta.save_delta(d["to_appearance_id"], d, org_id=g.org_id)
+    return jsonify({"ok": True, "deltas": deltas})
+
+
 # ── Org / Jurisdiction Config API ─────────────────────────────
 
 @app.route("/api/org-config")
@@ -10770,35 +10959,71 @@ def api_auto_assign(meeting_id):
     if not unassigned:
         return jsonify({"error": "All items are already assigned", "assigned_count": 0}), 200
 
-    # Score each item for complexity (higher = more work)
+    # Score each item for complexity (higher = more research work needed)
     def complexity_score(item):
-        score = 1  # base
+        score = 1.0  # base
+
+        # Risk level is the strongest signal
         risk = _classify_risk(item)
         if risk == "HIGH":
-            score += 3
+            score += 4
         elif risk == "MEDIUM":
             score += 2
         elif risk == "INFO":
             score -= 0.5  # Ceremonial items are easy
 
-        # Text length as proxy for item density
-        text = (item.get("ai_summary_for_appearance") or "") + (item.get("appearance_title") or "")
-        if len(text) > 2000:
-            score += 1
-        if len(text) > 5000:
+        # AI summary length = more substance to review
+        ai_text = (item.get("ai_summary_for_appearance") or "")
+        if len(ai_text) > 3000:
+            score += 2
+        elif len(ai_text) > 1500:
             score += 1
 
-        # Fiscal complexity
-        fiscal_terms = ["million", "billion", "contract", "bond", "appropriat"]
-        combined = text.lower()
-        fiscal_count = sum(1 for t in fiscal_terms if t in combined)
-        score += min(fiscal_count, 2)
+        # Watch points = more issues to investigate
+        wp = (item.get("watch_points_for_appearance") or "")
+        wp_lines = [l for l in wp.split('\n') if l.strip()]
+        score += min(len(wp_lines) * 0.5, 2)
+
+        # Fiscal complexity keywords
+        combined = (ai_text + " " + (item.get("appearance_title") or "")).lower()
+        fiscal_heavy = ["sole source", "no-bid", "eminent domain", "bond issue",
+                        "tax increase", "assessment", "millage"]
+        fiscal_medium = ["million", "billion", "contract", "appropriat", "budget",
+                         "amendment", "change order", "procurement"]
+        score += sum(2 for t in fiscal_heavy if t in combined)
+        score += sum(0.5 for t in fiscal_medium if t in combined)
+        score = min(score, 12)  # Cap so one monster item doesn't dominate
+
+        # Legislative history complexity (multiple prior appearances = ongoing saga)
+        if item.get("leg_history_summary") and len(item.get("leg_history_summary", "")) > 200:
+            score += 1
+
+        # Has existing analyst notes = work already started, less overhead
+        if item.get("analyst_working_notes"):
+            score -= 0.5
 
         return max(score, 0.5)
 
-    # Sort by complexity (hardest first) for fair distribution
-    scored = [(complexity_score(i), i) for i in unassigned]
-    scored.sort(key=lambda x: -x[0])
+    # Group items by case_id so case-coherent items go to the same analyst
+    case_groups = {}  # case_id -> [items]
+    no_case = []
+    for i in unassigned:
+        cid = i.get("case_id")
+        if cid:
+            case_groups.setdefault(cid, []).append(i)
+        else:
+            no_case.append(i)
+
+    # Score case groups by total complexity
+    scored_groups = []
+    for cid, group_items in case_groups.items():
+        group_score = sum(complexity_score(gi) for gi in group_items)
+        scored_groups.append((group_score, cid, group_items))
+    # Individual items
+    for i in no_case:
+        scored_groups.append((complexity_score(i), None, [i]))
+    # Sort hardest first
+    scored_groups.sort(key=lambda x: -x[0])
 
     # Track workload per analyst (include already-assigned items)
     workload = {a: 0.0 for a in analysts}
@@ -10807,13 +11032,13 @@ def api_auto_assign(meeting_id):
         if assignee in workload:
             workload[assignee] += complexity_score(item)
 
-    # Assign each item to the analyst with the lowest current workload
+    # Assign each group to the analyst with the lowest current workload
     assignments = []
-    for score, item in scored:
-        # Pick analyst with minimum workload
+    for group_score, case_id, group_items in scored_groups:
         target = min(analysts, key=lambda a: workload[a])
-        workload[target] += score
-        assignments.append((item, target))
+        for item in group_items:
+            workload[target] += complexity_score(item)
+            assignments.append((item, target))
 
     # Persist assignments
     with get_db() as conn:
@@ -10847,7 +11072,8 @@ def api_auto_assign(meeting_id):
     return jsonify({
         "assigned_count": len(assignments),
         "distribution": summary,
-        "method": "complexity-weighted round robin"
+        "method": "AI complexity-weighted assignment with case coherence",
+        "case_groups": len(case_groups),
     })
 
 
