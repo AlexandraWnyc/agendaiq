@@ -6121,8 +6121,18 @@ let _txPollTimer = null;
 function _txGetPanel() {
   let panel = document.getElementById('tx-progress');
   if (!panel) {
-    const card = document.getElementById('md-artifacts');
-    if (!card) return null;
+    // Try multiple possible parent containers (Meeting Detail or Meeting Prep)
+    const card = document.getElementById('md-artifacts')
+               || document.getElementById('mp-stats')?.parentElement
+               || document.querySelector('#pg-meeting-prep .card');
+    if (!card) {
+      // Fallback: create a floating toast-like panel
+      panel = document.createElement('div');
+      panel.id = 'tx-progress';
+      panel.style.cssText = 'position:fixed;bottom:1rem;right:1rem;width:400px;padding:.75rem 1rem;border-radius:8px;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;';
+      document.body.appendChild(panel);
+      return panel;
+    }
     panel = document.createElement('div');
     panel.id = 'tx-progress';
     panel.style.cssText = 'margin-top:.6rem;padding:.6rem .75rem;border-radius:.5rem;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem;';
@@ -6301,13 +6311,31 @@ function _handleTranscriptResult(d, panel, btn) {
       `${(d.transcript_length||0).toLocaleString()} chars · ${d.items_segmented||0} segments</span>` +
       (d.video_url ? `<br><a href="${esc(d.video_url)}" target="_blank" style="font-size:.75rem">▶ Watch Recording</a>` : '');
     toast(`Transcript backfill complete — ${d.items_updated} items updated`, 'ok');
-    // Refresh the meeting detail view to show new notes
     if (currentMeetingId) refreshCurrentMeeting();
+  } else if (d && (d.status === 'skipped' || d.status === 'not_found')) {
+    const msg = d.message || 'No recording found for this meeting.';
+    panel.innerHTML = `<b>🎙 Transcript Backfill</b><br>
+      <span style="color:#b45309">⚠ ${esc(msg)}</span>
+      <div style="margin-top:.5rem;border-top:1px dashed #c7d2fe;padding-top:.4rem;font-size:.78rem">
+        <b>Options:</b> You can paste a transcript manually if you have one.
+        <button class="btn btn-o btn-sm" style="margin-top:.3rem" onclick="_txShowPaste()">📋 Paste Transcript</button>
+      </div>`;
+    toast(msg, 'warn');
+  } else if (d && d.status === 'aborted') {
+    panel.innerHTML = '<b>🎙 Transcript Backfill</b><br><span style="color:#6b7280">⏹ Stopped by user</span>';
   } else {
-    panel.innerHTML = '<b>🎙 Transcript Backfill</b><br>❌ ' +
-      esc((d && (d.message || d.error)) || 'Failed');
+    const errMsg = (d && (d.message || d.error)) || 'Failed — check server logs for details.';
+    panel.innerHTML = `<b>🎙 Transcript Backfill</b><br>
+      <span style="color:#dc2626">❌ ${esc(errMsg)}</span>
+      <div style="margin-top:.4rem">
+        <button class="btn btn-o btn-sm" onclick="_txShowPaste()">📋 Paste Transcript Instead</button>
+      </div>`;
   }
   if (btn) btn.disabled = false;
+  // Auto-hide panel after 30s on success
+  if (d && d.status === 'ok') {
+    setTimeout(() => { if (panel) panel.style.display = 'none'; }, 30000);
+  }
 }
 
 async function loadSavedMeetings() {
