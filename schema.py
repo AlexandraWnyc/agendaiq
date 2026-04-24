@@ -527,6 +527,12 @@ MIGRATION_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_cr_status ON case_relations(status)",
     "CREATE INDEX IF NOT EXISTS idx_cr_type   ON case_relations(relation_type)",
 
+    # ── Delta tracking: cached cross-appearance diffs ──────────
+    # JSON blob with structured change detection results from Claude.
+    # Populated by delta.py when comparing consecutive appearances
+    # of the same matter across different meetings.
+    "ALTER TABLE appearances ADD COLUMN delta_from_prior TEXT",
+
     # ══════════════════════════════════════════════════════════════
     # MULTI-TENANCY (P0 — April 2026)
     # ══════════════════════════════════════════════════════════════
