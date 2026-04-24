@@ -2603,18 +2603,18 @@ let currentFileNum = null;
   // Load authenticated user from session
   try {
     const authR = await fetch('/api/auth/me');
-    if (authR.ok) {
-      const authD = await authR.json();
-      if (authD.ok && authD.user) {
-        currentUser = authD.user.display_name || authD.user.username || '';
-        // Update settings display if visible
-        const nameEl = document.getElementById('cfg-user');
-        if (nameEl) nameEl.value = currentUser;
-      }
-    } else if (authR.status === 401) {
+    if (!authR.ok || authR.status === 401) {
       window.location.href = '/login';
       return;
     }
+    const authD = await authR.json();
+    if (!authD.ok || !authD.user) {
+      window.location.href = '/login';
+      return;
+    }
+    currentUser = authD.user.display_name || authD.user.username || '';
+    const nameEl = document.getElementById('cfg-user');
+    if (nameEl) nameEl.value = currentUser;
   } catch(e) { console.warn('Auth check failed:', e); }
 
   await loadConfig();
@@ -8241,7 +8241,7 @@ def favicon():
 @login_required
 def api_committees():
     from scraper import MiamiDadeScraper
-    return jsonify(sorted(MiamiDadeScraper().get_committees().keys()))
+    return jsonify(sorted(MiamiDadeScraper(org_id=g.org_id).get_committees().keys()))
 
 
 @app.route("/api/stats")
@@ -8656,7 +8656,7 @@ def api_delete_meeting(meeting_id):
 
             # Clean up artifacts referencing this meeting directly
             try:
-                conn.execute("DELETE FROM artifacts WHERE meeting_id=?", (meeting_id,))
+                conn.execute("DELETE FROM artifacts WHERE meeting_id=? AND org_id=?", (meeting_id, g.org_id))
             except Exception:
                 pass
             # Delete the meeting
@@ -8843,6 +8843,8 @@ def api_appearance_reanalyze(app_id):
     if not a:
         return jsonify({"error": "not found"}), 404
 
+    org_id = g.org_id
+
     def _run_reanalysis():
         try:
             from analyzer import AgendaAnalyzer
@@ -8901,7 +8903,7 @@ def api_appearance_reanalyze(app_id):
                     analysis_at=?,
                     ai_risk_level=?,
                     ai_risk_reason=?,
-                    updated_at=? WHERE id=?""",
+                    updated_at=? WHERE id=? AND org_id=?""",
                     (part1,
                      "",  # watch points extracted separately if needed
                      part2,
@@ -8912,7 +8914,7 @@ def api_appearance_reanalyze(app_id):
                      now,
                      meta.get("ai_risk_level",""),
                      meta.get("ai_risk_reason",""),
-                     now, app_id))
+                     now, app_id, org_id))
 
             # Extract watch points from part1 if present
             import re
@@ -8920,8 +8922,8 @@ def api_appearance_reanalyze(app_id):
             if wp_match:
                 wp_text = wp_match.group(1).strip()
                 with _db.get_db() as conn:
-                    conn.execute("UPDATE appearances SET watch_points_for_appearance=? WHERE id=?",
-                                 (wp_text, app_id))
+                    conn.execute("UPDATE appearances SET watch_points_for_appearance=? WHERE id=? AND org_id=?",
+                                 (wp_text, app_id, org_id))
 
             app.logger.info(f"Reanalysis complete for appearance {app_id}: "
                            f"{meta.get('usage',{}).get('in',0)} in / {meta.get('usage',{}).get('out',0)} out tokens")
@@ -8951,6 +8953,8 @@ def api_synthesize_debrief(app_id):
         return jsonify({"ok": False, "error": "Synthesis already running"}), 409
 
     _synth_status[app_id] = {"status": "running", "error": None}
+
+    org_id = g.org_id
 
     def _run_synthesis():
         try:
@@ -9037,8 +9041,8 @@ def api_synthesize_debrief(app_id):
                 conn.execute("""UPDATE appearances SET
                     ai_summary_for_appearance=?,
                     watch_points_for_appearance=?,
-                    updated_at=? WHERE id=?""",
-                    (debrief, watch_points, now, app_id))
+                    updated_at=? WHERE id=? AND org_id=?""",
+                    (debrief, watch_points, now, app_id, org_id))
 
             # Log workflow
             import workflow as wf
@@ -9078,6 +9082,8 @@ def api_matter_reanalyze_all(matter_id):
         return jsonify({"error": "no appearances found"}), 404
 
     _batch_reanalysis[matter_id] = {"total": len(all_apps), "completed": 0, "done": False}
+
+    org_id = g.org_id
 
     def _run_batch():
         try:
@@ -9129,14 +9135,14 @@ def api_matter_reanalyze_all(matter_id):
                             analysis_input_hash=?, analysis_tokens_in=?,
                             analysis_tokens_out=?, analysis_cached_tokens=?,
                             analysis_at=?, ai_risk_level=?, ai_risk_reason=?,
-                            updated_at=? WHERE id=?""",
+                            updated_at=? WHERE id=? AND org_id=?""",
                             (part1, "", part2, meta.get("input_hash",""),
                              meta.get("usage",{}).get("in",0),
                              meta.get("usage",{}).get("out",0),
                              meta.get("usage",{}).get("cached",0),
                              now, meta.get("ai_risk_level",""),
                              meta.get("ai_risk_reason",""),
-                             now, aid))
+                             now, aid, org_id))
 
                     # Update the in-memory copy for subsequent prior_context
                     ap["ai_summary_for_appearance"] = part1
@@ -9145,8 +9151,8 @@ def api_matter_reanalyze_all(matter_id):
                     wp_match = re.search(r'(?:WATCH POINTS|Watch Points|POINTS TO WATCH)[:\s]*\n([\s\S]*?)(?:\n\n|\Z)', part1)
                     if wp_match:
                         with _db.get_db() as conn:
-                            conn.execute("UPDATE appearances SET watch_points_for_appearance=? WHERE id=?",
-                                         (wp_match.group(1).strip(), aid))
+                            conn.execute("UPDATE appearances SET watch_points_for_appearance=? WHERE id=? AND org_id=?",
+                                         (wp_match.group(1).strip(), aid, org_id))
 
                     app.logger.info(f"Batch reanalysis: appearance {aid} done ({idx+1}/{len(sorted_apps)})")
                 except Exception as e:
@@ -9188,6 +9194,8 @@ def api_meeting_reanalyze_all(meeting_id):
         return jsonify({"error": "no appearances in meeting"}), 404
 
     app_ids = [a["id"] for a in apps]
+
+    org_id = g.org_id
 
     def _run_meeting_batch():
         for aid in app_ids:
@@ -9236,12 +9244,12 @@ def api_meeting_reanalyze_all(meeting_id):
                         analysis_input_hash=?, analysis_tokens_in=?, analysis_tokens_out=?,
                         analysis_cached_tokens=?, analysis_at=?,
                         ai_risk_level=?, ai_risk_reason=?,
-                        updated_at=? WHERE id=?""",
+                        updated_at=? WHERE id=? AND org_id=?""",
                         (part1, "", part2, meta.get("input_hash",""),
                          meta.get("usage",{}).get("in",0), meta.get("usage",{}).get("out",0),
                          meta.get("usage",{}).get("cached",0), now,
                          meta.get("ai_risk_level",""), meta.get("ai_risk_reason",""),
-                         now, aid))
+                         now, aid, org_id))
 
                 app.logger.info(f"Meeting batch reanalysis: appearance {aid} done")
             except Exception as e:
@@ -10162,11 +10170,13 @@ def api_run():
             except Exception:
                 pass
 
+    org_id = g.org_id
+
     def _run():
         try:
             api_key  = load_api_key()
             analyzer = AgendaAnalyzer(api_key)
-            scraper  = MiamiDadeScraper()
+            scraper  = MiamiDadeScraper(org_id=org_id)
             all_c    = scraper.get_committees()
             matched  = {k: v for k, v in all_c.items() if k in selected} if selected else all_c
             parsed, mode = (parse_date_arg(from_date_str), "range") if from_date_str \
@@ -11041,28 +11051,10 @@ def api_auto_assign(meeting_id):
             assignments.append((item, target))
 
     # Persist assignments
-    with get_db() as conn:
-        for item, analyst in assignments:
-            aid = item.get("appearance_id") or item.get("id")
-            conn.execute(
-                "UPDATE appearances SET assigned_to=? WHERE id=? AND org_id=?",
-                (analyst, aid, g.org_id)
-            )
-            # Create/update workflow record
-            existing = conn.execute(
-                "SELECT id FROM workflow WHERE appearance_id=?", (aid,)
-            ).fetchone()
-            if existing:
-                conn.execute(
-                    "UPDATE workflow SET assigned_to=?, changed_by=?, updated_at=datetime('now') WHERE appearance_id=?",
-                    (analyst, changed_by, aid)
-                )
-            else:
-                conn.execute(
-                    """INSERT INTO workflow (appearance_id, assigned_to, changed_by, workflow_status, created_at, updated_at)
-                       VALUES (?, ?, ?, 'assigned', datetime('now'), datetime('now'))""",
-                    (aid, analyst, changed_by)
-                )
+    import workflow as wf
+    for item, analyst in assignments:
+        aid = item.get("appearance_id") or item.get("id")
+        wf.assign_appearance(aid, analyst, changed_by=changed_by, org_id=g.org_id)
 
     # Build summary
     summary = {a: 0 for a in analysts}
@@ -11113,6 +11105,8 @@ def api_compile_final_analysis(meeting_id):
         return jsonify({"error": "No items found"}), 404
 
     items_to_compile = [dict(r) for r in rows]
+
+    org_id = g.org_id
 
     # Start compilation in background thread
     def _run_compilation():
@@ -11283,8 +11277,8 @@ IMPORTANT RULES:
                 """UPDATE appearances SET
                     finalized_brief=?,
                     updated_at=?
-                WHERE id=?""",
-                (final_text, now, aid)
+                WHERE id=? AND org_id=?""",
+                (final_text, now, aid, org_id)
             )
 
         usage = resp.usage

@@ -90,7 +90,7 @@ def check_for_new_agendas(scraper=None, org_id=None) -> dict:
     oid = _resolve_org_id(org_id)
     from scraper import MiamiDadeScraper, COMMITTEES
     if scraper is None:
-        scraper = MiamiDadeScraper()
+        scraper = MiamiDadeScraper(org_id=oid)
 
     cutoff_past = (datetime.utcnow() - timedelta(days=LOOKBACK_DAYS)).date()
     cutoff_future = (datetime.utcnow() + timedelta(days=LOOKAHEAD_DAYS)).date()
@@ -168,7 +168,7 @@ def check_for_agenda_changes(scraper=None, org_id=None) -> dict:
     oid = _resolve_org_id(org_id)
     from scraper import MiamiDadeScraper, COMMITTEES
     if scraper is None:
-        scraper = MiamiDadeScraper()
+        scraper = MiamiDadeScraper(org_id=oid)
 
     cutoff = (datetime.utcnow() - timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
 
@@ -327,7 +327,7 @@ def run_full_scan(auto_process: bool = True, org_id=None) -> dict:
     _last_scan["error"] = None
 
     try:
-        scraper = MiamiDadeScraper()
+        scraper = MiamiDadeScraper(org_id=oid)
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
 
         # Phase 1: New agendas

@@ -141,7 +141,7 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                 _mtype = "committee"
 
             # Get or create the meeting record
-            meeting_id = repo.get_or_create_meeting(cname, adate, meeting_type=_mtype)
+            meeting_id = repo.get_or_create_meeting(cname, adate, meeting_type=_mtype, org_id=1)
 
             # Set agenda_version fingerprint and agenda_status
             try:
@@ -226,7 +226,7 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                     "last_seen_date":  today,
                     "current_stage":   _stage,
                 }
-                matter_id = repo.upsert_matter(file_num, matter_fields)
+                matter_id = repo.upsert_matter(file_num, matter_fields, org_id=1)
 
                 # ── Create appearance (with carry-forward if repeat) ──
                 app_fields = {
@@ -241,7 +241,7 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                     "item_pdf_url":          item.get("pdf_url", ""),
                 }
                 appearance_id, is_new_appearance = repo.create_or_update_appearance(
-                    matter_id, meeting_id, file_num, app_fields
+                    matter_id, meeting_id, file_num, app_fields, org_id=1
                 )
 
                 # ── Case linker (Session 1 — April 2026) ─────────
@@ -395,7 +395,7 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                                     stub_mtg_id = _found_mtg["id"]
                                 else:
                                     stub_mtg_id = repo.get_or_create_meeting(
-                                        ev_body, ev_date, meeting_type="committee"
+                                        ev_body, ev_date, meeting_type="committee", org_id=1
                                     )
                                 ag_item = ev.get("agenda_item", "") or ""
                                 stub_fields = {
@@ -414,7 +414,7 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                                     "committee_item_number": ag_item,
                                 }
                                 repo.create_or_update_appearance(
-                                    matter_id, stub_mtg_id, file_num, stub_fields
+                                    matter_id, stub_mtg_id, file_num, stub_fields, org_id=1
                                 )
                             except Exception as _e:
                                 log.debug(f"  stub cmte appearance skipped: {_e}")
@@ -611,7 +611,7 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                         prior_context=prior_context,
                     )
                     input_hash = compute_input_hash(ANALYZER_MODEL, SOP_PROMPT, _user_msg)
-                    cached = repo.find_cached_analysis(input_hash)
+                    cached = repo.find_cached_analysis(input_hash, org_id=1)
                     if cached:
                         log.info(f"    HIT cache (from appearance "
                                  f"{cached['source_appearance_id']}) — skipping API call")
@@ -782,8 +782,9 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                     cached_tokens=_tokens_cached,
                     ai_risk_level=(analysis_meta or {}).get("ai_risk_level", ""),
                     ai_risk_reason=(analysis_meta or {}).get("ai_risk_reason", ""),
+                    org_id=1,
                 )
-                repo.update_matter_ai_fields(matter_id, part1_clean, watch)
+                repo.update_matter_ai_fields(matter_id, part1_clean, watch, org_id=1)
 
                 # ── Append to token-usage CSV ─────────────────────
                 try:
@@ -887,7 +888,7 @@ def cmd_process(args):
         print(f"ERROR: {e}"); sys.exit(1)
 
     analyzer = AgendaAnalyzer(api_key)
-    scraper  = MiamiDadeScraper()
+    scraper  = MiamiDadeScraper(org_id=1)
 
     if args.date:
         try:

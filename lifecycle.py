@@ -375,7 +375,7 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
     oid = _resolve_org_id(org_id)
     from scraper import MiamiDadeScraper
 
-    sc = MiamiDadeScraper()
+    sc = MiamiDadeScraper(org_id=oid)
     # Warm up the session by hitting the Legistar landing page first.
     # During normal analysis the scraper visits the committee list and
     # agenda pages before get_item_detail — those requests establish
@@ -521,7 +521,7 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                     if existing:
                         continue
                     stub_mtg_id = _repo.get_or_create_meeting(
-                        ev_body, ev_date, meeting_type="committee"
+                        ev_body, ev_date, meeting_type="committee", org_id=oid
                     )
                     ag_item = ev.get("agenda_item", "") or ""
                     _repo.create_or_update_appearance(
@@ -537,7 +537,7 @@ def backfill_urls_and_lifecycle(pdf_dir: Path,
                             ),
                             "requires_research": 0,
                             "workflow_status": "Archived",
-                        }
+                        }, org_id=oid
                     )
                     summary["stub_appearances"] = summary.get("stub_appearances", 0) + 1
             except Exception as _e:
