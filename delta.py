@@ -117,6 +117,22 @@ def detect_deltas_for_matter(matter_id: int, org_id=None) -> list[dict]:
         try:
             import anthropic
             import os
+            import usage
+
+            # Rate limit check
+            limit_check = usage.check_limits(oid)
+            if not limit_check["allowed"]:
+                log.warning(f"Rate limit reached: {limit_check['reason']}")
+                deltas.append({
+                    "has_changes": None,
+                    "error": limit_check["reason"],
+                    "from_appearance_id": prev["id"],
+                    "to_appearance_id": curr["id"],
+                    "from_date": prev["meeting_date"],
+                    "to_date": curr["meeting_date"],
+                })
+                continue
+
             client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
             response = client.messages.create(
                 model="claude-haiku-4-5-20251001",
@@ -124,6 +140,11 @@ def detect_deltas_for_matter(matter_id: int, org_id=None) -> list[dict]:
                 messages=[{"role": "user", "content": prompt}],
             )
             result_text = response.content[0].text.strip()
+
+            # Record usage
+            usage.record_usage(org_id=oid, call_type='delta',
+                tokens_in=getattr(response.usage, 'input_tokens', 0),
+                tokens_out=getattr(response.usage, 'output_tokens', 0))
 
             # Parse JSON from response
             json_start = result_text.find("{")

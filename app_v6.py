@@ -1920,6 +1920,51 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     </div>
   </div>
 
+  <!-- API Usage & Cost Controls -->
+  <div class="card" style="margin-bottom:1rem" id="usage-card">
+    <div class="ch"><div class="ch-left"><div class="cicon">📊</div>API Usage & Cost Controls</div></div>
+    <div class="cb">
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;margin-bottom:1rem" id="usage-stats">
+        <div style="text-align:center;padding:.6rem;background:#f0f9ff;border-radius:8px;border:1px solid #bae6fd">
+          <div style="font-size:1.4rem;font-weight:800;color:#1e40af" id="usage-month-cost">$0.00</div>
+          <div style="font-size:.68rem;color:#64748b">This Month</div>
+        </div>
+        <div style="text-align:center;padding:.6rem;background:#f0fdf4;border-radius:8px;border:1px solid #bbf7d0">
+          <div style="font-size:1.4rem;font-weight:800;color:#16a34a" id="usage-month-calls">0</div>
+          <div style="font-size:.68rem;color:#64748b">API Calls</div>
+        </div>
+        <div style="text-align:center;padding:.6rem;background:#fefce8;border-radius:8px;border:1px solid #fde68a">
+          <div style="font-size:1.4rem;font-weight:800;color:#b45309" id="usage-today-cost">$0.00</div>
+          <div style="font-size:.68rem;color:#64748b">Today</div>
+        </div>
+        <div style="text-align:center;padding:.6rem;background:#faf5ff;border-radius:8px;border:1px solid #e9d5ff">
+          <div style="font-size:1.4rem;font-weight:800;color:#7c3aed" id="usage-today-calls">0</div>
+          <div style="font-size:.68rem;color:#64748b">Today's Calls</div>
+        </div>
+      </div>
+      <div id="usage-by-type" style="margin-bottom:1rem"></div>
+      <div id="usage-limit-status" style="margin-bottom:1rem"></div>
+      <details>
+        <summary style="font-size:.82rem;font-weight:600;color:var(--blue);cursor:pointer">Cost Limits (optional)</summary>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.75rem;margin-top:.5rem">
+          <div>
+            <label>Monthly Token Limit</label>
+            <input type="number" id="oc-monthly-token-limit" placeholder="0 = unlimited" min="0">
+          </div>
+          <div>
+            <label>Monthly Cost Limit ($)</label>
+            <input type="number" id="oc-monthly-cost-limit" placeholder="0 = unlimited" min="0" step="0.01">
+          </div>
+          <div>
+            <label>Daily Request Limit</label>
+            <input type="number" id="oc-daily-request-limit" placeholder="0 = unlimited" min="0">
+          </div>
+        </div>
+        <button class="btn btn-p btn-sm" style="margin-top:.5rem" onclick="saveCostLimits()">Save Limits</button>
+      </details>
+    </div>
+  </div>
+
   <div class="g2">
     <div>
       <div class="card" style="margin-bottom:1rem">
@@ -5688,9 +5733,71 @@ async function saveOrgConfig() {
   } catch(e) { toast('Save failed: ' + e.message, 'err'); }
 }
 
+async function loadUsageDashboard() {
+  try {
+    const r = await fetch('/api/usage');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.ok) return;
+    const s = d.summary;
+    document.getElementById('usage-month-cost').textContent = '$' + (s.month.cost||0).toFixed(2);
+    document.getElementById('usage-month-calls').textContent = s.month.calls||0;
+    document.getElementById('usage-today-cost').textContent = '$' + (s.today.cost||0).toFixed(2);
+    document.getElementById('usage-today-calls').textContent = s.today.calls||0;
+
+    // By type breakdown
+    const byType = document.getElementById('usage-by-type');
+    if (s.by_type && s.by_type.length) {
+      byType.innerHTML = '<div style="font-size:.72rem;font-weight:600;color:var(--gray-500);margin-bottom:.3rem">BREAKDOWN BY TYPE</div>' +
+        s.by_type.map(t => `<div style="display:flex;justify-content:space-between;font-size:.78rem;padding:.15rem 0;border-bottom:1px solid var(--gray-100)">
+          <span style="font-weight:600">${esc(t.call_type)}</span>
+          <span>${t.calls} calls · ${((t.tokens_in+t.tokens_out)/1000).toFixed(0)}K tokens · $${t.cost.toFixed(3)}</span>
+        </div>`).join('');
+    }
+
+    // Limit status
+    const limEl = document.getElementById('usage-limit-status');
+    if (d.limits && !d.limits.allowed) {
+      limEl.innerHTML = '<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:.5rem .75rem;font-size:.8rem;color:#dc2626;font-weight:600">⚠ ' + esc(d.limits.reason) + '</div>';
+    } else if (d.limits && d.limits.usage && (d.limits.usage.monthly_token_limit || d.limits.usage.monthly_cost_limit)) {
+      const u = d.limits.usage;
+      const pctTokens = u.monthly_token_limit ? Math.round(u.month_tokens / u.monthly_token_limit * 100) : 0;
+      const pctCost = u.monthly_cost_limit ? Math.round(u.month_cost / u.monthly_cost_limit * 100) : 0;
+      const pct = Math.max(pctTokens, pctCost);
+      const color = pct > 80 ? '#dc2626' : pct > 50 ? '#d97706' : '#16a34a';
+      limEl.innerHTML = `<div style="font-size:.72rem;color:var(--gray-500);margin-bottom:.2rem">USAGE VS LIMITS</div>
+        <div style="background:var(--gray-100);border-radius:99px;height:8px;overflow:hidden;margin-bottom:.2rem">
+          <div style="height:100%;width:${Math.min(pct,100)}%;background:${color};transition:width .5s"></div>
+        </div>
+        <div style="font-size:.72rem;color:${color}">${pct}% of monthly limit used</div>`;
+    }
+
+    // Load cost limit fields
+    const cfg = await (await fetch('/api/org-config')).json();
+    document.getElementById('oc-monthly-token-limit').value = cfg.monthly_token_limit || '';
+    document.getElementById('oc-monthly-cost-limit').value = cfg.monthly_cost_limit || '';
+    document.getElementById('oc-daily-request-limit').value = cfg.daily_request_limit || '';
+  } catch(e) { console.warn('Usage load failed:', e); }
+}
+
+async function saveCostLimits() {
+  try {
+    const cfg = {
+      monthly_token_limit: parseInt(document.getElementById('oc-monthly-token-limit').value) || 0,
+      monthly_cost_limit: parseFloat(document.getElementById('oc-monthly-cost-limit').value) || 0,
+      daily_request_limit: parseInt(document.getElementById('oc-daily-request-limit').value) || 0,
+    };
+    const r = await fetch('/api/org-config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+    const d = await r.json();
+    if (d.ok) { toast('Cost limits saved','ok'); loadUsageDashboard(); }
+    else toast('Save failed','err');
+  } catch(e) { toast('Save failed: ' + e.message, 'err'); }
+}
+
 async function loadSettings() {
   await loadConfig();
   loadOrgConfig();
+  loadUsageDashboard();
   document.getElementById('email-enabled').checked=!!_cfg.email_enabled;
   document.getElementById('smtp-host').value=_cfg.smtp_host||'smtp.gmail.com';
   document.getElementById('smtp-port').value=_cfg.smtp_port||587;
@@ -8944,6 +9051,13 @@ _synth_status = {}  # app_id -> {status, error}
 def api_synthesize_debrief(app_id):
     """Gather ALL research sources and synthesize a comprehensive debrief.
     Runs in background thread — poll /api/appearance/<id>/synthesize/status."""
+    import usage
+
+    # Rate limit check
+    limit_check = usage.check_limits(g.org_id)
+    if not limit_check["allowed"]:
+        return jsonify({"error": limit_check["reason"], "usage": limit_check["usage"]}), 429
+
     from repository import get_appearance_by_id
     a = get_appearance_by_id(app_id, org_id=g.org_id)
     if not a:
@@ -9033,7 +9147,15 @@ def api_synthesize_debrief(app_id):
 
             # Run synthesis
             analyzer = AgendaAnalyzer(load_api_key())
-            debrief, watch_points, usage = analyzer.synthesize_debrief(sources)
+            debrief, watch_points, synth_usage = analyzer.synthesize_debrief(sources)
+
+            # Record API usage
+            import usage as _usage_mod
+            _usage_mod.record_usage(org_id=org_id, call_type='synthesize',
+                tokens_in=synth_usage.get('in', 0),
+                tokens_out=synth_usage.get('out', 0),
+                cached_tokens=synth_usage.get('cached', 0),
+                appearance_id=app_id)
 
             # Save to DB
             now = now_iso()
@@ -9047,11 +9169,11 @@ def api_synthesize_debrief(app_id):
             # Log workflow
             import workflow as wf
             wf.log_history(app_id, "synthesize",
-                note=f"Synthesized debrief from all sources ({usage.get('in',0)} in / {usage.get('out',0)} out tokens)")
+                note=f"Synthesized debrief from all sources ({synth_usage.get('in',0)} in / {synth_usage.get('out',0)} out tokens)")
 
             _synth_status[app_id] = {"status": "done", "error": None}
             app.logger.info(f"Synthesis complete for appearance {app_id}: "
-                          f"{usage.get('in',0)} in / {usage.get('out',0)} out tokens")
+                          f"{synth_usage.get('in',0)} in / {synth_usage.get('out',0)} out tokens")
         except Exception as e:
             _synth_status[app_id] = {"status": "error", "error": str(e)}
             app.logger.error(f"Synthesis failed for appearance {app_id}: {e}")
@@ -10059,6 +10181,17 @@ def api_org_config_get():
     return jsonify(cfg)
 
 
+@app.route("/api/usage")
+@login_required
+def api_usage_summary():
+    """Return API usage summary for the current org."""
+    import usage as _usage
+    days = request.args.get("days", 30, type=int)
+    summary = _usage.get_usage_summary(g.org_id, days=days)
+    limits = _usage.check_limits(g.org_id)
+    return jsonify({"ok": True, "summary": summary, "limits": limits})
+
+
 @app.route("/api/org-config", methods=["POST"])
 @login_required
 def api_org_config_set():
@@ -10389,6 +10522,12 @@ def api_chat_send(appearance_id):
     """Send a user message and get an AI response. Optionally use web search. Supports file attachments."""
     import httpx
     from anthropic import Anthropic
+    import usage
+
+    # Rate limit check
+    limit_check = usage.check_limits(g.org_id)
+    if not limit_check["allowed"]:
+        return jsonify({"error": limit_check["reason"], "usage": limit_check["usage"]}), 429
 
     user = _current_user()
 
@@ -10590,6 +10729,13 @@ def api_chat_send(appearance_id):
         ai_text = "\n".join(b.text for b in resp.content if hasattr(b, "text")).strip()
         if not ai_text:
             ai_text = "(No response generated)"
+
+        # Record usage
+        usage.record_usage(org_id=g.org_id, call_type='chat',
+            tokens_in=getattr(resp.usage, 'input_tokens', 0),
+            tokens_out=getattr(resp.usage, 'output_tokens', 0),
+            cached_tokens=getattr(resp.usage, 'cache_read_input_tokens', 0),
+            appearance_id=appearance_id)
     except Exception as e:
         ai_text = f"[Error: {e}]"
 
@@ -11077,6 +11223,12 @@ def api_compile_final_analysis(meeting_id):
     import httpx
     from anthropic import Anthropic
     from repository import get_meeting_by_id
+    import usage
+
+    # Rate limit check
+    limit_check = usage.check_limits(g.org_id)
+    if not limit_check["allowed"]:
+        return jsonify({"error": limit_check["reason"], "usage": limit_check["usage"]}), 429
 
     data = request.get_json(force=True) or {}
     appearance_id = data.get("appearance_id")  # None = compile all
@@ -11115,7 +11267,7 @@ def api_compile_final_analysis(meeting_id):
             client = Anthropic(api_key=api_key, http_client=httpx.Client(verify=False))
 
             for item in items_to_compile:
-                _compile_single_item(client, item, m)
+                _compile_single_item(client, item, m, org_id=org_id)
         except Exception as e:
             app.logger.error(f"Final analysis compilation failed: {e}")
 
@@ -11129,7 +11281,7 @@ def api_compile_final_analysis(meeting_id):
     })
 
 
-def _compile_single_item(client, item, meeting):
+def _compile_single_item(client, item, meeting, org_id=1):
     """Compile all sources for a single item into a Final Analysis."""
     aid = item["id"]
 
@@ -11281,11 +11433,19 @@ IMPORTANT RULES:
                 (final_text, now, aid, org_id)
             )
 
-        usage = resp.usage
+        _resp_usage = resp.usage
         app.logger.info(
             f"Final analysis compiled for appearance {aid}: "
-            f"in={usage.input_tokens} out={usage.output_tokens}"
+            f"in={_resp_usage.input_tokens} out={_resp_usage.output_tokens}"
         )
+
+        # Record usage
+        import usage as _usage_mod
+        _usage_mod.record_usage(org_id=org_id, call_type='final',
+            tokens_in=getattr(_resp_usage, 'input_tokens', 0),
+            tokens_out=getattr(_resp_usage, 'output_tokens', 0),
+            cached_tokens=getattr(_resp_usage, 'cache_read_input_tokens', 0),
+            appearance_id=aid)
     except Exception as e:
         app.logger.error(f"Final analysis failed for appearance {aid}: {e}")
 

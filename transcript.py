@@ -956,7 +956,14 @@ Guidelines:
 """
 
     import anthropic
+    import usage
     client = anthropic.Anthropic(api_key=api_key)
+
+    # Rate limit check
+    limit_check = usage.check_limits(1)
+    if not limit_check["allowed"]:
+        log.warning(f"Rate limit reached: {limit_check['reason']}")
+        return {}
 
     # Retry up to 3 times — Claude sometimes produces malformed JSON
     # (truncated output, missing commas, trailing commas, etc.)
@@ -1016,8 +1023,15 @@ Guidelines:
                 if fn:
                     result[fn] = seg
 
-            usage = response.usage
-            log.info(f"  Transcript segmentation: {usage.input_tokens} in / {usage.output_tokens} out, {len(result)} items")
+            _resp_usage = response.usage
+            log.info(f"  Transcript segmentation: {_resp_usage.input_tokens} in / {_resp_usage.output_tokens} out, {len(result)} items")
+
+            # Record usage
+            usage.record_usage(org_id=1, call_type='segment',
+                tokens_in=getattr(_resp_usage, 'input_tokens', 0),
+                tokens_out=getattr(_resp_usage, 'output_tokens', 0),
+                cached_tokens=getattr(_resp_usage, 'cache_read_input_tokens', 0))
+
             return result
 
         except Exception as e:

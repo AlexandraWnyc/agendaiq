@@ -635,6 +635,21 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                                      "cache_read_input_tokens": 0,
                                      "cache_creation_input_tokens": 0}
                     else:
+                        # Rate limit check before API call
+                        import usage
+                        limit_check = usage.check_limits(1)
+                        if not limit_check["allowed"]:
+                            log.warning(f"Rate limit reached: {limit_check['reason']}")
+                            part1 = f"[Rate limit reached: {limit_check['reason']}]"
+                            part2 = ""
+                            full = part1
+                            analysis_meta = None
+                            leg_summary = ""
+                            leg_usage = {"input_tokens": 0, "output_tokens": 0,
+                                         "cache_read_input_tokens": 0,
+                                         "cache_creation_input_tokens": 0}
+                            continue
+
                         _emit(f"{cname}: item {i}/{len(new_items)} (File# {file_num}) "
                               "— analyzing with Claude (Part 1 + Part 2)…",
                               phase="analyzing", pct=item_pct + 20)
@@ -651,6 +666,15 @@ def process_committees(committees: dict, parsed_date: datetime, mode: str,
                               f"— Claude responded ({_usage_dbg.get('input_tokens', 0):,} in / "
                               f"{_usage_dbg.get('output_tokens', 0):,} out tokens)",
                               phase="analyzing", pct=item_pct + 55)
+
+                        # Record usage
+                        if analysis_meta:
+                            usage.record_usage(org_id=1, call_type='analyze',
+                                tokens_in=_usage_dbg.get('input_tokens', 0),
+                                tokens_out=_usage_dbg.get('output_tokens', 0),
+                                cached_tokens=_usage_dbg.get('cache_read_input_tokens', 0),
+                                appearance_id=appearance_id)
+
                         time.sleep(20)
 
                         # ── Leg history summary ───────────────────

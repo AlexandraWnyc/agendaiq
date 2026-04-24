@@ -533,6 +533,27 @@ MIGRATION_STATEMENTS = [
     # of the same matter across different meetings.
     "ALTER TABLE appearances ADD COLUMN delta_from_prior TEXT",
 
+    # ── API Usage Tracking ──────────────────────────────────────
+    # Records every Anthropic API call for cost tracking and rate limiting.
+    """CREATE TABLE IF NOT EXISTS api_usage (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        org_id          INTEGER NOT NULL,
+        call_type       TEXT NOT NULL,
+        model           TEXT,
+        tokens_in       INTEGER DEFAULT 0,
+        tokens_out      INTEGER DEFAULT 0,
+        cached_tokens   INTEGER DEFAULT 0,
+        cost_estimate   REAL DEFAULT 0,
+        appearance_id   INTEGER,
+        meeting_id      INTEGER,
+        call_date       TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_usage_org    ON api_usage(org_id)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_date   ON api_usage(call_date)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_type   ON api_usage(org_id, call_type)",
+
     # ══════════════════════════════════════════════════════════════
     # MULTI-TENANCY (P0 — April 2026)
     # ══════════════════════════════════════════════════════════════
