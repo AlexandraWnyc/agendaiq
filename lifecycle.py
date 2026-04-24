@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from db import get_db
 from utils import now_iso
+import org_config
 
 log = logging.getLogger("oca-agent")
 
@@ -135,21 +136,26 @@ def _clean_body(text: str) -> str:
     return t
 
 
-def _looks_like_body(text: str) -> bool:
+def _looks_like_body(text: str, body_fragments=None) -> bool:
     if not text:
         return False
     t = text.strip()
     if len(t) < 3 or len(t) > 160:
         return False
     # If it doesn't contain at least one of our body fragments, skip.
+    frags = body_fragments if body_fragments is not None else _KNOWN_BODY_FRAGMENTS
     low = t.lower()
-    return any(frag.lower() in low for frag in _KNOWN_BODY_FRAGMENTS)
+    return any(frag.lower() in low for frag in frags)
 
 
-def parse_legislative_history(raw: str) -> list[dict]:
+def parse_legislative_history(raw: str, org_id=None) -> list[dict]:
     """
-    Parse Miami-Dade Legistar legislative-history text into structured events.
+    Parse Legistar legislative-history text into structured events.
     Handles both line-separated and concatenated (table-flattened) layouts.
+
+    When *org_id* is provided, body hints and body fragments are loaded from
+    the org_config module so the parser works for any organisation.  When
+    omitted the module-level Miami-Dade defaults are used (backward-compat).
 
     Each event has:
       event_date  — YYYY-MM-DD
@@ -161,6 +167,11 @@ def parse_legislative_history(raw: str) -> list[dict]:
     """
     if not raw:
         return []
+
+    # Load org-specific body hints / fragments when an org_id is available.
+    cfg = org_config.get_org_config(org_id or 1) if org_id else org_config.get_current_config()
+    body_hints = cfg.get("body_hints", _BODY_HINTS)
+    body_fragments = cfg.get("body_fragments", _KNOWN_BODY_FRAGMENTS)
 
     # Drop the header line and any "Legislative Text..." tail that might have
     # been included by mistake.
@@ -203,13 +214,13 @@ def parse_legislative_history(raw: str) -> list[dict]:
         # Accept any segment whose ending contains a body fragment. Some rows
         # have e.g. "County Attorney Office of Agenda Coordination" concatenated
         # across columns — keep the last matching fragment.
-        if not _looks_like_body(body):
+        if not _looks_like_body(body, body_fragments=body_fragments):
             # Try to recover by searching for the LAST body fragment within
             # body_segment and using that as the body.
             low = body_segment.lower()
             best = -1
             best_frag = ""
-            for frag in _KNOWN_BODY_FRAGMENTS:
+            for frag in body_fragments:
                 j = low.rfind(frag.lower())
                 if j > best:
                     best, best_frag = j, frag
@@ -217,7 +228,7 @@ def parse_legislative_history(raw: str) -> list[dict]:
                 continue
             # Pull surrounding context (20 chars before through end of frag)
             body = _clean_body(body_segment[max(0, best - 60):best + len(best_frag)])
-            if not _looks_like_body(body):
+            if not _looks_like_body(body, body_fragments=body_fragments):
                 continue
 
         # Tail after the date: agenda item + action + notes, up to next date.
@@ -324,7 +335,7 @@ def rebuild_for_matter(matter_id: int, raw_history: str, org_id=None) -> int:
     older parser versions get cleanly overwritten.
     """
     oid = _resolve_org_id(org_id)
-    events = parse_legislative_history(raw_history or "")
+    events = parse_legislative_history(raw_history or "", org_id=oid)
     with get_db() as conn:
         conn.execute("DELETE FROM matter_timeline WHERE matter_id=? AND org_id = ?",
                      (matter_id, oid))

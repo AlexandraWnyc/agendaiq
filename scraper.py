@@ -7,6 +7,7 @@ from pathlib import Path
 from datetime import datetime
 from paths import PDF_CACHE_DIR
 from urllib.parse import urljoin, quote_plus
+import org_config
 
 import requests
 from bs4 import BeautifulSoup
@@ -14,37 +15,22 @@ import fitz  # PyMuPDF
 
 log = logging.getLogger("oca-agent")
 
-BASE_URL = "https://www.miamidade.gov/govaction/"
-
-# Fallback committee list (current term Feb 2025+)
-COMMITTEES = {
-    "Appropriations Committee": "APC",
-    "Aviation and Seaport Committee": "AASC",
-    "BCC - Comprehensive Development Master Plan & Zoning": "CDMZ",
-    "Board of County Commissioners": "CC",
-    "Government Efficiency & Transparency Ad Hoc Cmte": "GETC",
-    "Housing Committee": "HOUS",
-    "Infrastructure, Innovation & Technology Committee": "IITC",
-    "Intergovernmental and Economic Impact Committee": "IEIC",
-    "Joint Appropriations & Gov Eff & Transparency Cmte": "JAGE",
-    "Policy Council": "PC",
-    "Recreation, Tourism, and Resiliency Committee": "RTRC",
-    "Safety and Health Committee": "SHC",
-    "Transportation Cmte": "TRNS",
-}
-
 
 class MiamiDadeScraper:
-    def __init__(self):
+    def __init__(self, org_id=None):
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": "OCA-Agenda-Agent/6.0"})
         self._form_cache = {}
+        self._org_id = org_id
+        cfg = org_config.get_org_config(org_id or 1)
+        self.base_url = cfg.get("legistar_base_url", "https://www.miamidade.gov/govaction/")
+        self.committees = cfg.get("committees", {})
 
     def get_committees(self):
         log.info("Fetching committee list...")
         try:
             resp = self.session.get(
-                BASE_URL + "agendas.asp?Action=Agendas&Oper=DisplayList", timeout=30
+                self.base_url + "agendas.asp?Action=Agendas&Oper=DisplayList", timeout=30
             )
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
@@ -61,10 +47,10 @@ class MiamiDadeScraper:
                 return committees
         except Exception as e:
             log.warning(f"Could not fetch live list: {e}")
-        return COMMITTEES
+        return self.committees
 
     def get_agenda_dates(self, committee_name, committee_code):
-        url = (f"{BASE_URL}agendas.asp?Action=Agendas&Oper=DisplayAgenda"
+        url = (f"{self.base_url}agendas.asp?Action=Agendas&Oper=DisplayAgenda"
                f"&Agenda={committee_code}&AgendaName={quote_plus(committee_name)}")
         log.info(f"  Checking dates for {committee_name}...")
         try:
@@ -133,7 +119,7 @@ class MiamiDadeScraper:
         for entry in agenda_entries:
             meeting_id = entry["id"]
             label = entry.get("label", date)
-            agenda_url = (f"{BASE_URL}legistarfiles/SourceCode/searchforpdf.asp"
+            agenda_url = (f"{self.base_url}legistarfiles/SourceCode/searchforpdf.asp"
                           f"?documentKey={meeting_id}&documenttype=agenda")
             log.info(f"  Fetching agenda: {committee_name} ({label})")
             try:
@@ -293,7 +279,7 @@ class MiamiDadeScraper:
         """Two-step Legistar navigation: hit searchforpdf.asp bridge page first,
         then extract the real matter.asp URL from the JavaScript link on that page.
         Falls back to direct matter.asp URLs if the bridge page doesn't work."""
-        bridge_url = (f"{BASE_URL}legistarfiles/SourceCode/searchforpdf.asp"
+        bridge_url = (f"{self.base_url}legistarfiles/SourceCode/searchforpdf.asp"
                       f"?documenttype=matter&documentKey={mid}")
         try:
             log.debug(f"    Hitting bridge page: {bridge_url}")

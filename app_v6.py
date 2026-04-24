@@ -1861,6 +1861,55 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 
 <!-- ═══════════════════════════ SETTINGS ═══════════════════════════ -->
 <div class="pg" id="pg-settings">
+  <!-- Jurisdiction Config (admin only) -->
+  <div class="card" style="margin-bottom:1rem" id="org-config-card">
+    <div class="ch"><div class="ch-left"><div class="cicon">🏛️</div>Jurisdiction Configuration</div></div>
+    <div class="cb">
+      <p style="font-size:.78rem;color:var(--gray-600);margin-bottom:.85rem;">
+        Configure your jurisdiction's data sources. These settings control how AgendaIQ connects to your agenda system, downloads meeting recordings, and identifies committees.</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem">
+        <div>
+          <label>Jurisdiction Name</label>
+          <input type="text" id="oc-jurisdiction" placeholder="e.g. Miami-Dade County">
+        </div>
+        <div>
+          <label>Organization Name</label>
+          <input type="text" id="oc-org-name" placeholder="e.g. Office of the Commission Auditor">
+        </div>
+        <div>
+          <label>Governing Body Name</label>
+          <input type="text" id="oc-body-name" placeholder="e.g. Board of County Commissioners">
+        </div>
+        <div>
+          <label>Legistar Base URL</label>
+          <input type="text" id="oc-legistar-url" placeholder="https://www.miamidade.gov/govaction/">
+        </div>
+        <div>
+          <label>YouTube Channel URL</label>
+          <input type="text" id="oc-youtube-url" placeholder="https://www.youtube.com/@channel">
+        </div>
+        <div>
+          <label>YouTube Channel ID</label>
+          <input type="text" id="oc-youtube-id" placeholder="UCxxxxxxxx">
+        </div>
+      </div>
+      <label style="margin-top:.75rem">Granicus Archive URLs (one per line)</label>
+      <textarea id="oc-granicus-urls" rows="3" style="font-size:.8rem;font-family:monospace" placeholder="https://miamidade.granicus.com/ViewPublisher.php?view_id=3"></textarea>
+      <details style="margin-top:.85rem">
+        <summary style="font-size:.82rem;font-weight:600;color:var(--blue);cursor:pointer">Advanced: Committees &amp; Aliases (JSON)</summary>
+        <label style="margin-top:.5rem">Committees (name → code)</label>
+        <textarea id="oc-committees" rows="6" style="font-size:.75rem;font-family:monospace" placeholder='{"Committee Name": "CODE"}'></textarea>
+        <label>Committee Aliases (for YouTube matching)</label>
+        <textarea id="oc-aliases" rows="6" style="font-size:.75rem;font-family:monospace" placeholder='{"Committee Name": ["alias1", "alias2"]}'></textarea>
+        <label>AI Jurisdiction Context (injected into analysis prompts)</label>
+        <textarea id="oc-ai-context" rows="3" style="font-size:.8rem" placeholder="You are analyzing agenda items for..."></textarea>
+      </details>
+      <div style="display:flex;gap:.5rem;margin-top:.85rem">
+        <button class="btn btn-p btn-sm" onclick="saveOrgConfig()">Save Jurisdiction Config</button>
+      </div>
+    </div>
+  </div>
+
   <div class="g2">
     <div>
       <div class="card" style="margin-bottom:1rem">
@@ -5575,8 +5624,53 @@ function setCurrentUser(name) {
   if(typeof loadWorkflow==='function') loadWorkflow();
 }
 
+async function loadOrgConfig() {
+  try {
+    const r = await fetch('/api/org-config');
+    if (!r.ok) return;
+    const oc = await r.json();
+    document.getElementById('oc-jurisdiction').value = oc.jurisdiction_name || '';
+    document.getElementById('oc-org-name').value = oc.org_display_name || '';
+    document.getElementById('oc-body-name').value = oc.body_name || '';
+    document.getElementById('oc-legistar-url').value = oc.legistar_base_url || '';
+    document.getElementById('oc-youtube-url').value = oc.youtube_channel_url || '';
+    document.getElementById('oc-youtube-id').value = oc.youtube_channel_id || '';
+    document.getElementById('oc-granicus-urls').value = (oc.granicus_urls || []).join('\n');
+    document.getElementById('oc-committees').value = JSON.stringify(oc.committees || {}, null, 2);
+    document.getElementById('oc-aliases').value = JSON.stringify(oc.committee_aliases || {}, null, 2);
+    document.getElementById('oc-ai-context').value = oc.ai_jurisdiction_context || '';
+  } catch(e) { console.warn('Failed to load org config:', e); }
+}
+
+async function saveOrgConfig() {
+  try {
+    const granicusText = document.getElementById('oc-granicus-urls').value.trim();
+    const granicusUrls = granicusText ? granicusText.split('\n').map(u => u.trim()).filter(Boolean) : [];
+    let committees = {}, aliases = {};
+    try { committees = JSON.parse(document.getElementById('oc-committees').value || '{}'); } catch(e) { alert('Invalid JSON in Committees field'); return; }
+    try { aliases = JSON.parse(document.getElementById('oc-aliases').value || '{}'); } catch(e) { alert('Invalid JSON in Aliases field'); return; }
+    const cfg = {
+      jurisdiction_name: document.getElementById('oc-jurisdiction').value.trim(),
+      org_display_name: document.getElementById('oc-org-name').value.trim(),
+      body_name: document.getElementById('oc-body-name').value.trim(),
+      legistar_base_url: document.getElementById('oc-legistar-url').value.trim(),
+      youtube_channel_url: document.getElementById('oc-youtube-url').value.trim(),
+      youtube_channel_id: document.getElementById('oc-youtube-id').value.trim(),
+      granicus_urls: granicusUrls,
+      committees: committees,
+      committee_aliases: aliases,
+      ai_jurisdiction_context: document.getElementById('oc-ai-context').value.trim(),
+    };
+    const r = await fetch('/api/org-config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
+    const d = await r.json();
+    if (d.ok) toast('Jurisdiction config saved','ok');
+    else toast('Save failed: ' + (d.error||'unknown'),'err');
+  } catch(e) { toast('Save failed: ' + e.message, 'err'); }
+}
+
 async function loadSettings() {
   await loadConfig();
+  loadOrgConfig();
   document.getElementById('email-enabled').checked=!!_cfg.email_enabled;
   document.getElementById('smtp-host').value=_cfg.smtp_host||'smtp.gmail.com';
   document.getElementById('smtp-port').value=_cfg.smtp_port||587;
@@ -9745,6 +9839,29 @@ def api_test_webhook():
         return jsonify(result)
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
+
+
+# ── Org / Jurisdiction Config API ─────────────────────────────
+
+@app.route("/api/org-config")
+@login_required
+def api_org_config_get():
+    """Return the current org's jurisdiction config."""
+    import org_config
+    cfg = org_config.get_org_config(g.org_id)
+    return jsonify(cfg)
+
+
+@app.route("/api/org-config", methods=["POST"])
+@login_required
+def api_org_config_set():
+    """Update the current org's jurisdiction config."""
+    import org_config
+    new = request.get_json(force=True)
+    existing = org_config.get_org_config(g.org_id)
+    existing.update(new)
+    org_config.save_org_config(g.org_id, existing)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/test-power-automate", methods=["POST"])

@@ -18,6 +18,7 @@ import os, re, json, logging, subprocess, tempfile, time, io
 from pathlib import Path
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+import org_config
 
 log = logging.getLogger("oca-agent")
 
@@ -45,80 +46,6 @@ def _disk_free_mb(path="/tmp"):
 
 MIN_DISK_FREE_MB = 100  # don't download if less than 100MB free
 
-# ── Constants ────────────────────────────────────────────────
-YOUTUBE_CHANNEL_ID = "UCjwHcRTA0ZuOdsXxEBKnq0A"  # @miami-dadebcc6863
-YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@miami-dadebcc6863"
-
-# Granicus streaming archive — direct MP3 download links in page HTML
-# view_id=3: BCC meetings, BCC Zoning, special meetings
-# view_id=4: All other committee meetings
-GRANICUS_BCC_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=3"
-GRANICUS_COMMITTEES_URL = "https://miamidade.granicus.com/ViewPublisher.php?view_id=4"
-
-# Known committee name aliases — maps canonical DB names to patterns
-# that might appear in YouTube video titles.  The fuzzy matcher uses
-# these PLUS free-form matching, so even unlisted variants get caught.
-COMMITTEE_ALIASES = {
-    # BCC
-    "Board of County Commissioners": [
-        "Board of County Commissioners",
-        "BCC Regular", "BCC Meeting", "County Commission",
-    ],
-    # Zoning
-    "Comprehensive Development Master Plan & Zoning": [
-        "Master Plan & Zoning", "Master Plan and Zoning",
-        "Zoning", "CDMP", "Comprehensive Development",
-    ],
-    # Standing committees (names shift over time)
-    "Government Operations": [
-        "Government Operations", "Gov Operations", "Gov Ops",
-    ],
-    "Infrastructure, Innovation, and Technology": [
-        "Infrastructure", "Innovation and Technology",
-        "Infrastructure, Innovation",
-    ],
-    "Housing and Community Development": [
-        "Housing", "Community Development",
-        "Housing and Community", "Housing Committee",
-    ],
-    "Public Safety and Rehabilitation": [
-        "Public Safety", "Rehabilitation",
-    ],
-    "Intergovernmental and Economic Impact": [
-        "Intergovernmental", "Economic Impact",
-        "Intergovernmental and Economic",
-    ],
-    "Recreation, Tourism, and Resiliency": [
-        "Recreation", "Tourism", "Resiliency",
-        "Recreation, Tourism",
-    ],
-    "Transportation and Finance": [
-        "Transportation", "Finance",
-        "Transportation and Finance",
-    ],
-    "Aviation and Seaport": [
-        "Aviation", "Seaport",
-        "Aviation and Seaport",
-    ],
-    "Health Care and County Operations": [
-        "Health Care", "County Operations",
-        "Health Care and County",
-    ],
-    "Parks and Culture": [
-        "Parks", "Culture", "Parks and Culture",
-    ],
-    "Trade and Tourism": [
-        "Trade", "Trade and Tourism",
-    ],
-}
-
-# Flatten for reverse lookup
-_ALIAS_FLAT = {}
-for canonical, aliases in COMMITTEE_ALIASES.items():
-    for a in aliases:
-        _ALIAS_FLAT[a.lower()] = canonical
-
-
 # ── Granicus MP3 + Whisper transcription ─────────────────────
 
 def _granicus_headers():
@@ -140,7 +67,8 @@ def _parse_granicus_row_date(row_text: str) -> datetime | None:
 
 
 def search_granicus_mp3(committee_name: str, meeting_date: str,
-                        date_window_days: int = 7) -> dict | None:
+                        date_window_days: int = 7,
+                        org_id=None) -> dict | None:
     """Search Granicus archive pages for an MP3 matching committee + date.
 
     Scrapes two Granicus ViewPublisher pages that have direct MP3 links:
@@ -157,6 +85,9 @@ def search_granicus_mp3(committee_name: str, meeting_date: str,
     from bs4 import BeautifulSoup
     from datetime import timedelta
 
+    cfg = org_config.get_org_config(org_id or 1)
+    granicus_urls = cfg.get("granicus_urls", [])
+
     try:
         target_dt = datetime.strptime(meeting_date, "%Y-%m-%d")
     except ValueError:
@@ -165,8 +96,8 @@ def search_granicus_mp3(committee_name: str, meeting_date: str,
 
     log.info(f"  Searching for '{committee_name}' on {meeting_date} (±{date_window_days} days)")
 
-    # Search both Granicus pages
-    for page_url in [GRANICUS_COMMITTEES_URL, GRANICUS_BCC_URL]:
+    # Search all Granicus pages
+    for page_url in granicus_urls:
         log.info(f"  Checking: {page_url}")
         try:
             resp = requests.get(page_url, timeout=30, headers=_granicus_headers())
@@ -201,7 +132,7 @@ def search_granicus_mp3(committee_name: str, meeting_date: str,
                 continue
 
             # Check committee name match
-            name_score = _committee_match_score(committee_name, row_text)
+            name_score = _committee_match_score(committee_name, row_text, org_id=org_id)
             if name_score < 0.50:
                 continue
 
@@ -476,7 +407,8 @@ def _extract_date_from_title(title: str):
     return None
 
 
-def _committee_match_score(db_body_name: str, video_title: str) -> float:
+def _committee_match_score(db_body_name: str, video_title: str,
+                           org_id=None) -> float:
     """Score how well a YouTube video title matches a committee name.
     Returns 0.0–1.0.  Uses multiple signals:
       1. Direct substring match of known aliases
@@ -484,12 +416,19 @@ def _committee_match_score(db_body_name: str, video_title: str) -> float:
       3. SequenceMatcher ratio on normalized strings
     The max of all signals is returned.
     """
+    cfg = org_config.get_org_config(org_id or 1)
+    committee_aliases = cfg.get("committee_aliases", {})
+    alias_flat = {}
+    for canonical, aliases in committee_aliases.items():
+        for a in aliases:
+            alias_flat[a.lower()] = canonical
+
     title_norm = _normalize(video_title)
     body_norm = _normalize(db_body_name)
     scores = []
 
     # 1. Direct alias match — strongest signal
-    for alias_key, canonical in _ALIAS_FLAT.items():
+    for alias_key, canonical in alias_flat.items():
         if alias_key in title_norm:
             # How close is the canonical to our DB body name?
             canon_score = SequenceMatcher(None, _normalize(canonical), body_norm).ratio()
@@ -524,7 +463,8 @@ def _committee_match_score(db_body_name: str, video_title: str) -> float:
 
 def search_youtube_videos(committee_name: str, meeting_date: str,
                           max_results: int = 10,
-                          date_window_days: int = 7) -> list[dict]:
+                          date_window_days: int = 7,
+                          org_id=None) -> list[dict]:
     """Search the BCC YouTube channel for videos matching a meeting.
 
     Uses yt-dlp to search the channel.  Returns a list of dicts:
@@ -536,7 +476,11 @@ def search_youtube_videos(committee_name: str, meeting_date: str,
         meeting_date: ISO date string (e.g. "2026-04-15")
         max_results: How many candidates to fetch from YouTube
         date_window_days: How many days around meeting_date to accept
+        org_id: Organization ID for config lookup
     """
+    cfg = org_config.get_org_config(org_id or 1)
+    youtube_channel_url = cfg.get("youtube_channel_url", "")
+
     # Build a search query from the most distinctive words
     query_words = []
     # Add date in MM.DD.YYYY format (common in titles)
@@ -553,11 +497,11 @@ def search_youtube_videos(committee_name: str, meeting_date: str,
             query_words.append(word)
 
     search_query = " ".join(query_words)
-    log.info(f"  YouTube search: '{search_query}' on channel {YOUTUBE_CHANNEL_URL}")
+    log.info(f"  YouTube search: '{search_query}' on channel {youtube_channel_url}")
 
     result = None
     # Strategy 1: Use the channel's search endpoint (most reliable)
-    channel_search_url = f"{YOUTUBE_CHANNEL_URL}/search?query={'+'.join(query_words)}"
+    channel_search_url = f"{youtube_channel_url}/search?query={'+'.join(query_words)}"
     try:
         result = subprocess.run(
             [
@@ -598,7 +542,7 @@ def search_youtube_videos(committee_name: str, meeting_date: str,
                 [
                     "yt-dlp", "--flat-playlist", "--print-json",
                     "--playlist-end", str(max_results * 5),
-                    f"{YOUTUBE_CHANNEL_URL}/videos",
+                    f"{youtube_channel_url}/videos",
                 ],
                 capture_output=True, text=True, timeout=90,
             )
@@ -660,7 +604,7 @@ def search_youtube_videos(committee_name: str, meeting_date: str,
                 pass
 
         # Committee name matching
-        name_score = _committee_match_score(committee_name, title)
+        name_score = _committee_match_score(committee_name, title, org_id=org_id)
 
         # Combined score: date is most important, name disambiguates
         if date_match and name_score > 0.3:
@@ -1329,7 +1273,7 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         _emit(f"Searching county archives for {body_name} {meeting_date}…",
               phase="transcript", pct=5)
         try:
-            mp3_info = search_granicus_mp3(body_name, meeting_date)
+            mp3_info = search_granicus_mp3(body_name, meeting_date, org_id=oid)
             if mp3_info:
                 if _abort():
                     return {"status": "aborted", "message": "Stopped by user"}

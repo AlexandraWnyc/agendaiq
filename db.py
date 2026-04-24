@@ -286,13 +286,29 @@ def _seed_default_org(conn):
         ).fetchone()
         if not row:
             from datetime import datetime as _dt
+            import json as _json
+            from org_config import MIAMI_DADE_DEFAULTS
             now = _dt.utcnow().isoformat()
+            settings = _json.dumps(MIAMI_DADE_DEFAULTS, ensure_ascii=False)
             conn.execute(
                 """INSERT INTO organizations (id, name, slug, settings, is_active, created_at, updated_at)
-                   VALUES (1, 'Miami-Dade County OCA', 'miami-dade-oca', '{}', 1, ?, ?)""",
-                (now, now)
+                   VALUES (1, 'Miami-Dade County OCA', 'miami-dade-oca', ?, 1, ?, ?)""",
+                (settings, now, now)
             )
-            log.info("Seeded default organization: Miami-Dade County OCA (id=1)")
+            log.info("Seeded default organization: Miami-Dade County OCA (id=1) with config")
+        else:
+            # Backfill settings if the org exists but has empty/null settings
+            existing_settings = conn.execute(
+                "SELECT settings FROM organizations WHERE id=1"
+            ).fetchone()
+            if existing_settings and (not existing_settings["settings"] or existing_settings["settings"] == '{}'):
+                import json as _json
+                from org_config import MIAMI_DADE_DEFAULTS
+                settings = _json.dumps(MIAMI_DADE_DEFAULTS, ensure_ascii=False)
+                conn.execute(
+                    "UPDATE organizations SET settings=? WHERE id=1", (settings,)
+                )
+                log.info("Backfilled Miami-Dade config into existing org_id=1")
     except Exception as e:
         log.warning(f"Could not seed default org (may not exist yet): {e}")
 
