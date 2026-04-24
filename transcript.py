@@ -66,20 +66,18 @@ def _parse_granicus_row_date(row_text: str) -> datetime | None:
     return None
 
 
-def search_granicus_mp3(committee_name: str, meeting_date: str,
-                        date_window_days: int = 7,
-                        org_id=None) -> dict | None:
-    """Search Granicus archive pages for an MP3 matching committee + date.
+def search_granicus_all_mp3s(committee_name: str, meeting_date: str,
+                             date_window_days: int = 7,
+                             org_id=None) -> list[dict]:
+    """Search Granicus archive pages for ALL MP3s matching committee + date.
 
-    Scrapes two Granicus ViewPublisher pages that have direct MP3 links:
-      - view_id=3: BCC meetings, BCC Zoning, special meetings
-      - view_id=4: All other committee meetings
-
+    Scrapes Granicus ViewPublisher pages that have direct MP3 links.
     Uses a ±date_window_days window because the DB often stores the
     agenda/scheduled date (e.g. Mar 16) while the actual meeting happened
     on a different day that week (e.g. Mar 10).
 
-    Returns: {"mp3_url": str, "title": str, "page_url": str} or None
+    Returns: list of {"mp3_url": str, "title": str, "page_url": str, "match_score": float}
+             sorted by match_score descending, then date proximity ascending.
     """
     import requests
     from bs4 import BeautifulSoup
@@ -92,9 +90,11 @@ def search_granicus_mp3(committee_name: str, meeting_date: str,
         target_dt = datetime.strptime(meeting_date, "%Y-%m-%d")
     except ValueError:
         log.warning(f"  Invalid meeting date: {meeting_date}")
-        return None
+        return []
 
     log.info(f"  Searching for '{committee_name}' on {meeting_date} (±{date_window_days} days)")
+
+    all_matches = []
 
     # Search all Granicus pages
     for page_url in granicus_urls:
@@ -107,10 +107,6 @@ def search_granicus_mp3(committee_name: str, meeting_date: str,
             continue
 
         soup = BeautifulSoup(resp.text, "html.parser")
-
-        best_match = None
-        best_score = 0
-        best_date_diff = 999
 
         for link in soup.find_all("a", href=True):
             href = link.get("href", "")
@@ -138,28 +134,45 @@ def search_granicus_mp3(committee_name: str, meeting_date: str,
 
             log.info(f"  Match: score={name_score:.2f} date_diff={date_diff}d '{row_text[:100]}'")
 
-            # Prefer: best name score, then closest date
-            if name_score > best_score or (name_score == best_score and date_diff < best_date_diff):
-                best_score = name_score
-                best_date_diff = date_diff
-                mp3_url = href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
-                best_match = {
-                    "mp3_url": mp3_url,
-                    "title": row_text[:120],
-                    "page_url": page_url,
-                    "match_score": name_score + 1.0,
-                }
+            mp3_url = href if href.startswith("http") else f"https://miamidade.granicus.com/{href}"
+            all_matches.append({
+                "mp3_url": mp3_url,
+                "title": row_text[:120],
+                "page_url": page_url,
+                "match_score": name_score + 1.0,
+                "_date_diff": date_diff,
+            })
 
-        if best_match:
-            log.info(f"  Found MP3: {best_match['mp3_url'][:80]}…")
-            return best_match
+        if not all_matches:
+            # Diagnostic logging
+            all_mp3 = [a["href"] for a in soup.find_all("a", href=True) if ".mp3" in a.get("href", "").lower()]
+            log.info(f"  No match on page ({len(all_mp3)} MP3 links, no name+date match within ±{date_window_days}d)")
 
-        # Diagnostic logging
-        all_mp3 = [a["href"] for a in soup.find_all("a", href=True) if ".mp3" in a.get("href", "").lower()]
-        log.info(f"  No match on page ({len(all_mp3)} MP3 links, no name+date match within ±{date_window_days}d)")
+    if all_matches:
+        # Sort by best score descending, then closest date ascending
+        all_matches.sort(key=lambda m: (-m["match_score"], m["_date_diff"]))
+        # Remove internal sort key
+        for m in all_matches:
+            m.pop("_date_diff", None)
+        log.info(f"  Found {len(all_matches)} matching MP3(s)")
+    else:
+        log.info(f"  No MP3 found for '{committee_name}' {meeting_date}")
 
-    log.info(f"  No MP3 found for '{committee_name}' {meeting_date}")
-    return None
+    return all_matches
+
+
+def search_granicus_mp3(committee_name: str, meeting_date: str,
+                        date_window_days: int = 7,
+                        org_id=None) -> dict | None:
+    """Search Granicus archive pages for an MP3 matching committee + date.
+
+    Returns the single best match: {"mp3_url": str, "title": str, "page_url": str} or None.
+    For all matches, use search_granicus_all_mp3s().
+    """
+    matches = search_granicus_all_mp3s(committee_name, meeting_date,
+                                        date_window_days=date_window_days,
+                                        org_id=org_id)
+    return matches[0] if matches else None
 
 
 def download_mp3(mp3_url: str, output_dir: Path) -> Path | None:
@@ -204,11 +217,14 @@ def download_mp3(mp3_url: str, output_dir: Path) -> Path | None:
 
 
 def transcribe_with_whisper(audio_path: Path, api_key: str = None,
-                            abort_check=None) -> str:
+                            abort_check=None, emit=None) -> str:
     """Transcribe an audio file using OpenAI Whisper API.
 
     Handles files > 25MB by splitting into chunks.
     Returns timestamped transcript string, or "__ABORTED__" if stopped.
+
+    Args:
+        emit: optional callback(message, phase=..., pct=...) for progress updates.
     """
     if not api_key:
         api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -227,7 +243,7 @@ def transcribe_with_whisper(audio_path: Path, api_key: str = None,
         return _whisper_single(client, audio_path)
     else:
         # Split into chunks and transcribe each
-        return _whisper_chunked(client, audio_path, max_size, abort_check=abort_check)
+        return _whisper_chunked(client, audio_path, max_size, abort_check=abort_check, emit=emit)
 
 
 def _whisper_single(client, audio_path: Path) -> str:
@@ -270,10 +286,11 @@ def _whisper_single(client, audio_path: Path) -> str:
 
 
 def _whisper_chunked(client, audio_path: Path, max_size: int,
-                     abort_check=None) -> str:
+                     abort_check=None, emit=None) -> str:
     """Split a large audio file into chunks and transcribe each.
     Returns "__ABORTED__" if abort_check fires mid-transcription."""
     _abort = abort_check or (lambda: False)
+    _emit_progress = emit or (lambda msg, **kw: None)
     log.info(f"  Audio too large ({audio_path.stat().st_size / 1024 / 1024:.1f} MB), splitting…")
 
     # Use ffmpeg to split into chunks
@@ -326,6 +343,9 @@ def _whisper_chunked(client, audio_path: Path, max_size: int,
             try: _shutil.rmtree(chunk_dir, ignore_errors=True)
             except: pass
             return "__ABORTED__"
+        pct = int(100 * ci / len(chunks))
+        _emit_progress(f"Whisper: chunk {ci+1}/{len(chunks)} ({pct}%)…",
+                        phase="transcript")
         log.info(f"    Transcribing chunk {ci+1}/{len(chunks)} — {chunk_path.name} (offset={time_offset:.0f}s)…")
         try:
             with open(chunk_path, "rb") as f:
@@ -1273,8 +1293,8 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
         _emit(f"Searching county archives for {body_name} {meeting_date}…",
               phase="transcript", pct=5)
         try:
-            mp3_info = search_granicus_mp3(body_name, meeting_date, org_id=oid)
-            if mp3_info:
+            all_mp3_infos = search_granicus_all_mp3s(body_name, meeting_date, org_id=oid)
+            if all_mp3_infos:
                 if _abort():
                     return {"status": "aborted", "message": "Stopped by user"}
                 # Check disk space before downloading
@@ -1282,34 +1302,45 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
                 if free_mb < MIN_DISK_FREE_MB:
                     log.warning(f"  Low disk space ({free_mb:.0f} MB free) — skipping MP3 download")
                     return {"status": "skipped", "message": f"Low disk space ({free_mb:.0f} MB free)"}
-                _emit(f"Found recording — downloading MP3 ({free_mb:.0f} MB free)…",
+                n_recordings = len(all_mp3_infos)
+                _emit(f"Found {n_recordings} recording(s) — downloading MP3s ({free_mb:.0f} MB free)…",
                       phase="transcript", pct=10)
-                mp3_path = download_mp3(mp3_info["mp3_url"], output_dir)
-                if mp3_path:
+
+                transcript_parts = []
+                for ri, mp3_info in enumerate(all_mp3_infos, 1):
                     if _abort():
-                        # Clean up downloaded file before aborting
-                        try: mp3_path.unlink(missing_ok=True)
-                        except: pass
                         return {"status": "aborted", "message": "Stopped by user"}
-                    size_mb = mp3_path.stat().st_size / (1024 * 1024)
-                    n_chunks_est = max(1, int(size_mb / 23))  # ~23 MB per Whisper chunk
-                    _emit(f"Transcribing with Whisper ({size_mb:.0f} MB, ~{n_chunks_est} chunks)…",
-                          phase="transcript", pct=20)
-                    transcript = transcribe_with_whisper(mp3_path, abort_check=_abort)
-                    # Delete MP3 immediately — we have the text, free the disk
-                    try:
-                        sz = mp3_path.stat().st_size / (1024*1024) if mp3_path.exists() else 0
-                        mp3_path.unlink(missing_ok=True)
-                        log.info(f"  Cleaned up MP3 ({sz:.0f} MB freed)")
-                    except Exception:
-                        pass
-                    if transcript == "__ABORTED__":
-                        return {"status": "aborted", "message": "Stopped by user during transcription"}
-                    if transcript:
-                        video_title = mp3_info.get("title", body_name)
-                        final_url = mp3_info.get("mp3_url", "")
-                        source = "granicus+whisper"
-                        log.info(f"  Granicus+Whisper success: {len(transcript)} chars")
+                    _emit(f"Downloading recording {ri} of {n_recordings}…",
+                          phase="transcript", pct=10 + int(5 * ri / n_recordings))
+                    mp3_path = download_mp3(mp3_info["mp3_url"], output_dir)
+                    if mp3_path:
+                        if _abort():
+                            try: mp3_path.unlink(missing_ok=True)
+                            except: pass
+                            return {"status": "aborted", "message": "Stopped by user"}
+                        size_mb = mp3_path.stat().st_size / (1024 * 1024)
+                        n_chunks_est = max(1, int(size_mb / 23))
+                        _emit(f"Transcribing recording {ri} of {n_recordings} with Whisper ({size_mb:.0f} MB, ~{n_chunks_est} chunks)…",
+                              phase="transcript", pct=15 + int(25 * ri / n_recordings))
+                        part = transcribe_with_whisper(mp3_path, abort_check=_abort, emit=_emit)
+                        # Delete MP3 immediately — we have the text, free the disk
+                        try:
+                            sz = mp3_path.stat().st_size / (1024*1024) if mp3_path.exists() else 0
+                            mp3_path.unlink(missing_ok=True)
+                            log.info(f"  Cleaned up MP3 ({sz:.0f} MB freed)")
+                        except Exception:
+                            pass
+                        if part == "__ABORTED__":
+                            return {"status": "aborted", "message": "Stopped by user during transcription"}
+                        if part:
+                            transcript_parts.append(part)
+
+                if transcript_parts:
+                    transcript = "\n\n".join(transcript_parts)
+                    video_title = all_mp3_infos[0].get("title", body_name)
+                    final_url = all_mp3_infos[0].get("mp3_url", "")
+                    source = "granicus+whisper"
+                    log.info(f"  Granicus+Whisper success: {len(transcript)} chars from {len(transcript_parts)} recording(s)")
         except Exception as e:
             log.warning(f"  Granicus+Whisper path failed: {e}")
             # Clean up any downloaded files on error

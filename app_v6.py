@@ -2466,6 +2466,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
                 🎙 Fetch Transcripts — Find recordings and generate discussion summaries
               </button>
+              <button onclick="_txShowPaste();this.closest('#mp-process-menu').style.display='none'"
+                style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+                📋 Paste Transcript — Manually paste a meeting transcript for processing
+              </button>
+              <div style="border-top:1px solid var(--gray-100);margin:.3rem 0"></div>
               <button onclick="reanalyzeMeetingItems();this.closest('#mp-process-menu').style.display='none'" id="mp-reanalyze-btn"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
                 🤖 Re-read All PDFs — Re-run AI analysis on every item
@@ -3646,6 +3651,11 @@ function renderDrawerOverview(body, matter, app, saveBtn) {
           <button class="btn btn-s btn-sm" onclick="reanalyzeAllAppearances()" id="bf-ai-all-btn"
             title="Re-read PDFs for every appearance of this item across all meetings">
             🤖 Re-read All Appearances
+          </button>
+          <button class="btn btn-s btn-sm" onclick="_txShowPaste()" id="bf-paste-tx-btn"
+            title="Paste a meeting transcript manually — AgendaIQ will segment it by item"
+            style="background:#6d28d9;border-color:#6d28d9;color:#fff">
+            📋 Paste Transcript
           </button>
         </div>
         <div id="bf-item-progress" style="margin-top:.4rem;font-size:.72rem;color:var(--gray-400);display:none"></div>
