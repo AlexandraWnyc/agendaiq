@@ -11182,10 +11182,11 @@ def api_meeting_prep(meeting_id):
     total = len(items)
     analyzed = sum(1 for i in items if i["sources"]["ai_debrief"])
     with_notes = sum(1 for i in items if i["sources"]["analyst_notes"])
-    watch_count = sum(1 for i in items if i["sources"]["watch_points"]
-                      and i["sources"]["watch_points"].strip().lower() not in
-                      ("", "none", "none.", "none — routine item.", "none — routine item",
-                       "none - routine item.", "none - routine item"))
+    _routine_watch = {"", "none", "none.", "none — routine item.", "none — routine item",
+                      "none - routine item.", "none - routine item"}
+    watch_count = sum(1 for i in items
+                      if (i.get("watch_points_for_appearance") or "").strip()
+                      and (i.get("watch_points_for_appearance") or "").strip().lower() not in _routine_watch)
     pending = total - analyzed
 
     return jsonify({
