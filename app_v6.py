@@ -1908,11 +1908,6 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <label>AI Jurisdiction Context (injected into analysis prompts)</label>
         <textarea id="oc-ai-context" rows="3" style="font-size:.8rem" placeholder="You are analyzing agenda items for..."></textarea>
       </details>
-      <details style="margin-top:.6rem">
-        <summary style="cursor:pointer;font-weight:600;font-size:.85rem;color:#334155">Team Roster</summary>
-        <div style="font-size:.72rem;color:#64748b;margin:.3rem 0 .5rem">Names of analysts who can be assigned agenda items. Auto-assign will use this list. One name per line.</div>
-        <textarea id="oc-team-roster" rows="4" style="font-size:.8rem" placeholder="Jane Smith&#10;John Doe&#10;Maria Garcia"></textarea>
-      </details>
       <div style="display:flex;gap:.5rem;margin-top:.85rem">
         <button class="btn btn-p btn-sm" onclick="saveOrgConfig()">Save Jurisdiction Config</button>
       </div>
@@ -5715,7 +5710,6 @@ async function loadOrgConfig() {
     document.getElementById('oc-committees').value = JSON.stringify(oc.committees || {}, null, 2);
     document.getElementById('oc-aliases').value = JSON.stringify(oc.committee_aliases || {}, null, 2);
     document.getElementById('oc-ai-context').value = oc.ai_jurisdiction_context || '';
-    document.getElementById('oc-team-roster').value = (oc.team_roster || []).join('\n');
   } catch(e) { console.warn('Failed to load org config:', e); }
 }
 
@@ -5737,7 +5731,6 @@ async function saveOrgConfig() {
       committees: committees,
       committee_aliases: aliases,
       ai_jurisdiction_context: document.getElementById('oc-ai-context').value.trim(),
-      team_roster: document.getElementById('oc-team-roster').value.trim().split('\n').map(n=>n.trim()).filter(Boolean),
     };
     const r = await fetch('/api/org-config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
     const d = await r.json();
@@ -8079,23 +8072,17 @@ async function compileFinalAnalysis() {
 }
 
 async function autoAssignMeeting() {
+  // Get analysts: existing assignments first, then team members from settings
   let analysts = [...new Set(mpData.items.map(i=>i.assigned_to).filter(Boolean))];
   if (!analysts.length) {
-    try {
-      const ocr = await fetch('/api/org-config');
-      if (ocr.ok) {
-        const oc = await ocr.json();
-        if (oc.team_roster && oc.team_roster.length) {
-          analysts = [...oc.team_roster];
-        }
-      }
-    } catch(e) {}
+    const members = (_cfg.team_members || []).map(m => m.name);
+    if (members.length) {
+      analysts = [...members];
+    }
   }
   if (!analysts.length) {
-    const name = prompt('No team roster configured. Enter comma-separated analyst names for auto-assignment:\n\n(Tip: Add your team in Settings → Team Roster to skip this step next time)');
-    if (!name) return;
-    name.split(',').map(n=>n.trim()).filter(Boolean).forEach(n=>analysts.push(n));
-    if (!analysts.length) return;
+    alert('No team members configured. Add team members in Settings first.');
+    return;
   }
   const confirmMsg = `Auto-assign ${mpData.items.filter(i=>!i.assigned_to).length} unassigned items across ${analysts.length} analyst(s): ${analysts.join(', ')}?\\n\\nItems already assigned will not be changed. The AI will distribute by complexity and workload.`;
   if (!confirm(confirmMsg)) return;
