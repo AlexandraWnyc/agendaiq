@@ -544,46 +544,57 @@ IMAGE_ONLY_SENTINEL = "[IMAGE_ONLY_PDF]"
 
 def extract_pdf_text(pdf_path: Path) -> str:
     """Extract text from a PDF. Tries embedded text first, falls back to OCR
-    if the PDF is image-only. Returns IMAGE_ONLY_SENTINEL if no text can be
-    recovered (including when OCR is unavailable), so callers can handle it."""
+    for any pages that have no embedded text (handles mixed PDFs where some
+    pages are text and some are scanned images). Returns IMAGE_ONLY_SENTINEL
+    only if NO text can be recovered from ANY page."""
     try:
         doc = fitz.open(str(pdf_path))
         parts = []
-        empty_pages = 0
+        empty_page_indices = []  # 0-based indices of pages with no text
         total_pages = len(doc)
+
         for i, page in enumerate(doc, 1):
             t = page.get_text()
             if t.strip():
-                parts.append(f"--- Page {i} ---\n{t}")
+                parts.append((i, f"--- Page {i} ---\n{t}"))
             else:
-                empty_pages += 1
+                empty_page_indices.append(i - 1)  # 0-based for fitz
 
-        # If every (or nearly every) page is empty, this is an image-only
-        # PDF — try OCR via PyMuPDF's built-in Tesseract bridge.
-        if total_pages > 0 and empty_pages == total_pages:
-            log.info(f"  PDF has no embedded text ({total_pages} pages) — attempting OCR…")
+        # Try OCR on any empty pages (not just when ALL pages are empty).
+        # This handles mixed PDFs where cover pages have text but
+        # attachment pages are scanned images.
+        if empty_page_indices:
+            log.info(f"  {len(empty_page_indices)} of {total_pages} pages have no embedded text — attempting OCR…")
             try:
-                ocr_parts = []
-                for i, page in enumerate(doc, 1):
+                for idx in empty_page_indices:
+                    page = doc[idx]
+                    page_num = idx + 1
                     try:
                         tp = page.get_textpage_ocr(full=True)
                         ot = page.get_text(textpage=tp) or ""
                     except Exception:
                         ot = ""
                     if ot.strip():
-                        ocr_parts.append(f"--- Page {i} (OCR) ---\n{ot}")
-                if ocr_parts:
-                    doc.close()
-                    text = "\n".join(ocr_parts)
-                    return text[:80000] if len(text) > 80000 else text
+                        parts.append((page_num, f"--- Page {page_num} (OCR) ---\n{ot}"))
+                    else:
+                        # Note the empty page so the AI knows content existed
+                        parts.append((page_num, f"--- Page {page_num} ---\n[Scanned image — OCR could not extract text. This page may contain tables, charts, or handwritten content.]"))
             except Exception as oe:
                 log.warning(f"  OCR unavailable or failed: {oe}")
-            doc.close()
-            # No text AND no OCR — flag it for manual handling.
-            return IMAGE_ONLY_SENTINEL
+                # Still note the empty pages
+                for idx in empty_page_indices:
+                    page_num = idx + 1
+                    parts.append((page_num, f"--- Page {page_num} ---\n[Scanned image — OCR unavailable. This page may contain tables, charts, or other visual content.]"))
 
         doc.close()
-        text = "\n".join(parts)
+
+        if not parts:
+            return IMAGE_ONLY_SENTINEL
+
+        # Sort by page number to maintain document order
+        parts.sort(key=lambda x: x[0])
+        text = "\n".join(p[1] for p in parts)
+
         # Raised from 30k → 80k (April 2026): the analyzer does its own
         # section-aware trimming down to its budget. Capping too aggressively
         # here caused fiscal-impact attachments and legislative history pages

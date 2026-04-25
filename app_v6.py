@@ -1702,16 +1702,16 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
   </div>
 
   <div class="g4" style="margin-bottom:1.1rem" id="dash-stats">
-    <div class="stat"><div class="n" id="s-matters">—</div><div class="l">Total Matters</div></div>
-    <div class="stat"><div class="n" id="s-apps">—</div><div class="l">Appearances</div></div>
-    <div class="stat"><div class="n" id="s-mtgs">—</div><div class="l">Meetings</div></div>
-    <div class="stat"><div class="n" id="s-open">—</div><div class="l">Open Items</div></div>
+    <div class="stat"><div class="n" id="s-upcoming">—</div><div class="l">Upcoming Meetings</div></div>
+    <div class="stat"><div class="n" id="s-unanalyzed">—</div><div class="l">Need Analysis</div></div>
+    <div class="stat"><div class="n" id="s-awaiting-tx">—</div><div class="l">Awaiting Transcript</div></div>
+    <div class="stat"><div class="n" id="s-ready">—</div><div class="l">Fully Briefed</div></div>
   </div>
   <!-- Analyze + Stats row -->
-  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1.1rem">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.1rem">
     <div>
       <div class="card" style="height:100%">
-        <div class="ch"><div class="ch-left"><div class="cicon">⚙️</div>Analyze a New Agenda</div></div>
+        <div class="ch"><div class="ch-left"><div class="cicon">🤖</div>Analyze a New Agenda</div></div>
         <div class="cb">
           <div style="background:#eef6ff;border:1px solid #bfdbfe;border-radius:8px;
             padding:.55rem .8rem;margin-bottom:.85rem;font-size:.76rem;color:#1e3a8a;line-height:1.5">
@@ -1742,7 +1742,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     </div>
     <div>
       <div class="card" style="height:100%">
-        <div class="ch"><div class="ch-left"><div class="cicon">📊</div>Progress</div></div>
+        <div class="ch"><div class="ch-left"><div class="cicon">📋</div>Progress</div></div>
         <div class="cb">
           <div class="srow"><div class="sdot" id="sdot"></div>
             <span id="phase-badge" style="display:none;font-size:.68rem;font-weight:600;padding:1px 8px;border-radius:10px;background:var(--blue1);color:#fff;margin-right:6px;text-transform:uppercase;letter-spacing:.04em"></span>
@@ -1758,12 +1758,6 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         </div>
       </div>
     </div>
-    <div>
-      <div class="card" style="height:100%">
-        <div class="ch"><div class="ch-left"><div class="cicon">📊</div>By Status</div></div>
-        <div class="cb" id="dash-status"></div>
-      </div>
-    </div>
   </div>
 
   <div class="card">
@@ -1772,7 +1766,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
       <button class="btn btn-o btn-sm" onclick="showPg('workflow')">View All →</button>
     </div>
     <div class="tbl-wrap">
-      <table><thead><tr><th>File #</th><th>Title</th><th>Date</th><th>Body</th><th>Status</th><th>Assigned</th></tr></thead>
+      <table><thead><tr><th>Committee</th><th>Date</th><th>Items</th><th>Analyzed</th><th>Transcript</th><th>Stage</th></tr></thead>
       <tbody id="dash-recent"></tbody></table>
     </div>
   </div>
@@ -1816,7 +1810,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
 <div class="pg" id="pg-workflow">
   <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:.6rem 1rem;margin-bottom:.75rem;display:flex;align-items:center;gap:.6rem;font-size:.8rem;color:#1e40af">
     <span style="font-size:1rem">📋</span>
-    <span><strong>Team Tracker</strong> — All assigned items across every meeting. To work on items for a specific meeting, go to <strong>Meetings</strong> and open <strong>Meeting Prep</strong>.</span>
+    <span><strong>Team Tracker</strong> — All assigned items across every meeting. To work on items for a specific meeting, go to <strong>Meetings</strong> and click any meeting row.</span>
     <button class="page-help-btn" onclick="togglePageHelp('workflow')" title="Help for this page">?</button>
   </div>
   <div class="wf-filters">
@@ -1913,6 +1907,11 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
         <textarea id="oc-aliases" rows="6" style="font-size:.75rem;font-family:monospace" placeholder='{"Committee Name": ["alias1", "alias2"]}'></textarea>
         <label>AI Jurisdiction Context (injected into analysis prompts)</label>
         <textarea id="oc-ai-context" rows="3" style="font-size:.8rem" placeholder="You are analyzing agenda items for..."></textarea>
+      </details>
+      <details style="margin-top:.6rem">
+        <summary style="cursor:pointer;font-weight:600;font-size:.85rem;color:#334155">Team Roster</summary>
+        <div style="font-size:.72rem;color:#64748b;margin:.3rem 0 .5rem">Names of analysts who can be assigned agenda items. Auto-assign will use this list. One name per line.</div>
+        <textarea id="oc-team-roster" rows="4" style="font-size:.8rem" placeholder="Jane Smith&#10;John Doe&#10;Maria Garcia"></textarea>
       </details>
       <div style="display:flex;gap:.5rem;margin-top:.85rem">
         <button class="btn btn-p btn-sm" onclick="saveOrgConfig()">Save Jurisdiction Config</button>
@@ -2481,7 +2480,7 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     </div>
 
     <!-- Stats bar -->
-    <div class="card" style="margin-bottom:.85rem;padding:.85rem 1.1rem">
+    <div class="card" style="margin-bottom:.85rem;padding:.85rem 1.1rem;overflow:visible">
       <div style="display:flex;align-items:center;gap:1.5rem;flex-wrap:wrap">
         <div id="mp-stats" style="display:flex;gap:1.5rem;flex:1"></div>
         <div style="display:flex;gap:.4rem;align-items:center">
@@ -2824,13 +2823,10 @@ async function loadDashboard() {
   const r = await fetch('/api/stats');
   const d = await r.json();
 
-  document.getElementById('s-matters').textContent = d.total_matters;
-  document.getElementById('s-apps').textContent    = d.total_appearances;
-  document.getElementById('s-mtgs').textContent    = d.total_meetings;
-  const open = Object.entries(d.by_status)
-    .filter(([s])=>!['Finalized','Archived'].includes(s))
-    .reduce((a,[,v])=>a+v,0);
-  document.getElementById('s-open').textContent = open;
+  document.getElementById('s-upcoming').textContent = d.upcoming_meetings ?? d.total_meetings ?? '—';
+  document.getElementById('s-unanalyzed').textContent = d.unanalyzed_count ?? '—';
+  document.getElementById('s-awaiting-tx').textContent = d.awaiting_transcript ?? '—';
+  document.getElementById('s-ready').textContent = d.fully_briefed ?? '—';
 
   // Alert banners
   const bars = document.getElementById('alert-bars');
@@ -2873,24 +2869,31 @@ async function loadDashboard() {
     </div>`;
   }
 
-  // Status breakdown
-  document.getElementById('dash-status').innerHTML = Object.entries(d.by_status)
-    .map(([s,c]) => `<div style="display:flex;justify-content:space-between;align-items:center;
-      padding:.32rem 0;border-bottom:1px solid var(--gray-100)">
-      <span>${badge(s)} ${s}</span><strong>${c}</strong></div>`).join('') ||
-    '<p style="color:var(--gray-400);font-size:.82rem">No data yet.</p>';
-
   // Recent
-  document.getElementById('dash-recent').innerHTML = d.recent.map(r =>
-    `<tr class="clickable" onclick="openDrawer('${r.file_number}',${r.appearance_id})">
-      <td><span class="file-link">${r.file_number}</span></td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.short_title||'')}</td>
-      <td style="white-space:nowrap">${fmtDate(r.meeting_date)}</td>
-      <td style="font-size:.73rem">${esc(r.body_name||'')}</td>
-      <td>${badge(r.workflow_status)}</td>
-      <td style="font-size:.75rem">${esc(r.assigned_to||'—')}</td>
-    </tr>`).join('') ||
-    '<tr><td colspan="6" style="padding:1.25rem;color:var(--gray-400)">No data yet. Analyze an agenda from the Home page to populate.</td></tr>';
+  const recentEl = document.getElementById('dash-recent');
+  if (d.recent_meetings && d.recent_meetings.length) {
+    recentEl.innerHTML = d.recent_meetings.map(m =>
+      `<tr class="clickable" onclick="openMeetingPrep(${m.id})">
+        <td style="font-weight:600">${esc(m.body_name||'')}</td>
+        <td style="white-space:nowrap">${fmtDate(m.meeting_date)}</td>
+        <td>${m.item_count} item${m.item_count!==1?'s':''}</td>
+        <td>${m.analyzed_count}/${m.item_count} analyzed</td>
+        <td style="font-size:.75rem;color:${m.has_transcript?'#059669':'#94a3b8'}">${m.has_transcript?'✅ Transcript':'⏳ No transcript'}</td>
+        <td>${m.lifecycle_label ? `<span style="font-size:.7rem;padding:2px 8px;border-radius:10px;background:${m.lifecycle_color}15;color:${m.lifecycle_color};font-weight:600">${esc(m.lifecycle_label)}</span>` : ''}</td>
+      </tr>`).join('');
+  } else if (d.recent && d.recent.length) {
+    recentEl.innerHTML = d.recent.map(r =>
+      `<tr class="clickable" onclick="openDrawer('${r.file_number}',${r.appearance_id})">
+        <td><span class="file-link">${r.file_number}</span></td>
+        <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.short_title||'')}</td>
+        <td style="white-space:nowrap">${fmtDate(r.meeting_date)}</td>
+        <td style="font-size:.73rem">${esc(r.body_name||'')}</td>
+        <td>${badge(r.workflow_status)}</td>
+        <td style="font-size:.75rem">${esc(r.assigned_to||'—')}</td>
+      </tr>`).join('');
+  } else {
+    recentEl.innerHTML = '<tr><td colspan="6" style="padding:1.25rem;color:var(--gray-400)">No data yet. Analyze an agenda to get started.</td></tr>';
+  }
 }
 
 function filterWorkflow(filter) {
@@ -5712,6 +5715,7 @@ async function loadOrgConfig() {
     document.getElementById('oc-committees').value = JSON.stringify(oc.committees || {}, null, 2);
     document.getElementById('oc-aliases').value = JSON.stringify(oc.committee_aliases || {}, null, 2);
     document.getElementById('oc-ai-context').value = oc.ai_jurisdiction_context || '';
+    document.getElementById('oc-team-roster').value = (oc.team_roster || []).join('\n');
   } catch(e) { console.warn('Failed to load org config:', e); }
 }
 
@@ -5733,6 +5737,7 @@ async function saveOrgConfig() {
       committees: committees,
       committee_aliases: aliases,
       ai_jurisdiction_context: document.getElementById('oc-ai-context').value.trim(),
+      team_roster: document.getElementById('oc-team-roster').value.trim().split('\n').map(n=>n.trim()).filter(Boolean),
     };
     const r = await fetch('/api/org-config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(cfg)});
     const d = await r.json();
@@ -6129,12 +6134,20 @@ let _txPollTimer = null;
 function _txGetPanel() {
   let panel = document.getElementById('tx-progress');
   if (!panel) {
-    // Try multiple possible parent containers (Meeting Detail or Meeting Prep)
+    // Try the lifecycle bar first (button is there, so panel should appear there)
+    const lifecycleBar = document.getElementById('mp-lifecycle');
+    if (lifecycleBar) {
+      panel = document.createElement('div');
+      panel.id = 'tx-progress';
+      panel.style.cssText = 'margin-top:.6rem;padding:.75rem 1rem;border-radius:8px;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem;';
+      lifecycleBar.appendChild(panel);
+      return panel;
+    }
+    // Fallback: Meeting Detail artifacts panel
     const card = document.getElementById('md-artifacts')
                || document.getElementById('mp-stats')?.parentElement
                || document.querySelector('#pg-meeting-prep .card');
     if (!card) {
-      // Fallback: create a floating toast-like panel
       panel = document.createElement('div');
       panel.id = 'tx-progress';
       panel.style.cssText = 'position:fixed;bottom:1rem;right:1rem;width:400px;padding:.75rem 1rem;border-radius:8px;background:#f0f4ff;border:1px solid #c7d2fe;font-size:.82rem;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;';
@@ -8066,10 +8079,20 @@ async function compileFinalAnalysis() {
 }
 
 async function autoAssignMeeting() {
-  // Get the list of team members from current assignment data
-  const analysts = [...new Set(mpData.items.map(i=>i.assigned_to).filter(Boolean))];
+  let analysts = [...new Set(mpData.items.map(i=>i.assigned_to).filter(Boolean))];
   if (!analysts.length) {
-    const name = prompt('No analysts assigned yet. Enter comma-separated analyst names for auto-assignment:');
+    try {
+      const ocr = await fetch('/api/org-config');
+      if (ocr.ok) {
+        const oc = await ocr.json();
+        if (oc.team_roster && oc.team_roster.length) {
+          analysts = [...oc.team_roster];
+        }
+      }
+    } catch(e) {}
+  }
+  if (!analysts.length) {
+    const name = prompt('No team roster configured. Enter comma-separated analyst names for auto-assignment:\n\n(Tip: Add your team in Settings → Team Roster to skip this step next time)');
     if (!name) return;
     name.split(',').map(n=>n.trim()).filter(Boolean).forEach(n=>analysts.push(n));
     if (!analysts.length) return;
@@ -8445,6 +8468,54 @@ def api_stats():
     # Count items pending review (Draft Complete status)
     d["pending_review_count"] = d.get("by_status", {}).get("Draft Complete", 0)
     d["needs_revision_count"] = d.get("by_status", {}).get("Needs Revision", 0)
+    from lifecycle_manager import STAGE_LABELS, STAGE_COLORS
+    import datetime
+    today = datetime.date.today().isoformat()
+    oid = g.org_id
+    with get_db() as conn:
+        d["upcoming_meetings"] = conn.execute(
+            "SELECT COUNT(*) FROM meetings WHERE org_id=? AND meeting_date>=?", (oid, today)
+        ).fetchone()[0]
+        d["unanalyzed_count"] = conn.execute(
+            "SELECT COUNT(*) FROM appearances WHERE org_id=? AND (ai_summary_for_appearance IS NULL OR ai_summary_for_appearance='')",
+            (oid,)
+        ).fetchone()[0]
+        d["awaiting_transcript"] = conn.execute(
+            """SELECT COUNT(*) FROM meetings m
+               WHERE m.org_id=? AND m.meeting_date < ?
+               AND NOT EXISTS (
+                   SELECT 1 FROM appearances a
+                   WHERE a.meeting_id = m.id AND a.org_id = ?
+                   AND a.transcript_analysis IS NOT NULL
+                   AND LENGTH(a.transcript_analysis) > 10
+               )""", (oid, today, oid)
+        ).fetchone()[0]
+        d["fully_briefed"] = conn.execute(
+            "SELECT COUNT(*) FROM meetings WHERE org_id=? AND lifecycle_stage='fully_briefed'", (oid,)
+        ).fetchone()[0]
+        recent_mtgs = conn.execute(
+            """SELECT m.id, m.body_name, m.meeting_date, m.lifecycle_stage,
+                      (SELECT COUNT(*) FROM appearances a WHERE a.meeting_id=m.id AND a.org_id=?) as item_count,
+                      (SELECT COUNT(*) FROM appearances a WHERE a.meeting_id=m.id AND a.org_id=?
+                       AND a.ai_summary_for_appearance IS NOT NULL AND a.ai_summary_for_appearance!='') as analyzed_count,
+                      EXISTS(SELECT 1 FROM appearances a
+                             WHERE a.meeting_id=m.id AND a.org_id=?
+                             AND a.transcript_analysis IS NOT NULL
+                             AND LENGTH(a.transcript_analysis) > 10) as has_transcript
+               FROM meetings m WHERE m.org_id=?
+               ORDER BY m.meeting_date DESC LIMIT 10""",
+            (oid, oid, oid, oid)
+        ).fetchall()
+        d["recent_meetings"] = [{
+            "id": r["id"],
+            "body_name": r["body_name"],
+            "meeting_date": r["meeting_date"],
+            "item_count": r["item_count"],
+            "analyzed_count": r["analyzed_count"],
+            "has_transcript": bool(r["has_transcript"]),
+            "lifecycle_label": STAGE_LABELS.get(r["lifecycle_stage"] or "", ""),
+            "lifecycle_color": STAGE_COLORS.get(r["lifecycle_stage"] or "", "#6b7280"),
+        } for r in recent_mtgs]
     return jsonify(d)
 
 
@@ -11111,7 +11182,10 @@ def api_meeting_prep(meeting_id):
     total = len(items)
     analyzed = sum(1 for i in items if i["sources"]["ai_debrief"])
     with_notes = sum(1 for i in items if i["sources"]["analyst_notes"])
-    watch_count = sum(1 for i in items if i["sources"]["watch_points"])
+    watch_count = sum(1 for i in items if i["sources"]["watch_points"]
+                      and i["sources"]["watch_points"].strip().lower() not in
+                      ("", "none", "none.", "none — routine item.", "none — routine item",
+                       "none - routine item.", "none - routine item"))
     pending = total - analyzed
 
     return jsonify({

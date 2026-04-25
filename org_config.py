@@ -33,6 +33,9 @@ MIAMI_DADE_DEFAULTS = {
     "body_name": "Board of County Commissioners",
     "body_short_name": "BCC",
 
+    # ── Team Roster ──
+    "team_roster": [],  # Names of analysts for auto-assignment
+
     # ── Legistar / Agenda Source ──
     "legistar_base_url": "https://www.miamidade.gov/govaction/",
     "agenda_source_type": "legistar",  # legistar | granicus | civicclerk | custom

@@ -100,7 +100,7 @@ Purpose and Background: [2-3 sentences of context.]
 Fiscal Impact: [Funding source, dollar amount, countywide vs district. If the PDF gives a number, state it. If it genuinely doesn't, use the gap-flag format above.]
 Additional Notes: [1-3 short bullets if applicable, each starting with "- "]
 
-WATCH POINTS: [1-2 sentences: what should Commissioners pay attention to on this item?]
+WATCH POINTS: [ONLY for HIGH or MEDIUM risk items. 1-2 sentences on what Commissioners should pay attention to. For LOW or CEREMONIAL items, write "None — routine item." Do NOT manufacture watch points for standard contract renewals, routine reports, ceremonial items, consent agenda items with no policy change, or other low-risk routine business.]
 
 RISK LEVEL: [Classify as exactly one of: HIGH / MEDIUM / LOW / CEREMONIAL]
 Apply these criteria:
@@ -117,7 +117,12 @@ RESEARCH CONTEXT:
 [Findings from web search organized by relevance. Plain text paragraphs. Cite sources inline with parenthetical references like (Source Name, Date). Cover: prior legislation, news, vendor history for procurement items, known controversy, peer jurisdiction context.]
 
 WATCH POINTS:
-[2-3 bullets on what Commissioners should watch for. Each starts with "- ".]
+[ONLY for HIGH or MEDIUM risk items. 2-3 bullets on genuine concerns Commissioners should watch for. Each starts with "- ". For LOW or CEREMONIAL items, write "None — routine item." Do NOT invent watch points for items that are straightforward. Never write "no anticipated controversy" or similar editorializing — if there's nothing to watch, say "None."]
+
+EDITORIAL RULES:
+- NEVER write "no anticipated controversy" — that is an editorial judgment the OCA does not make.
+- NEVER characterize consent agenda placement as evidence that an item is uncontroversial.
+- If an item is on the consent agenda, simply note it factually. The consent agenda is a procedural tool, not a risk indicator.
 
 Be factual, concise, and non-interpretive. When something is genuinely missing, flag the gap per the rule above. Never fabricate, never over-hedge."""
 
@@ -579,10 +584,10 @@ FORMAT:
   • [ONLY info not already stated above. Implementation details, equity concerns, committee discussion.]
   • [1-2 bullets MAX. If nothing new: "None beyond above."]
 
-• WATCH POINTS: [2-3 specific questions or areas to monitor for the Commission Auditor. Frame gaps as questions to ask, not accusations. Neutral tone.]
+• WATCH POINTS: [ONLY if HIGH or MEDIUM risk. 2-3 specific questions or areas to monitor for the Commission Auditor. Frame gaps as questions to ask, not accusations. Neutral tone. For LOW or CEREMONIAL items, write "None — routine item." NEVER write "no anticipated controversy" or editorialize about consent agenda placement.]
 
 ---WATCH_POINTS---
-• [Max 3 bullets. Key things to monitor or ask about. Neutral, specific.]
+• [ONLY for HIGH/MEDIUM risk items. Max 3 bullets. Key things to monitor or ask about. Neutral, specific. For LOW/CEREMONIAL: "None."]
 
 RULES:
 - If you are not 100% certain a fact is in the source materials, DO NOT include it.
