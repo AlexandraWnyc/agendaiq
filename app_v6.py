@@ -2202,6 +2202,18 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
     <div id="bulk-tx-log" style="max-height:120px;overflow-y:auto;background:#faf5ff;border-radius:8px;padding:.4rem .6rem;font-size:.78rem;color:#4c1d95"></div>
   </div>
 
+  <!-- Bulk Re-analyze Progress -->
+  <div id="bulk-ra-progress" style="display:none;margin:.6rem .75rem;padding:.6rem .8rem;background:var(--gray-50);border-radius:6px;font-size:.78rem">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.4rem">
+      <span id="bulk-ra-text" style="color:var(--gray-600)">Starting…</span>
+      <button class="btn btn-o btn-xs" id="bulk-ra-stop-btn" onclick="stopBulkReanalyze()" style="font-size:.7rem">⏹ Stop</button>
+    </div>
+    <div style="background:var(--gray-200);border-radius:3px;height:6px;overflow:hidden">
+      <div id="bulk-ra-bar" style="height:100%;width:0%;background:var(--primary);transition:width .3s"></div>
+    </div>
+    <div id="bulk-ra-log" style="max-height:120px;overflow-y:auto;margin-top:.4rem;font-size:.7rem;color:var(--gray-500);font-family:monospace"></div>
+  </div>
+
   <div class="card" style="margin-bottom:1.1rem">
     <div class="ch">
       <div class="ch-left"><div class="cicon">🗂️</div>Saved Meeting Packages</div>
@@ -2214,18 +2226,23 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
             ⚙ Process All ▾
           </button>
           <div id="mtg-process-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:320px;padding:.4rem 0">
-            <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Bulk Data Operations</div>
+            <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Update All Meetings</div>
             <button onclick="runBackfill(true);this.closest('[id]').style.display='none'"
               style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-              ⟳ Fill Missing Data — Fetch URLs and lifecycle for items missing them
+              ⟳ Quick Update — Fill in any missing links and legislative history
             </button>
             <button onclick="runBackfill(false);this.closest('[id]').style.display='none'"
               style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-              ⟳ Full Refresh — Re-process every item in the database (slower)
+              ⟳ Full Update — Re-download all links and legislative history from scratch (slower)
             </button>
             <button id="bulk-tx-btn" onclick="runBulkTranscriptBackfill();this.closest('[id]').style.display='none'"
               style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-              🎙 Fetch All Transcripts — Find recordings and generate discussion summaries
+              🎙 Find Transcripts — Search for meeting recordings and summarize what was discussed
+            </button>
+            <div style="border-top:1px solid var(--gray-100);margin:.3rem 0"></div>
+            <button id="bulk-reanalyze-btn" onclick="runBulkReanalyze();this.closest('[id]').style.display='none'"
+              style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
+              🤖 Re-Analyze Everything — Re-read all PDFs and regenerate AI analysis for every item
             </button>
           </div>
         </div>
@@ -2514,23 +2531,23 @@ th[title]:hover{border-bottom-color:var(--gray-400)}
               ⚙ Data ▾
             </button>
             <div id="mp-process-menu" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:50;min-width:320px;padding:.4rem 0">
-              <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Refresh Source Data</div>
+              <div style="padding:.4rem .8rem;font-size:.68rem;color:var(--gray-400);text-transform:uppercase;letter-spacing:.5px">Update This Meeting</div>
               <button onclick="backfillMeetingUrls();this.closest('#mp-process-menu').style.display='none'" id="mp-urls-btn"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                🔗 Fetch URLs & Lifecycle — Pull Legistar links and legislative history
+                🔗 Update Links — Pull latest Legistar links and legislative history
               </button>
               <button onclick="backfillTranscript();this.closest('#mp-process-menu').style.display='none'" id="mp-transcript-btn"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                🎙 Fetch Transcripts — Find recordings and generate discussion summaries
+                🎙 Find Transcript — Search for meeting recording and summarize discussion
               </button>
               <button onclick="_txShowPaste();this.closest('#mp-process-menu').style.display='none'"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                📋 Paste Transcript — Manually paste a meeting transcript for processing
+                📋 Paste Transcript — Paste a transcript you copied from elsewhere
               </button>
               <div style="border-top:1px solid var(--gray-100);margin:.3rem 0"></div>
               <button onclick="reanalyzeMeetingItems();this.closest('#mp-process-menu').style.display='none'" id="mp-reanalyze-btn"
                 style="display:block;width:100%;text-align:left;padding:.5rem .8rem;border:none;background:none;cursor:pointer;font-size:.82rem">
-                🤖 Re-read All PDFs — Re-run AI analysis on every item
+                🤖 Re-Analyze All Items — Re-read PDFs and regenerate AI analysis for every item
               </button>
             </div>
           </div>
@@ -6088,6 +6105,81 @@ async function stopBackfill() {
   } catch(e) { toast('Failed to stop: '+(e.message||e), 'err'); }
 }
 
+/* ── Bulk Re-analyze ALL meetings ────────────────────────── */
+let _bulkRaPollTimer = null;
+
+function _renderBulkRaProgress(d) {
+  const panel = document.getElementById('bulk-ra-progress');
+  if (!panel) return;
+  panel.style.display = 'block';
+  const bar = document.getElementById('bulk-ra-bar');
+  const txt = document.getElementById('bulk-ra-text');
+  const log = document.getElementById('bulk-ra-log');
+  const stopBtn = document.getElementById('bulk-ra-stop-btn');
+  if (bar) bar.style.width = (d.pct || 0) + '%';
+  if (txt) txt.textContent = d.msg || '';
+  if (d.log_lines && log) {
+    log.innerHTML = d.log_lines.map(l => `<div>${l}</div>`).join('');
+    log.scrollTop = log.scrollHeight;
+  }
+  if (stopBtn) stopBtn.style.display = d.running ? '' : 'none';
+  if (d.done && !d.running) {
+    if (txt) txt.textContent = d.error ? '❌ ' + d.error : '✅ ' + (d.msg || 'Done');
+  }
+}
+
+async function runBulkReanalyze() {
+  const btn = document.getElementById('bulk-reanalyze-btn');
+  if (btn) btn.disabled = true;
+
+  if (!confirm('This will re-read all PDFs and re-run AI analysis on every item in every meeting. Continue?')) {
+    if (btn) btn.disabled = false;
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/reanalyze-all', {method:'POST'});
+    const d = await r.json();
+    if (!d.ok) {
+      toast(d.error || 'Failed to start', 'err');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    toast(`Re-analyzing ${d.total_items} items across ${d.total_meetings} meetings…`, 'ok');
+    _renderBulkRaProgress({running:true, msg:'Starting…', pct:0});
+
+    if (_bulkRaPollTimer) clearInterval(_bulkRaPollTimer);
+    _bulkRaPollTimer = setInterval(async () => {
+      try {
+        const pr = await fetch('/api/reanalyze-all/progress');
+        const pd = await pr.json();
+        _renderBulkRaProgress(pd);
+        if (!pd.running) {
+          clearInterval(_bulkRaPollTimer); _bulkRaPollTimer = null;
+          if (btn) btn.disabled = false;
+          if (pd.error) toast('Re-analysis failed: ' + pd.error, 'err');
+          else toast(pd.msg || 'Re-analysis complete!', 'ok');
+          loadSavedMeetings();
+        }
+      } catch(_){}
+    }, 2000);
+  } catch(e) {
+    toast('Failed to start: '+(e.message||e), 'err');
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function stopBulkReanalyze() {
+  const stopBtn = document.getElementById('bulk-ra-stop-btn');
+  if (stopBtn) { stopBtn.disabled = true; stopBtn.textContent = '⏳ Stopping…'; }
+  try {
+    const r = await fetch('/api/reanalyze-all/stop', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) toast('Stop signal sent — finishing current item…', 'ok');
+    else toast(d.error || 'Failed to stop', 'err');
+  } catch(e) { toast('Failed to stop: '+(e.message||e), 'err'); }
+}
+
 async function runBulkTranscriptBackfill() {
   const btn = document.getElementById('bulk-tx-btn');
   if (btn) btn.disabled = true;
@@ -9477,10 +9569,8 @@ def api_meeting_reanalyze_all(meeting_id):
                 pdf_path = a.get("item_pdf_local_path") or ""
                 if pdf_path and Path(pdf_path).exists():
                     try:
-                        import fitz
-                        doc = fitz.open(pdf_path)
-                        pdf_text = "\n".join(page.get_text() for page in doc)
-                        doc.close()
+                        from scraper import extract_pdf_text
+                        pdf_text = extract_pdf_text(Path(pdf_path))
                     except Exception:
                         pass
 
@@ -9521,6 +9611,195 @@ def api_meeting_reanalyze_all(meeting_id):
     t = threading.Thread(target=_run_meeting_batch, daemon=True)
     t.start()
     return jsonify({"ok": True, "count": len(app_ids)})
+
+
+# ── Bulk Re-analyze ALL meetings ────────────────────────────────
+import threading as _threading
+_reanalyze_all_lock = _threading.Lock()
+_reanalyze_all_state = {
+    "running": False, "done": False, "error": None,
+    "total_meetings": 0, "completed_meetings": 0,
+    "total_items": 0, "completed_items": 0,
+    "current_meeting": "", "msg": "", "pct": 0,
+    "log_lines": [],
+}
+
+@app.route("/api/reanalyze-all", methods=["POST"])
+@login_required
+def api_reanalyze_all():
+    """Re-run AI analysis on every item in every meeting."""
+    import db as _db
+    with _reanalyze_all_lock:
+        if _reanalyze_all_state["running"]:
+            return jsonify({"ok": False, "error": "Already running"})
+
+    org_id = g.org_id
+
+    # Get all meetings
+    with _db.get_db() as conn:
+        meetings = conn.execute(
+            "SELECT id, body_name, meeting_date FROM meetings WHERE org_id=? ORDER BY meeting_date",
+            (org_id,)
+        ).fetchall()
+
+    if not meetings:
+        return jsonify({"ok": False, "error": "No meetings found"})
+
+    # Count total items
+    total_items = 0
+    meeting_items = []
+    with _db.get_db() as conn:
+        for m in meetings:
+            apps = conn.execute(
+                "SELECT id FROM appearances WHERE meeting_id=? AND org_id=?",
+                (m["id"], org_id)
+            ).fetchall()
+            if apps:
+                meeting_items.append((dict(m), [a["id"] for a in apps]))
+                total_items += len(apps)
+
+    if not meeting_items:
+        return jsonify({"ok": False, "error": "No items to analyze"})
+
+    with _reanalyze_all_lock:
+        _reanalyze_all_state.update({
+            "running": True, "done": False, "error": None,
+            "total_meetings": len(meeting_items), "completed_meetings": 0,
+            "total_items": total_items, "completed_items": 0,
+            "current_meeting": "", "msg": "Starting…", "pct": 0,
+            "log_lines": [],
+        })
+
+    def _log(msg):
+        with _reanalyze_all_lock:
+            _reanalyze_all_state["log_lines"].append(msg)
+            if len(_reanalyze_all_state["log_lines"]) > 100:
+                _reanalyze_all_state["log_lines"] = _reanalyze_all_state["log_lines"][-80:]
+
+    def _run_all():
+        items_done = 0
+        meetings_done = 0
+        try:
+            for meeting, app_ids in meeting_items:
+                with _reanalyze_all_lock:
+                    if not _reanalyze_all_state["running"]:
+                        break
+                mtg_label = f"{meeting.get('body_name','')} {meeting.get('meeting_date','')}"
+                with _reanalyze_all_lock:
+                    _reanalyze_all_state["current_meeting"] = mtg_label
+                    _reanalyze_all_state["msg"] = f"Analyzing {mtg_label} ({meetings_done+1}/{len(meeting_items)})"
+                _log(f"▸ Starting {mtg_label} ({len(app_ids)} items)")
+
+                for aid in app_ids:
+                    with _reanalyze_all_lock:
+                        if not _reanalyze_all_state["running"]:
+                            break
+                    try:
+                        from repository import get_appearance_by_id, get_meeting_by_id, get_matter_by_file_number, get_all_appearances_for_matter
+                        from analyzer import AgendaAnalyzer
+                        a = get_appearance_by_id(aid)
+                        if not a:
+                            items_done += 1
+                            continue
+                        matter = get_matter_by_file_number(a["file_number"]) or {}
+                        mt = get_meeting_by_id(a["meeting_id"]) or {}
+                        title = a.get("appearance_title") or matter.get("short_title") or ""
+                        item_num = a.get("committee_item_number") or a.get("bcc_item_number") or a.get("raw_agenda_item_number") or ""
+                        committee = mt.get("body_name") or ""
+
+                        pdf_text = ""
+                        pdf_path = a.get("item_pdf_local_path") or ""
+                        if pdf_path and Path(pdf_path).exists():
+                            try:
+                                from scraper import extract_pdf_text
+                                pdf_text = extract_pdf_text(Path(pdf_path))
+                            except Exception:
+                                pass
+
+                        prior = ""
+                        all_apps = get_all_appearances_for_matter(matter.get("id", 0))
+                        for pa in sorted(all_apps, key=lambda x: x.get("meeting_date", "")):
+                            if pa["id"] == aid:
+                                break
+                            if (pa.get("ai_summary_for_appearance") or "").strip():
+                                prior += f"\n[Prior {pa.get('body_name','')} {pa.get('meeting_date','')}]\n"
+                                prior += pa["ai_summary_for_appearance"][:1000] + "\n"
+
+                        analyzer = AgendaAnalyzer(load_api_key())
+                        part1, part2, full, meta = analyzer.analyze_item(
+                            item_number=item_num, title=title, pdf_text=pdf_text,
+                            committee_name=committee, prior_context=prior,
+                        )
+                        now = now_iso()
+                        import db as _db
+                        with _db.get_db() as conn:
+                            conn.execute("""UPDATE appearances SET
+                                ai_summary_for_appearance=?, watch_points_for_appearance=?,
+                                finalized_brief=CASE WHEN finalized_brief IS NULL OR finalized_brief='' THEN ? ELSE finalized_brief END,
+                                analysis_input_hash=?, analysis_tokens_in=?, analysis_tokens_out=?,
+                                analysis_cached_tokens=?, analysis_at=?,
+                                ai_risk_level=?, ai_risk_reason=?,
+                                updated_at=? WHERE id=? AND org_id=?""",
+                                (part1, "", part2, meta.get("input_hash",""),
+                                 meta.get("usage",{}).get("in",0), meta.get("usage",{}).get("out",0),
+                                 meta.get("usage",{}).get("cached",0), now,
+                                 meta.get("ai_risk_level",""), meta.get("ai_risk_reason",""),
+                                 now, aid, org_id))
+
+                        items_done += 1
+                        pct = int(items_done / total_items * 100) if total_items else 0
+                        with _reanalyze_all_lock:
+                            _reanalyze_all_state["completed_items"] = items_done
+                            _reanalyze_all_state["pct"] = pct
+                            _reanalyze_all_state["msg"] = f"Analyzing {mtg_label} — {items_done}/{total_items} items ({pct}%)"
+
+                        app.logger.info(f"Bulk reanalysis: appearance {aid} done ({items_done}/{total_items})")
+                    except Exception as e:
+                        items_done += 1
+                        _log(f"  ⚠ Item {aid} failed: {e}")
+                        app.logger.error(f"Bulk reanalysis failed for {aid}: {e}")
+
+                meetings_done += 1
+                with _reanalyze_all_lock:
+                    _reanalyze_all_state["completed_meetings"] = meetings_done
+                _log(f"  ✓ {mtg_label} done")
+
+        except Exception as e:
+            with _reanalyze_all_lock:
+                _reanalyze_all_state["error"] = str(e)
+            _log(f"❌ Fatal error: {e}")
+            app.logger.error(f"Bulk reanalysis fatal: {e}")
+        finally:
+            with _reanalyze_all_lock:
+                _reanalyze_all_state["running"] = False
+                _reanalyze_all_state["done"] = True
+                if not _reanalyze_all_state["error"]:
+                    _reanalyze_all_state["msg"] = f"Done — {items_done} items across {meetings_done} meetings"
+
+    import threading
+    t = threading.Thread(target=_run_all, daemon=True)
+    t.start()
+    return jsonify({"ok": True, "total_meetings": len(meeting_items), "total_items": total_items})
+
+
+@app.route("/api/reanalyze-all/progress")
+@login_required
+def api_reanalyze_all_progress():
+    with _reanalyze_all_lock:
+        return jsonify(dict(_reanalyze_all_state))
+
+
+@app.route("/api/reanalyze-all/stop", methods=["POST"])
+@login_required
+def api_reanalyze_all_stop():
+    # For now just mark not running — the thread will finish its current item
+    with _reanalyze_all_lock:
+        if _reanalyze_all_state["running"]:
+            _reanalyze_all_state["running"] = False
+            _reanalyze_all_state["done"] = True
+            _reanalyze_all_state["msg"] = "Stopped by user"
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "Not running"})
 
 
 @app.route("/api/meeting/<int:meeting_id>/regenerate", methods=["POST"])
