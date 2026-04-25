@@ -1238,14 +1238,15 @@ def backfill_transcript(meeting_id: int, output_dir: Path = None,
     if not appearances:
         return {"status": "error", "message": "No items for this meeting"}
 
-    # ── Skip if this meeting already has transcript notes (unless forcing via raw paste)
+    # ── Skip if this meeting already has transcript analysis (unless forcing via raw paste)
     if not raw_transcript and not video_url:
         has_transcript = any(
-            "[Meeting Discussion" in (a.get("analyst_working_notes") or "")
+            (a.get("transcript_analysis") or "").strip()
+            and len((a.get("transcript_analysis") or "").strip()) > 10
             for a in appearances
         )
         if has_transcript:
-            return {"status": "skipped", "message": "already has transcript notes"}
+            return {"status": "skipped", "message": "This meeting already has transcript analysis. Use 'Paste Transcript' to overwrite."}
 
     # ── Shortcut: if raw transcript was pasted, skip search + download
     if raw_transcript and raw_transcript.strip():

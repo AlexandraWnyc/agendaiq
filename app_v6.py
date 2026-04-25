@@ -9809,12 +9809,18 @@ def api_backfill_transcript():
     def _run():
         try:
             import transcript as tx
+            import lifecycle_manager as lm
             result = tx.backfill_transcript(
                 meeting_id,
                 video_url=video_url,
                 raw_transcript=raw_transcript,
                 emit=_tx_emit,
             )
+            # Record the check attempt so lifecycle bar updates count
+            try:
+                lm.record_transcript_check(meeting_id)
+            except Exception:
+                pass
             with _tx_lock:
                 _tx_state["result"] = result
                 _tx_state["done"] = True
