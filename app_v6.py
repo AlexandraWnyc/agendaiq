@@ -6135,7 +6135,7 @@ async function runBulkReanalyze() {
   // Offer choice: only failed/missing vs everything
   const choice = prompt(
     'Re-Analyze options:\\n\\n' +
-    '1 = Only items that failed or have no analysis (saves tokens)\\n' +
+    '1 = Only items that failed, are incomplete, or have no analysis (saves tokens)\\n' +
     '2 = Everything from scratch\\n\\n' +
     'Enter 1 or 2 (or Cancel to abort):'
   );
@@ -9662,12 +9662,20 @@ def api_reanalyze_all():
     with _db.get_db() as conn:
         for m in meetings:
             if only_failed:
-                # Only grab items that have no analysis, or whose analysis starts with [ERROR
+                # Only grab items that have no analysis, errors, or incomplete
+                # analyses (web search thinking leaked through, "no document", etc.)
                 apps = conn.execute(
                     """SELECT id FROM appearances WHERE meeting_id=? AND org_id=?
                        AND (ai_summary_for_appearance IS NULL
                             OR ai_summary_for_appearance = ''
-                            OR ai_summary_for_appearance LIKE '[ERROR%')""",
+                            OR ai_summary_for_appearance LIKE '[ERROR%'
+                            OR ai_summary_for_appearance LIKE '%I need to search%'
+                            OR ai_summary_for_appearance LIKE '%I need more context%'
+                            OR ai_summary_for_appearance LIKE '%I need to find%'
+                            OR ai_summary_for_appearance LIKE '%no document content%'
+                            OR ai_summary_for_appearance LIKE '%No content available%'
+                            OR ai_summary_for_appearance LIKE '%I''ll search%'
+                            OR ai_summary_for_appearance LIKE '%Let me search%')""",
                     (m["id"], org_id)
                 ).fetchall()
             else:
