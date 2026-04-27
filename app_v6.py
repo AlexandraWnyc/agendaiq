@@ -6132,13 +6132,25 @@ async function runBulkReanalyze() {
   const btn = document.getElementById('bulk-reanalyze-btn');
   if (btn) btn.disabled = true;
 
-  if (!confirm('This will re-read all PDFs and re-run AI analysis on every item in every meeting. Continue?')) {
+  // Offer choice: only failed/missing vs everything
+  const choice = prompt(
+    'Re-Analyze options:\\n\\n' +
+    '1 = Only items that failed or have no analysis (saves tokens)\\n' +
+    '2 = Everything from scratch\\n\\n' +
+    'Enter 1 or 2 (or Cancel to abort):'
+  );
+  if (!choice || (choice !== '1' && choice !== '2')) {
     if (btn) btn.disabled = false;
     return;
   }
+  const onlyFailed = (choice === '1');
 
   try {
-    const r = await fetch('/api/reanalyze-all', {method:'POST'});
+    const r = await fetch('/api/reanalyze-all', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({only_failed: onlyFailed})
+    });
     const d = await r.json();
     if (!d.ok) {
       toast(d.error || 'Failed to start', 'err');
@@ -9201,10 +9213,8 @@ def api_appearance_reanalyze(app_id):
             pdf_path = a.get("item_pdf_local_path") or ""
             if pdf_path and Path(pdf_path).exists():
                 try:
-                    import fitz
-                    doc = fitz.open(pdf_path)
-                    pdf_text = "\n".join(page.get_text() for page in doc)
-                    doc.close()
+                    from scraper import extract_pdf_text
+                    pdf_text = extract_pdf_text(Path(pdf_path))
                 except Exception as e:
                     app.logger.warning(f"PDF read failed for reanalysis: {e}")
 
@@ -9460,10 +9470,8 @@ def api_matter_reanalyze_all(matter_id):
                     pdf_path = a.get("item_pdf_local_path") or ""
                     if pdf_path and Path(pdf_path).exists():
                         try:
-                            import fitz
-                            doc = fitz.open(pdf_path)
-                            pdf_text = "\n".join(page.get_text() for page in doc)
-                            doc.close()
+                            from scraper import extract_pdf_text
+                            pdf_text = extract_pdf_text(Path(pdf_path))
                         except Exception:
                             pass
 
@@ -9627,12 +9635,15 @@ _reanalyze_all_state = {
 @app.route("/api/reanalyze-all", methods=["POST"])
 @login_required
 def api_reanalyze_all():
-    """Re-run AI analysis on every item in every meeting."""
+    """Re-run AI analysis on every item in every meeting.
+    Pass {"only_failed": true} to skip items that already have a good analysis."""
     import db as _db
     with _reanalyze_all_lock:
         if _reanalyze_all_state["running"]:
             return jsonify({"ok": False, "error": "Already running"})
 
+    data = request.get_json(force=True) if request.data else {}
+    only_failed = data.get("only_failed", False)
     org_id = g.org_id
 
     # Get all meetings
@@ -9645,15 +9656,25 @@ def api_reanalyze_all():
     if not meetings:
         return jsonify({"ok": False, "error": "No meetings found"})
 
-    # Count total items
+    # Count total items — if only_failed, skip items with good analyses
     total_items = 0
     meeting_items = []
     with _db.get_db() as conn:
         for m in meetings:
-            apps = conn.execute(
-                "SELECT id FROM appearances WHERE meeting_id=? AND org_id=?",
-                (m["id"], org_id)
-            ).fetchall()
+            if only_failed:
+                # Only grab items that have no analysis, or whose analysis starts with [ERROR
+                apps = conn.execute(
+                    """SELECT id FROM appearances WHERE meeting_id=? AND org_id=?
+                       AND (ai_summary_for_appearance IS NULL
+                            OR ai_summary_for_appearance = ''
+                            OR ai_summary_for_appearance LIKE '[ERROR%')""",
+                    (m["id"], org_id)
+                ).fetchall()
+            else:
+                apps = conn.execute(
+                    "SELECT id FROM appearances WHERE meeting_id=? AND org_id=?",
+                    (m["id"], org_id)
+                ).fetchall()
             if apps:
                 meeting_items.append((dict(m), [a["id"] for a in apps]))
                 total_items += len(apps)

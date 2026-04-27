@@ -324,7 +324,19 @@ class AgendaAnalyzer:
             return kw
 
         def _extract(r):
-            text = "\n".join(b.text for b in r.content if hasattr(b, "text")).strip()
+            # Only take text blocks AFTER the last tool_result block.
+            # When web search is used, the model emits intermediate text like
+            # "I need to search for…" BEFORE the tool_use/tool_result blocks,
+            # then writes the real answer AFTER.  We want only the real answer.
+            last_tool_idx = max(
+                (i for i, b in enumerate(r.content)
+                 if hasattr(b, "type") and "tool_result" in b.type),
+                default=-1,
+            )
+            text = "\n".join(
+                b.text for b in r.content[last_tool_idx + 1:]
+                if hasattr(b, "text")
+            ).strip()
             u = getattr(r, "usage", None)
             usage = {
                 "input_tokens":               getattr(u, "input_tokens", 0) or 0,
