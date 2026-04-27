@@ -9675,7 +9675,12 @@ def api_reanalyze_all():
                             OR ai_summary_for_appearance LIKE '%no document content%'
                             OR ai_summary_for_appearance LIKE '%No content available%'
                             OR ai_summary_for_appearance LIKE '%I''ll search%'
-                            OR ai_summary_for_appearance LIKE '%Let me search%')""",
+                            OR ai_summary_for_appearance LIKE '%Let me search%'
+                            OR ai_summary_for_appearance LIKE '%I need additional information%'
+                            OR ai_summary_for_appearance LIKE '%I need to clarify%'
+                            OR ai_summary_for_appearance LIKE '%prevents me from%'
+                            OR ai_summary_for_appearance LIKE '%I cannot provide%'
+                            OR ai_summary_for_appearance LIKE '%no substantive content%')""",
                     (m["id"], org_id)
                 ).fetchall()
             else:
